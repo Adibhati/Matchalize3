@@ -1,0 +1,5 @@
+{
+  "htmlUrl": "https://contribution.usercontent.google.com/download?c=CgthaWRhX2NvZGVmeBJ6Eh1hcHBfY29tcGFuaW9uX2dlbmVyYXRlZF9maWxlcxpZCiVodG1sXzFiNGQyNjAzMmEwMTQxNWU4M2E5OGExMTZkN2Y0OTA3EgsSBxDYzpj74R8YAZIBIgoKcHJvamVjdF9pZBIUQhIyNTMyNDg2NzI1MjYyMzU1OTM&filename=&opi=96797242",
+  "imageUrl": "https://lh3.googleusercontent.com/aida/AP1WRLtyWoSvGxIj08VE8luT6V-AAkr83rzUabkfRK4L7UbvGm4jE6sO3e2rEMUIjkDbcrxgY6t1R6bDL_en8LfX04xwxgUYx4Dt69NC4zhYvVBQat4mlqoFTmTBH1ZJSTO_PvgjfwYPGezD8CzXagzqCAPZLJjH8mmxhR_acSZIHOBH0_VC5YXmXLVNJz4gFifL-19yC9iRJ9guWXsKXrLb4v1OQESk2SbMTaOcYy9Q0wfEYo4fHseNFrX61w",
+  "prompt": "Design an emoji picker panel that slides up from bottom of a dark chat screen.\nBackground: #0a0a0a with subtle top border.\nHeight: about 280px.\n\n- Header row: \"Emoji\" label on left, close × on right\n- Search input at top (optional, dimmed)\n- 8 columns × 5 rows grid of common emojis: 😀😊😂❤️🔥👍😭🥰😍😎🤔💀✨🎉👋🙄😴🥺😭💀🥺😍🥰😎🤔👍🎉✨💀😭😀😊😂❤️🔥\n- Each emoji is 32px, centered in its cell\n- Subtle grid lines or cell bg on hover\n- Bottom bar with category icons (smiley, heart, hand, etc) in orange when active\n\nDark theme, clean, minimalistic."
+}

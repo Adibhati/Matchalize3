@@ -1,417 +1,438 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { AnimatePresence, motion } from 'framer-motion';
-import { io } from 'socket.io-client';
-import { api, SOCKET_URL } from '../utils/api';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import HTMLFlipBook from 'react-pageflip';
+import ProfileCard from '../components/ProfileCard';
+import ProfileCardSkeleton from '../components/ProfileCardSkeleton';
+import { api } from '../utils/api';
+import { useAuth } from '../utils/AuthContext';
 import { triggerHaptic } from '../utils/haptics';
-import SwipeCard from '../components/SwipeCard';
-import NavBar from '../components/NavBar';
-import { DeckSkeleton } from '../components/Skeletons';
+import { theme as design } from '../utils/theme';
+import { RotateCw, Send, X, Compass, Users } from 'lucide-react';
 
-const Discover = () => {
-  const navigate = useNavigate();
-  const [users, setUsers] = useState([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
+const theme = {
+  paper: '#fdfbf7',
+  surface: '#ffffff',
+  surfaceAlt: '#f4f1ea',
+  border: '#e0d8c8',
+  borderDark: '#d4c5a9',
+  ink: '#1a1a1a',
+  inkMuted: '#8c8275',
+  accent: '#8b4513',
+  crimson: '#8b1a1a',
+  shadowWarm: 'rgba(139, 69, 19, 0.15)',
+  shadowDark: 'rgba(26, 26, 26, 0.25)',
+};
+
+// React-Pageflip requires pages to be wrapped in a forwardRef
+const Page = React.forwardRef(({ profile, onAction }, ref) => {
+  return (
+    <div ref={ref} className="archival-page" data-density="soft">
+      {/* DOM ISOLATION WRAPPER: Prevents React & PageFlip from fighting over the same DOM nodes */}
+      <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
+        <ProfileCard profile={profile} onAction={onAction} />
+      </div>
+    </div>
+  );
+});
+Page.displayName = "Page";
+
+const Discover = ({ onOpenChat }) => {
+  const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [matchData, setMatchData] = useState(null);
-  const [notifications, setNotifications] = useState([]);
-  const [showNotifications, setShowNotifications] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const currentUser = useMemo(() => JSON.parse(localStorage.getItem('matchalize_user') || '{}'), []);
-  const socketRef = useRef(null);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [fetchingMore, setFetchingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  
+  const [sortTab, setSortTab] = useState('all'); 
+  const [showTelegram, setShowTelegram] = useState(false);
+  const [telegramText, setTelegramText] = useState('');
+  const [showAlignmentModal, setShowAlignmentModal] = useState(false);
+  const [alignedProfile, setAlignedProfile] = useState(null);
 
-  const fetchDeck = async (resetSwipes = false) => {
-    setLoading(true);
-    setError('');
-    try {
-      const url = resetSwipes ? '/discover?reset=true' : '/discover';
-      const data = await api.get(url);
-      setUsers(data.users || data);
-      setCurrentIndex(0);
-    } catch (err) {
-      console.error(err);
-      setError('Could not load classmate deck');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const bookRef = useRef(null);
+  // Tracks whether a page turn was caused by an action button (Like/Telegram/Pass)
+  const isActionFlip = useRef(false);
+  const actionPendingRef = useRef(false);
+  const { user: myUser } = useAuth();
 
+  // Prevent WebKit/Safari NotFoundError during unmount animations
   useEffect(() => {
-    fetchDeck();
-  }, []);
-
-  useEffect(() => {
-    const token = localStorage.getItem('matchalize_token');
-    if (!token) return;
-
-    const socket = io(SOCKET_URL, {
-      auth: { token },
-      transports: ['websocket', 'polling'],
-    });
-
-    socket.on('connect', () => {
-      console.log('Socket connected for notifications');
-    });
-
-    socket.on('match-notification', (data) => {
-      setNotifications(prev => [{
-        id: Date.now(),
-        type: 'match',
-        message: `You matched with ${data.name || 'a classmate'}!`,
-        time: 'Just now',
-        read: false,
-      }, ...prev]);
-      setUnreadCount(prev => prev + 1);
-    });
-
-    socket.on('new-message-notification', (data) => {
-      setNotifications(prev => [{
-        id: Date.now(),
-        type: 'message',
-        message: `${data.fromName || 'Someone'}: ${data.preview || 'sent a message'}`,
-        time: 'Just now',
-        read: false,
-      }, ...prev]);
-      setUnreadCount(prev => prev + 1);
-    });
-
-    socketRef.current = socket;
-
     return () => {
-      socket.disconnect();
-      socketRef.current = null;
+      if (bookRef.current?.pageFlip) {
+        try {
+          bookRef.current.pageFlip().destroy();
+        } catch {
+          // Silently ignore cleanup errors if nodes were already detached
+        }
+      }
     };
   }, []);
 
-  const handleSwipe = async (direction, targetId) => {
-    triggerHaptic('swipe');
-
-    setCurrentIndex(prev => prev + 1);
+  const fetchProfiles = useCallback(async (append = false) => {
+    if (!append) setLoading(true);
+    else setFetchingMore(true);
 
     try {
-      if (direction === 'right') {
-        const res = await api.post(`/discover/like/${targetId}`);
-        if (res.matched) {
-          triggerHaptic('match');
-          setMatchData({
-            matchId: res.matchId,
-            matchedUser: res.user,
-          });
+      const data = await api.get('/discover?limit=10');
+      const newProfiles = data.users || [];
+      if (append) setProfiles((prev) => [...prev, ...newProfiles]);
+      else { setProfiles(newProfiles); setCurrentIndex(0); }
+      setHasMore(data.hasMore);
+    } catch (err) {
+      console.error('Failed to fetch archival profiles:', err);
+    } finally {
+      setLoading(false);
+      setFetchingMore(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchProfiles(false); }, [fetchProfiles]);
+
+  const getSortedProfiles = useCallback(() => {
+    if (sortTab === 'all' || !myUser) return profiles;
+    const remaining = [...profiles].slice(currentIndex);
+    const past = [...profiles].slice(0, currentIndex);
+    remaining.sort((a, b) => {
+      let aMatch = 0, bMatch = 0;
+      if (sortTab === 'era') {
+        aMatch = a.year === myUser.year ? 1 : 0;
+        bMatch = b.year === myUser.year ? 1 : 0;
+      } else if (sortTab === 'branch') {
+        aMatch = a.branch === myUser.branch ? 1 : 0;
+        bMatch = b.branch === myUser.branch ? 1 : 0;
+      }
+      return bMatch - aMatch;
+    });
+    return [...past, ...remaining];
+  }, [profiles, currentIndex, sortTab]);
+
+  const sortedProfiles = getSortedProfiles();
+
+  // ONE-SHOT DISPATCH HANDLER (Used for Like/Superlike via PopoutItem)
+  const handleAction = useCallback(async (action, payload = {}) => {
+    if (actionPendingRef.current) return;
+    actionPendingRef.current = true;
+    if (currentIndex >= sortedProfiles.length) return;
+    const profile = sortedProfiles[currentIndex];
+    
+    try {
+      if (action === 'like') { 
+        triggerHaptic('light'); 
+        const response = await api.post(`/discover/like/${profile._id}`, payload);
+        if (response.matched) {
+          setAlignedProfile({ ...response.user, matchId: response.matchId });
+          setShowAlignmentModal(true);
         }
-      } else if (direction === 'super') {
-        const res = await api.post(`/discover/superlike/${targetId}`);
-        if (res.matched) {
-          setMatchData({
-            matchId: res.matchId,
-            matchedUser: res.user,
-          });
+      } 
+      else if (action === 'superlike') { 
+        triggerHaptic('heavy'); 
+        const response = await api.post(`/discover/superlike/${profile._id}`, payload);
+        if (response.matched) {
+          setAlignedProfile({ ...response.user, matchId: response.matchId });
+          setShowAlignmentModal(true);
         }
-      } else {
-        await api.post(`/discover/pass/${targetId}`);
+      } 
+      else if (action === 'pass') { 
+        triggerHaptic('medium'); 
+        await api.post(`/discover/pass/${profile._id}`); 
+      }
+      
+      // Programmatically flip the page
+      if (bookRef.current?.pageFlip) {
+        // Raise the flag: tell the sensor we already handled the backend API call
+        isActionFlip.current = true;
+        bookRef.current.pageFlip().flipNext();
       }
     } catch (err) {
-      console.error('Error recording swipe:', err);
+      console.error('Action failed:', err);
+    } finally {
+      actionPendingRef.current = false;
     }
+  }, [currentIndex, sortedProfiles]);
+
+  // Hook into react-pageflip's native flip event
+  const onPageFlip = useCallback((e) => {
+    // If the user flips forward, check what caused the flip:
+    if (e.data > currentIndex) {
+      if (isActionFlip.current) {
+        // Flag is up: action button was tapped — backend already handled, just lower the flag
+        isActionFlip.current = false;
+      } else {
+        // Flag is down: user manually swiped the page — send Pass
+        const passedProfile = sortedProfiles[currentIndex];
+        if (passedProfile) {
+           api.post(`/discover/pass/${passedProfile._id}`).catch(console.error);
+           triggerHaptic('light');
+        }
+      }
+    }
+    
+    setCurrentIndex(e.data);
+
+    // Eager preload
+    if (sortedProfiles.length - e.data <= 3 && hasMore && !fetchingMore) {
+      fetchProfiles(true);
+    }
+  }, [currentIndex, sortedProfiles, hasMore, fetchingMore, fetchProfiles]);
+
+  const sendTelegram = () => {
+    if (!telegramText.trim()) return;
+    setShowTelegram(false);
+    handleAction('superlike', { note: telegramText.trim() });
+    setTelegramText('');
   };
 
-  return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-
-      {/* Top Header */}
-      <header style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        padding: '12px 20px 8px 20px',
-        width: '100%',
-        zIndex: 50,
-      }}>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <h1 style={{
-            fontFamily: 'Outfit, sans-serif',
-            fontSize: '38px',
-            fontWeight: '800',
-            color: 'var(--text)',
-            letterSpacing: '-0.5px',
-            textTransform: 'lowercase',
-            margin: 0,
-            lineHeight: '1',
-          }}>matchalize</h1>
-          <div style={{
-            width: '108px',
-            height: '4px',
-            borderRadius: '2px',
-            marginTop: '4px',
-            background: 'linear-gradient(90deg, #f97316, #ea580c)',
-          }} />
-        </div>
-
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <button
-            onClick={() => setShowNotifications(!showNotifications)}
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '22px',
-              backgroundColor: 'rgba(255,255,255,0.05)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              border: '0.5px solid rgba(255,255,255,0.08)',
-              cursor: 'pointer',
-              padding: 0,
-              position: 'relative',
-            }}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-              <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-            </svg>
-            {unreadCount > 0 && (
-              <div style={{
-                position: 'absolute',
-                top: '6px',
-                right: '6px',
-                minWidth: '16px',
-                height: '16px',
-                borderRadius: '8px',
-                background: '#f97316',
-                fontSize: '9px',
-                fontWeight: '700',
-                color: '#fff',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '0 4px',
-              }}>
-                {unreadCount > 9 ? '9+' : unreadCount}
-              </div>
-            )}
-          </button>
-          <button
-            onClick={() => navigate('/matches')}
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '22px',
-              backgroundColor: 'rgba(255,255,255,0.05)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              border: '0.5px solid rgba(255,255,255,0.08)',
-              cursor: 'pointer',
-              padding: 0,
-            }}
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-            </svg>
-          </button>
-        </div>
-      </header>
-
-      {/* Notifications Dropdown Panel */}
-      <AnimatePresence>
-        {showNotifications && (
-          <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            style={{
-              position: 'absolute',
-              top: '52px',
-              right: '16px',
-              width: '290px',
-              backgroundColor: 'rgba(20, 20, 28, 0.95)',
-              border: '1px solid var(--border)',
-              borderRadius: '20px',
-              padding: '16px',
-              boxShadow: '0 16px 48px rgba(0,0,0,0.6)',
-              zIndex: 150,
-              backdropFilter: 'blur(20px)',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <span style={{ fontSize: '11px', fontWeight: '700', letterSpacing: '1px', color: 'var(--text-dim)', fontFamily: 'Geist, sans-serif' }}>NOTIFICATIONS</span>
-              <button
-                onClick={() => {
-                  setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-                  setUnreadCount(0);
-                }}
-                style={{ background: 'none', border: 'none', color: '#fb923c', fontSize: '11px', fontWeight: '600', cursor: 'pointer', fontFamily: 'Geist, sans-serif' }}
-              >
-                Mark all read
-              </button>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto' }}>
-              {notifications.map(n => (
-                <div key={n.id} style={{
-                  padding: '10px 12px',
-                  borderRadius: '12px',
-                  backgroundColor: n.read ? 'transparent' : 'rgba(249, 115, 22, 0.04)',
-                  border: `1px solid ${n.read ? 'var(--border)' : 'rgba(249, 115, 22, 0.15)'}`,
-                  fontSize: '12px',
-                }}>
-                  <div style={{ color: 'var(--text)', fontWeight: '500', lineHeight: '1.4' }}>{n.message}</div>
-                  <div style={{ color: 'var(--text-dim)', fontSize: '10px', marginTop: '4px' }}>{n.time}</div>
-                </div>
-              ))}
-            </div>
-
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Main deck area */}
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden', margin: '0 8px' }}>
-        {loading ? (
-          <DeckSkeleton />
-        ) : error ? (
-          <div style={{ display: 'flex', width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', padding: '40px', textAlign: 'center', gap: '20px' }}>
-            <span style={{ fontSize: '40px' }}>⚠️</span>
-            <p style={{ color: 'var(--text-dim)' }}>{error}</p>
-            <button className="btn btn-secondary" onClick={fetchDeck}>Try Again</button>
-          </div>
-        ) : users.length === 0 || currentIndex >= users.length ? (
-          <div style={{ display: 'flex', width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', padding: '40px', textAlign: 'center', gap: '20px' }}>
-            <span style={{ fontSize: '64px' }}>🏜️</span>
-            <h3 style={{ fontSize: '20px', fontWeight: '700', fontFamily: 'Geist, sans-serif' }}>That's everyone!</h3>
-            <p style={{ color: 'var(--text-dim)', fontSize: '14px', lineHeight: '1.5', fontFamily: 'Inter, sans-serif' }}>
-              You've swiped on all currently onboarded classmates. Check back later or tell your campus friends to join!
-            </p>
-            <button className="btn btn-primary" style={{ width: 'auto' }} onClick={() => fetchDeck(true)}>Refresh Deck</button>
-          </div>
-        ) : (
-          <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-            {users.slice(currentIndex, currentIndex + 2).reverse().map((user, idx) => {
-              const sliceLen = users.slice(currentIndex, currentIndex + 2).length;
-              const absoluteIndex = currentIndex + (sliceLen - 1 - idx);
-              const isActive = absoluteIndex === currentIndex;
-              return (
-                <SwipeCard
-                  key={`${user._id}-${absoluteIndex}`}
-                  user={user}
-                  onSwipe={handleSwipe}
-                  active={isActive}
-                />
-              );
-            })}
-          </div>
-        )}
+  // EARLY RETURN: Loading State — full-height flex to keep NavBar pinned to bottom
+  if (loading) {
+    return (
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+        <ProfileCardSkeleton />
       </div>
+    );
+  }
 
-      {/* Navigation bottom bar */}
-      <NavBar />
+  // EARLY RETURN: Empty State — full-height flex to keep NavBar pinned to bottom
+  if (!profiles || profiles.length === 0) {
+    return (
+      <div style={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '32px',
+        textAlign: 'center',
+        width: '100%',
+        color: theme.inkMuted,
+        backgroundColor: theme.surfaceAlt,
+      }}>
+        <Compass size={48} strokeWidth={1.5} style={{ marginBottom: '16px', opacity: 0.6 }} />
+        <h3 style={{ fontFamily: "'Playfair Display', serif", fontSize: '22px', color: theme.ink, marginBottom: '8px' }}>
+          The Archive is Quiet
+        </h3>
+        <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', lineHeight: 1.6, maxWidth: '280px', marginBottom: '24px' }}>
+          You've reviewed all available subjects at IIT Bombay for now. Check back later as more students arrive.
+        </p>
+        <button
+          onClick={() => fetchProfiles(false)}
+          style={{
+            padding: '12px 24px',
+            borderRadius: '24px',
+            backgroundColor: theme.accent,
+            color: '#fff',
+            border: 'none',
+            fontWeight: 600,
+            cursor: 'pointer',
+            boxShadow: '0 4px 12px rgba(139, 69, 19, 0.2)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+          }}
+        >
+          <RotateCw size={18} /> Refresh Archive
+        </button>
+      </div>
+    );
+  }
 
-      {/* Match Overlay Modal */}
-      <AnimatePresence>
-        {matchData && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            style={{
-              position: 'absolute',
-              inset: 0,
-              backgroundColor: 'rgba(6,6,8,0.95)',
-              backdropFilter: 'blur(30px)',
-              zIndex: 200,
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'space-between',
-              padding: '60px 24px 40px 24px',
-              alignItems: 'center',
-            }}
-          >
-            <div />
+  // Dimensions for HTMLFlipBook
+  const width = window.innerWidth > 430 ? 430 : window.innerWidth;
+  const height = window.innerHeight - 140; // Leave room for navbar and compass
 
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', width: '100%' }}>
-              <motion.h1
-                initial={{ scale: 0.5, y: 50 }}
-                animate={{ scale: 1, y: 0 }}
-                style={{
-                  fontSize: '40px',
-                  fontWeight: '900',
-                  background: 'linear-gradient(135deg, #f97316, #ea580c)',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                  textAlign: 'center',
-                  letterSpacing: '2px',
-                  fontFamily: 'Geist, sans-serif',
-                }}
-              >
-                IT'S A MATCH!
-              </motion.h1>
-
-              <p style={{ color: 'var(--text-dim)', fontSize: '16px', textAlign: 'center', fontFamily: 'Inter, sans-serif' }}>
-                You and {matchData.matchedUser.name} have liked each other.
-              </p>
-
-              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '20px', margin: '40px 0', position: 'relative' }}>
-                <div style={{
-                  width: '110px',
-                  height: '110px',
-                  borderRadius: '50%',
-                  border: '3px solid #f97316',
-                  boxShadow: '0 0 30px rgba(249, 115, 22, 0.3)',
-                  backgroundImage: currentUser.photos && currentUser.photos.length > 0 ? `url(${currentUser.photos[0]})` : 'none',
-                  backgroundColor: 'var(--surface-2)',
-                  backgroundSize: 'cover',
-                  backgroundPosition: 'center',
-                }} />
-
-                <div style={{ position: 'absolute', zIndex: 10, animation: 'heartbeat 1.2s infinite' }}>
-                  <svg width="32" height="32" viewBox="0 0 24 24" fill="#f97316" stroke="#ea580c" strokeWidth="1.5">
-                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
-                  </svg>
-                </div>
-
-                <div style={{
-                  width: '110px',
-                  height: '110px',
-                  borderRadius: '50%',
-                  border: '3px solid #f97316',
-                  boxShadow: '0 0 30px rgba(234, 88, 12, 0.3)',
-                  backgroundImage: matchData.matchedUser.photos && matchData.matchedUser.photos.length > 0 ? `url(${matchData.matchedUser.photos[0]})` : 'none',
-                  backgroundColor: 'var(--surface-2)',
-                  backgroundSize: 'cover',
-                  backgroundPosition: 'center',
-                }} />
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', width: '100%' }}>
-              <button
-                className="btn btn-primary"
-                onClick={() => {
-                  const id = matchData.matchId;
-                  setMatchData(null);
-                  navigate(`/chat/${id}`);
-                }}
-              >
-                Send a Message
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={() => setMatchData(null)}
-              >
-                Keep Swiping
-              </button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+  return (
+    <div style={styles.viewportRoot}>
+      <div aria-hidden="true" style={styles.paperGrain} />
 
       <style>{`
-        @keyframes heartbeat {
-          0% { transform: scale(1); }
-          50% { transform: scale(1.2); }
-          100% { transform: scale(1); }
-        }
+        .hide-scroll::-webkit-scrollbar { display: none; }
+        .archival-page { background-color: ${theme.paper}; overflow: hidden; border-right: 1px solid ${theme.borderDark}; box-shadow: inset 12px 0 20px -8px rgba(0,0,0,0.15); }
+        .stf__wrapper { border-radius: 0 24px 24px 0 !important; overflow: hidden !important; }
+        .tactile-btn:active { transform: scale(0.95); }
       `}</style>
+
+      {/* TOP COMPASS BAR (Soft Sorting Tabs) */}
+      <div style={styles.compassHeader}>
+        <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '6px', paddingLeft: '24px', paddingRight: '24px' }} className="hide-scroll">
+          {[
+            { id: 'all', label: 'All Campus', icon: Compass },
+            { id: 'era', label: 'Same Era', icon: Users },
+            { id: 'branch', label: 'Same Discipline', icon: Users }
+          ].map(tab => {
+            const isActive = sortTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => { triggerHaptic('light'); setSortTab(tab.id); }}
+                className="tactile-btn"
+                style={{
+                  padding: '10px 16px', borderRadius: '24px',
+                  border: `1.5px solid ${isActive ? theme.crimson : theme.borderDark}`,
+                  backgroundColor: isActive ? theme.crimson : theme.surface,
+                  color: isActive ? '#fff' : theme.ink,
+                  fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: isActive ? 800 : 600,
+                  whiteSpace: 'nowrap', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px',
+                  boxShadow: isActive ? `0 4px 16px rgba(139, 26, 26, 0.25)` : 'none',
+                  outline: 'none'
+                }}
+              >
+                <tab.icon size={16} /> {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={styles.stageContainer}>
+        <div style={{ width: '100%', height: '100%', padding: '0 8px 8px 0' }}>
+          {/* TRUE 3D CORNER-CURLING BOOK ENGINE */}
+          <HTMLFlipBook
+            key={profiles.length} // Force clean remount if array length changes drastically
+            width={width - 8}
+            height={height}
+            size="fixed"
+            minWidth={300}
+            maxWidth={430}
+            minHeight={600}
+            maxHeight={1200}
+            maxShadowOpacity={0.5}
+            showCover={false}
+            mobileScrollSupport={true} // Crucial: allows vertical scrolling inside the page
+            usePortrait={true} // Forces single-page mode on all devices
+            onFlip={onPageFlip}
+            className="archival-book"
+            ref={bookRef}
+            style={{ margin: '0' }}
+          >
+            {sortedProfiles.map((p) => (
+              <Page key={p._id || p.id} profile={p} onAction={handleAction} />
+            ))}
+          </HTMLFlipBook>
+        </div>
+      </div>
+
+      {/* METALLIC GOLD TELEGRAM BUTTON */}
+      {currentIndex < sortedProfiles.length && !loading && (
+        <button
+          onClick={() => { triggerHaptic('medium'); setShowTelegram(true); }}
+          className="tactile-btn"
+          style={styles.telegramGoldBtn}
+          aria-label="Dispatch Telegram"
+        >
+          <Send size={24} color="#fff" style={{ transform: 'translate(1px, -1px)' }} />
+        </button>
+      )}
+
+      {/* ALIGNMENT CELEBRATION MODAL */}
+      <AnimatePresence>
+        {showAlignmentModal && alignedProfile && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(10, 8, 6, 0.85)', backdropFilter: 'blur(8px)', zIndex: 99998 }}
+              onClick={() => { setShowAlignmentModal(false); setAlignedProfile(null); }}
+            />
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+              style={{
+                position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                width: '90%', maxWidth: '360px', backgroundColor: '#fdfbf7',
+                backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E")`,
+                border: '2px solid #d4c5a9', borderRadius: '24px', padding: '32px 24px',
+                textAlign: 'center', zIndex: 99999, boxShadow: '0 24px 60px rgba(0,0,0,0.4)'
+              }}
+            >
+              {/* Wax Seal Icon */}
+              <div style={{ width: '80px', height: '80px', margin: '0 auto 16px', backgroundColor: '#8b1a1a', borderRadius: '50%', border: '4px solid #b82e2e', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 24px rgba(139,26,26,0.4), inset 0 2px 8px rgba(255,255,255,0.2)' }}>
+                <span style={{ fontFamily: "'Playfair Display', serif", fontSize: '32px', fontWeight: 900, color: '#ffffff', letterSpacing: '2px' }}>M</span>
+              </div>
+              
+              <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: '28px', color: '#1a1a1a', margin: '0 0 8px 0', fontWeight: 800 }}>You are Aligned</h2>
+              <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: '#8c8275', margin: '0 0 24px 0', lineHeight: 1.5 }}>
+                You and {alignedProfile.name} have found common ground. The correspondence is now open.
+              </p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <button 
+                  onClick={() => {
+                    triggerHaptic('heavy');
+                    setShowAlignmentModal(false);
+                    if (onOpenChat && alignedProfile) {
+                      onOpenChat({ _id: alignedProfile.matchId, user: alignedProfile });
+                    }
+                    setAlignedProfile(null);
+                  }}
+                  style={{ width: '100%', padding: '16px', backgroundColor: '#8b1a1a', color: '#fff', border: 'none', borderRadius: '12px', fontFamily: "'Inter', sans-serif", fontSize: '14px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', cursor: 'pointer', boxShadow: '0 4px 12px rgba(139,26,26,0.3)' }}
+                >
+                  Open Correspondence
+                </button>
+                <button 
+                  onClick={() => { setShowAlignmentModal(false); setAlignedProfile(null); }}
+                  style={{ width: '100%', padding: '16px', backgroundColor: 'transparent', color: '#1a1a1a', border: '1px solid #d4c5a9', borderRadius: '12px', fontFamily: "'Inter', sans-serif", fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}
+                >
+                  Continue Exploring
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* TELEGRAM BOTTOM SHEET (PORTAL) */}
+      <AnimatePresence>
+        {showTelegram && createPortal(
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowTelegram(false)} style={styles.telegramBackdrop} />
+            <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 26, stiffness: 320 }} style={styles.telegramSheet}>
+              <div style={styles.telegramHeader}>
+                <span style={{ fontFamily: design.font.heading, fontSize: '24px', fontWeight: 800, color: theme.ink }}>Dispatch a Telegram</span>
+                <button onClick={() => setShowTelegram(false)} style={styles.closeBtn}><X size={24} color={theme.ink} /></button>
+              </div>
+              <div style={{ padding: '28px 24px' }}>
+                <p style={{ fontFamily: design.font.body, fontSize: '15px', color: theme.inkMuted, marginBottom: '20px', lineHeight: 1.5 }}>
+                  Skip the line. Go straight to the top of {sortedProfiles[currentIndex]?.name}'s Letterbox.
+                  <strong style={{ display: 'block', color: theme.accent, marginTop: '10px' }}>[ 1 Remaining Today ]</strong>
+                </p>
+                <textarea autoFocus value={telegramText} onChange={(e) => setTelegramText(e.target.value)} placeholder="Draft your urgent correspondence..." style={styles.telegramInput} />
+                <button onClick={sendTelegram} disabled={!telegramText.trim()} style={{ ...styles.telegramSendBtn, opacity: telegramText.trim() ? 1 : 0.5, cursor: telegramText.trim() ? 'pointer' : 'not-allowed' }}>
+                  <Send size={20} /> Affix Seal & Dispatch
+                </button>
+              </div>
+            </motion.div>
+          </>,
+          document.body
+        )}
+      </AnimatePresence>
     </div>
   );
+};
+
+// TRUE BOOK HINGE GEOMETRY
+const styles = {
+  viewportRoot: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', backgroundColor: theme.surfaceAlt, position: 'relative', overflow: 'hidden', userSelect: 'none', WebkitUserSelect: 'none' },
+  paperGrain: { position: 'absolute', inset: 0, backgroundImage: `url("${design.texture.grain}")`, mixBlendMode: 'multiply', opacity: 0.85, pointerEvents: 'none', zIndex: 1 },
+  compassHeader: { paddingTop: '16px', paddingBottom: '8px', zIndex: 10, position: 'relative' },
+  stageContainer: { flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', position: 'relative', padding: 0, zIndex: 2 },
+  
+  skeletonFrame: { position: 'absolute', top: 0, bottom: 8, left: 0, right: '8px', zIndex: 1, backgroundColor: theme.paper, borderRadius: '0 24px 24px 0', overflow: 'hidden', border: `1px solid ${theme.borderDark}`, borderLeft: 'none' },
+  
+  emptyLedgerCard: { backgroundColor: theme.paper, border: `2px solid ${theme.borderDark}`, borderRadius: '24px', padding: '48px 32px', maxWidth: '360px', textAlign: 'center', zIndex: 2, boxShadow: `0 16px 40px ${theme.shadowWarm}`, margin: '0 auto' },
+  emptyTitle: { fontFamily: "'Playfair Display', serif", fontSize: '28px', color: theme.ink, margin: '0 0 16px 0', fontWeight: 800 },
+  emptyBody: { fontFamily: "'Inter', sans-serif", fontSize: '16px', color: theme.inkMuted, marginBottom: '32px', lineHeight: 1.5 },
+  reopenStampBtn: { padding: '16px 28px', backgroundColor: theme.surface, border: `2px solid ${theme.accent}`, borderRadius: design.radius.md, fontFamily: "'Inter', sans-serif", fontSize: '15px', fontWeight: 800, textTransform: 'uppercase', color: theme.accent, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '10px', boxShadow: `0 4px 16px ${theme.shadowWarm}` },
+  
+  // Metallic Gold Rounded Square
+  telegramGoldBtn: { position: 'absolute', bottom: '28px', right: '28px', width: '64px', height: '64px', borderRadius: '16px', background: 'linear-gradient(135deg, #d4af37 0%, #aa7c11 50%, #d4af37 100%)', border: '1.5px solid #ffe699', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 12px 32px rgba(212, 175, 55, 0.4), inset 0 2px 4px rgba(255,255,255,0.4)`, cursor: 'pointer', zIndex: 20 },
+  
+  telegramBackdrop: { position: 'fixed', inset: 0, backgroundColor: 'rgba(20,15,10,0.7)', backdropFilter: 'blur(6px)', zIndex: 99998 },
+  telegramSheet: { position: 'fixed', bottom: 0, left: 0, right: 0, backgroundColor: theme.paper, backgroundImage: `url("${design.texture.grain}")`, borderTopLeftRadius: '28px', borderTopRightRadius: '28px', zIndex: 99999, boxShadow: '0 -24px 60px rgba(0,0,0,0.5)', paddingBottom: 'max(24px, env(safe-area-inset-bottom))' },
+  telegramHeader: { padding: '24px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.borderDark}`, backgroundColor: theme.surface, borderTopLeftRadius: '28px', borderTopRightRadius: '28px' },
+  closeBtn: { background: theme.surfaceAlt, border: `1px solid ${theme.border}`, borderRadius: '12px', width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' },
+  telegramInput: { width: '100%', minHeight: '150px', backgroundColor: theme.surfaceAlt, border: `1px solid ${theme.borderDark}`, borderRadius: '16px', padding: '20px', fontSize: '18px', color: theme.ink, fontFamily: "'Special Elite', 'Courier New', monospace", outline: 'none', resize: 'none', marginBottom: '24px', boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.05)' },
+  telegramSendBtn: { width: '100%', padding: '20px', background: 'linear-gradient(135deg, #d4af37 0%, #aa7c11 100%)', color: '#fff', border: '1px solid #ffe699', borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', fontFamily: "'Inter', sans-serif", fontSize: '16px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '1.5px', boxShadow: '0 8px 24px rgba(212, 175, 55, 0.4)' }
 };
 
 export default Discover;

@@ -60,10 +60,15 @@ const userSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    bioPhoto: {
+      type: String,
+      default: '',
+    },
     prompts: [
       {
         question: String,
         answer: String,
+        photoUrl: String,
       },
     ],
     photos: {
@@ -92,26 +97,75 @@ const userSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
-    liked: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-      },
-    ],
-    passed: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-      },
-    ],
+    compatAnswers: {
+      type: [
+        {
+          question: { type: String, required: true },
+          answer: { type: String, required: true },
+        },
+      ],
+      default: [],
+    },
+    onboardingStep: {
+      type: Number,
+      default: 1,
+    },
+    onboardingData: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
     lastActive: {
       type: Date,
       default: Date.now,
+    },
+    lastLogoutAt: {
+      type: Date,
+      default: null,
+    },
+    pushSubscription: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+    suspended: {
+      type: Boolean,
+      default: false,
+    },
+    suspendedAt: {
+      type: Date,
+      default: null,
+    },
+    suspendedReason: {
+      type: String,
+      default: '',
+    },
+    isGhost: {
+      type: Boolean,
+      default: false,
+    },
+    isDeleted: {
+      type: Boolean,
+      default: false,
+    },
+    deletedAt: {
+      type: Date,
+      default: null,
+    },
+    // 🚀 DETERMINISTIC SEED: Allows instant indexed random sampling without $sample
+    randomSeed: {
+      type: Number,
+      default: () => Math.random(),
+      index: true,
     },
   },
   {
     timestamps: true,
   }
+);
+
+userSchema.index({ name: 'text', email: 'text' });
+userSchema.index(
+  { collegeCode: 1, isOnboarded: 1, isGhost: 1, isVerified: 1, suspended: 1, isDeleted: 1, randomSeed: 1 },
+  { name: 'discover_deck_filter_index' }
 );
 
 const User = mongoose.model('User', userSchema);

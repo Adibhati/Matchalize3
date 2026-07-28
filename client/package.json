@@ -10,9 +10,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@sentry/react": "^10.66.0",
+    "@tanstack/react-query": "^5.101.2",
     "framer-motion": "^12.42.0",
+    "gsap": "^3.15.0",
+    "lucide-react": "^1.25.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "react-pageflip": "^2.0.3",
     "react-router-dom": "^7.18.0",
     "socket.io-client": "^4.8.3"
   },

@@ -23,14 +23,22 @@ if (isCloudinaryConfigured) {
 
   const storage = new CloudinaryStorage({
     cloudinary,
-    params: {
-      folder: 'matchalize/photos',
-      allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-      transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }],
+    params: async (req, file) => {
+      const isAudio = file.mimetype.startsWith('audio/');
+      return {
+        folder: isAudio ? 'matchalize/audio' : 'matchalize/photos',
+        allowed_formats: isAudio
+          ? ['mp3', 'mp4', 'm4a', 'webm', 'ogg']
+          : ['jpg', 'jpeg', 'png', 'webp'],
+        ...(isAudio ? {} : {
+          transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }],
+          moderation: 'aws_rek',
+        }),
+      };
     },
   });
 
-  upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } });
+  upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
 } else {
   const storage = multer.diskStorage({
     destination: path.join(__dirname, '..', 'uploads'),
@@ -50,6 +58,12 @@ router.post('/', protect, upload.single('photo'), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
     }
+
+    // CHECK: If Cloudinary AI rejected the photo
+    if (req.file.moderation && req.file.moderation[0]?.status === 'rejected') {
+      return res.status(403).json({ message: 'Photo rejected due to inappropriate content.' });
+    }
+
     const url = isCloudinaryConfigured
       ? req.file.path
       : `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;

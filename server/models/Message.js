@@ -7,14 +7,14 @@ const messageSchema = new mongoose.Schema(
       ref: 'Match',
       required: true,
     },
-    sender: {
+    senderId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: true,
     },
     type: {
       type: String,
-      enum: ['text', 'image'],
+      enum: ['text', 'image', 'opening_letter', 'audio'],
       default: 'text',
     },
     text: {
@@ -22,9 +22,27 @@ const messageSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    clientMsgId: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
     image: {
       type: String,
       default: '',
+    },
+    mediaUrl: {
+      type: String,
+      default: '',
+    },
+    caption: {
+      type: String,
+      default: '',
+    },
+    deliveryStatus: {
+      type: String,
+      enum: ['pending', 'sent', 'read'],
+      default: 'sent',
     },
     replyTo: {
       type: mongoose.Schema.Types.ObjectId,
@@ -52,6 +70,11 @@ const messageSchema = new mongoose.Schema(
 );
 
 messageSchema.index({ matchId: 1, createdAt: 1 });
+// 🚀 COLLISION-PROOF PAGINATION: Instant ObjectId-based cursor queries
+messageSchema.index({ matchId: 1, _id: -1 });
+
+// Speeds up moderation queries and global user cleanup operations
+messageSchema.index({ senderId: 1, createdAt: -1 });
 
 const Message = mongoose.model('Message', messageSchema);
 export default Message;

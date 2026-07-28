@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { api } from './api';
+import { theme as design } from './theme';
 
 const AppConfigContext = createContext(null);
 
@@ -71,7 +72,7 @@ export const AppConfigProvider = ({ children }) => {
         <button
           onClick={() => window.location.reload()}
           style={{
-            padding: '10px 24px', borderRadius: '99px',
+            padding: '10px 24px', borderRadius: design.radius.md,
             border: '1px solid rgba(249,115,22,0.3)',
             background: 'rgba(249,115,22,0.1)',
             color: '#f97316', cursor: 'pointer',

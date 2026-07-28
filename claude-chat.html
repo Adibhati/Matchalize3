@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Chat - Free via Puter</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    #header {
+      padding: 16px 24px;
+      background: #16213e;
+      border-bottom: 1px solid #0f3460;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    #header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #e94560;
+    }
+    #header span {
+      font-size: 12px;
+      color: #888;
+    }
+    #chat {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .msg {
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      line-height: 1.5;
+      font-size: 14px;
+      animation: fadeIn 0.2s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .msg.user {
+      align-self: flex-end;
+      background: #e94560;
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+    .msg.assistant {
+      align-self: flex-start;
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-bottom-left-radius: 4px;
+      white-space: pre-wrap;
+    }
+    .msg.assistant.streaming {
+      border-color: #e94560;
+    }
+    .msg.assistant.empty {
+      color: #888;
+      font-style: italic;
+    }
+    #input-area {
+      padding: 16px 24px;
+      background: #16213e;
+      border-top: 1px solid #0f3460;
+      display: flex;
+      gap: 12px;
+      align-items: flex-end;
+      flex-shrink: 0;
+    }
+    #model-select {
+      background: #0f3460;
+      color: #e0e0e0;
+      border: 1px solid #1a1a4e;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    #prompt {
+      flex: 1;
+      background: #0f3460;
+      color: #e0e0e0;
+      border: 1px solid #1a1a4e;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+      resize: none;
+      outline: none;
+    }
+    #prompt:focus {
+      border-color: #e94560;
+    }
+    #send {
+      background: #e94560;
+      color: #fff;
+      border: none;
+      padding: 10px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      flex-shrink: 0;
+    }
+    #send:hover { opacity: 0.85; }
+    #send:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    #status {
+      font-size: 11px;
+      color: #666;
+      padding: 4px 24px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    #clear-btn {
+      background: transparent;
+      border: 1px solid #333;
+      color: #888;
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-left: auto;
+    }
+    #clear-btn:hover {
+      border-color: #e94560;
+      color: #e94560;
+    }
+    #load-codebase-btn {
+      background: transparent;
+      border: 1px solid #333;
+      color: #888;
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-left: 8px;
+    }
+    #load-codebase-btn:hover {
+      border-color: #4ecdc4;
+      color: #4ecdc4;
+    }
+    #load-codebase-btn.loaded {
+      border-color: #4ecdc4;
+      color: #4ecdc4;
+    }
+  </style>
+</head>
+<body>
+  <div id="header">
+    <h1>Claude Chat</h1>
+    <span>— free via Puter</span>
+    <button id="clear-btn">Clear</button>
+    <button id="load-codebase-btn">📁 Load Codebase</button>
+  </div>
+
+  <div id="chat">
+    <div id="messages">
+      <div class="msg assistant empty">Send a message to start chatting with Claude. You'll be asked to sign into Puter on first use.</div>
+    </div>
+
+    <div id="status">Ready</div>
+
+    <div id="input-area">
+      <select id="model-select">
+        <option value="claude-sonnet-5">Claude Sonnet 5</option>
+        <option value="claude-opus-4-8">Claude Opus 4.8</option>
+        <option value="claude-opus-4.8-fast">Claude Opus 4.8 Fast</option>
+        <option value="claude-fable-5">Claude Fable 5</option>
+        <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+        <option value="claude-haiku-4-5">Claude Haiku 4.5</option>
+      </select>
+      <textarea id="prompt" rows="2" placeholder="Ask Claude anything..."></textarea>
+      <button id="send">Send</button>
+    </div>
+  </div>
+
+  <script src="https://js.puter.com/v2/"></script>
+  <script>
+    const messagesEl = document.getElementById('messages');
+    const promptEl = document.getElementById('prompt');
+    const sendBtn = document.getElementById('send');
+    const modelSelect = document.getElementById('model-select');
+    const statusEl = document.getElementById('status');
+    const clearBtn = document.getElementById('clear-btn');
+
+    let conversation = [
+      { role: 'system', content: 'You are Claude, a helpful AI assistant. Be concise and friendly.' }
+    ];
+
+    function addMessage(role, text) {
+      const div = document.createElement('div');
+      div.className = `msg ${role}`;
+      div.textContent = text || ' ';
+      if (!text) div.classList.add('empty');
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return div;
+    }
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    function setLoading(loading) {
+      sendBtn.disabled = loading;
+      sendBtn.textContent = loading ? 'Thinking...' : 'Send';
+    }
+
+    async function sendMessage() {
+      const prompt = promptEl.value.trim();
+      if (!prompt) return;
+
+      const model = modelSelect.value;
+      promptEl.value = '';
+      addMessage('user', prompt);
+      conversation.push({ role: 'user', content: prompt });
+
+      setLoading(true);
+      setStatus('Waiting for Claude...');
+
+      const assistantEl = addMessage('assistant', '');
+      assistantEl.classList.add('streaming');
+      let fullText = '';
+
+      try {
+        const response = await puter.ai.chat(conversation, {
+          model: model,
+          stream: true,
+          temperature: 0.7,
+        });
+
+        for await (const part of response) {
+          if (part?.text) {
+            fullText += part.text;
+            assistantEl.textContent = fullText;
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+          }
+        }
+
+        conversation.push({ role: 'assistant', content: fullText });
+        assistantEl.classList.remove('streaming');
+        setStatus('Done');
+      } catch (err) {
+        assistantEl.classList.remove('streaming');
+        assistantEl.textContent = `Error: ${err.message || err}`;
+        setStatus('Error');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+
+    promptEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    clearBtn.addEventListener('click', () => {
+      messagesEl.innerHTML = '';
+      conversation = [
+        { role: 'system', content: 'You are Claude, a helpful AI assistant. Be concise and friendly.' }
+      ];
+      addMessage('assistant', 'Chat cleared. Ask me anything!');
+      setStatus('Ready');
+    });
+
+    const loadCodebaseBtn = document.getElementById('load-codebase-btn');
+    loadCodebaseBtn.addEventListener('click', async () => {
+      try {
+        const res = await fetch('/codebase.txt');
+        if (!res.ok) throw new Error('Not found');
+        const text = await res.text();
+
+        conversation = [
+          { role: 'system', content: 'You are Claude, a helpful AI assistant. Be concise and friendly.' },
+          { role: 'user', content: 'Here is my full project codebase. Each file is prefixed with "=== path/to/file ===":\n\n' + text + '\n\nI will now ask you questions about this codebase. Refer to these files when helping me.' },
+          { role: 'assistant', content: 'Got it. I have your full codebase loaded. Ask me anything about it.' }
+        ];
+
+        messagesEl.innerHTML = '';
+        addMessage('assistant', `📁 Codebase loaded (${(text.length / 1000).toFixed(0)}KB). Ask me anything about the project.`);
+        loadCodebaseBtn.classList.add('loaded');
+        loadCodebaseBtn.textContent = '✓ Codebase Loaded';
+        setStatus('Ready');
+      } catch (err) {
+        addMessage('assistant', `Error loading codebase: ${err.message}. Run the generation command first.`);
+      }
+    });
+  </script>
+</body>
+</html>

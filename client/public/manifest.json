@@ -1,18 +1,21 @@
 {
-  "name": "Matchalize | Campus Dating App",
+  "name": "Matchalize",
   "short_name": "Matchalize",
-  "description": "Premium college dating & connection platform",
+  "description": "Campus dating app",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#060608",
-  "theme_color": "#060608",
-  "orientation": "portrait-primary",
+  "background_color": "#000000",
+  "theme_color": "#f97316",
   "icons": [
     {
-      "src": "/favicon.svg",
+      "src": "/icons/icon-192.png",
       "sizes": "192x192",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
     }
   ]
 }

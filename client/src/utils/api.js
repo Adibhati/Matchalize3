@@ -1,37 +1,36 @@
+import { toast } from './toast';
+
 const apiHostname = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
 const API_PORT = import.meta.env.VITE_API_PORT || '5005';
-const isDev = apiHostname === 'localhost' || apiHostname === '127.0.0.1';
+const isLocalhost = apiHostname === 'localhost' || apiHostname === '127.0.0.1';
+const isPrivateIP = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(apiHostname);
+const isDev = isLocalhost || isPrivateIP;
 export const API_BASE = import.meta.env.VITE_API_URL || (isDev ? `http://${apiHostname}:${API_PORT}` : window.location.origin);
 const BASE_URL = `${API_BASE}/api`;
 export const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || API_BASE;
 
-const getHeaders = () => {
-  const token = localStorage.getItem('matchalize_token');
-  const headers = {
-    'Content-Type': 'application/json',
-  };
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  return headers;
-};
-
 const handleResponse = async (response) => {
-  if (response.status === 401) {
-    localStorage.removeItem('matchalize_token');
+  // 401 or 403 (suspended): Session expired or account suspended — redirect
+  if (response.status === 401 || response.status === 403) {
+    const errorData = await response.json().catch(() => ({}));
     localStorage.removeItem('matchalize_user');
-    // Redirect to auth page if window is defined
+    if (errorData.suspended) {
+      toast.error('Your account has been suspended. Please contact support.');
+    }
     if (typeof window !== 'undefined' && window.location.pathname !== '/auth') {
       window.location.href = '/auth';
     }
-    const errorData = await response.json().catch(() => ({}));
     throw new Error(errorData.message || 'Unauthorized');
   }
 
   const data = await response.json().catch(() => ({}));
+
   if (!response.ok) {
-    throw new Error(data.message || 'Something went wrong');
+    const errorMessage = data.message || 'Something went wrong';
+    toast.error(errorMessage);
+    throw new Error(errorMessage);
   }
+
   return data;
 };
 
@@ -39,7 +38,7 @@ export const api = {
   get: async (path) => {
     const res = await fetch(`${BASE_URL}${path}`, {
       method: 'GET',
-      headers: getHeaders(),
+      credentials: 'include',
     });
     return handleResponse(res);
   },
@@ -47,7 +46,8 @@ export const api = {
   post: async (path, body) => {
     const res = await fetch(`${BASE_URL}${path}`, {
       method: 'POST',
-      headers: getHeaders(),
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify(body),
     });
     return handleResponse(res);
@@ -56,7 +56,8 @@ export const api = {
   put: async (path, body) => {
     const res = await fetch(`${BASE_URL}${path}`, {
       method: 'PUT',
-      headers: getHeaders(),
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify(body),
     });
     return handleResponse(res);
@@ -65,7 +66,7 @@ export const api = {
   delete: async (path) => {
     const res = await fetch(`${BASE_URL}${path}`, {
       method: 'DELETE',
-      headers: getHeaders(),
+      credentials: 'include',
     });
     return handleResponse(res);
   },
@@ -73,10 +74,9 @@ export const api = {
   upload: async (file) => {
     const formData = new FormData();
     formData.append('photo', file);
-    const token = localStorage.getItem('matchalize_token');
     const res = await fetch(`${API_BASE}/api/upload`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` },
+      credentials: 'include',
       body: formData,
     });
     if (!res.ok) throw new Error('Upload failed');

@@ -1,449 +1,227 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,600;1,600&display=swap');
+/* ==========================================
+   MATCHALIZE: THE SUNLIT LIBRARY THEME
+   ========================================== */
 
 :root {
-  --bg: #000000;
-  --surface: #000000;
-  --surface-2: #0a0a0a;
-  --surface-3: #111111;
-  --border: rgba(255, 255, 255, 0.05);
-  --border-active: rgba(249, 115, 22, 0.4);
-  --text: #F3F4F6;
-  --text-dim: #9CA3AF;
-  --primary: #f97316;
-  --primary-glow: rgba(249, 115, 22, 0.15);
-  --primary-gradient: linear-gradient(135deg, #f97316 0%, #ea580c 50%, #c2410c 100%);
-  --rose: #ea580c;
-  --green: #10B981;
-  --gold: #f97316;
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6);
-  --glass-bg: rgba(0, 0, 0, 0.7);
-  --glass-blur: backdrop-filter: blur(20px);
+  /* The Ink & Paper Palette */
+  --color-ink: #2c2c2c;
+  --color-faded-ink: #6b6b6b;
+  --color-parchment: #fdfbf7;
+  --color-paper-white: #ffffff;
+  --color-leather: #8b4513;
+  --color-leather-dark: #5e2e0e;
+  --color-sepia-border: #d4c5a9;
+  --color-wax-red: #8b0000;
+  
+  /* Typography */
+  --font-heading: 'Playfair Display', serif;
+  --font-handwriting: 'Dancing Script', cursive;
+  --font-typewriter: 'Special Elite', cursive;
+  --font-system: 'Inter', sans-serif;
 }
 
+/* Global Resets */
 * {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
   -webkit-tap-highlight-color: transparent;
+  box-sizing: border-box;
 }
 
 html, body {
-  background-color: var(--bg);
-  color: var(--text);
-  font-family: 'Outfit', sans-serif;
-  font-size: 16px;
-  line-height: 1.5;
-  overflow: hidden;
-  overscroll-behavior: none;
+  margin: 0;
+  padding: 0;
+  background-color: var(--color-parchment);
+  color: var(--color-ink);
+  font-family: var(--font-typewriter);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  height: 100dvh;
+  overflow-x: hidden;
 }
 
-/* Mobile-first centering container */
-#root {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 100dvh;
-  background-color: #000000;
+h1, h2, h3 {
+  font-family: var(--font-heading);
+  color: var(--color-ink);
+  margin: 0;
 }
 
+p, span, div {
+  font-family: var(--font-typewriter);
+}
+
+/* The Book Frame (App Container) */
 .app-container {
+  max-width: 430px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  position: relative;
+  background-color: var(--color-parchment);
+  /* Subtle shadow to make it feel like a physical screen/pages */
+  box-shadow: 0 0 60px rgba(0,0,0,0.08);
+  overflow: hidden;
+}
+
+/* Temporary Canvas Styling (To verify it works) */
+.page-canvas {
   width: 100%;
-  max-width: 430px; /* iPhone 15 Pro Max width */
   height: 100dvh;
-  position: relative;
-  background-color: var(--bg);
-  box-shadow: 0 0 40px rgba(0, 0, 0, 0.8);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
-}
-
-/* Custom Scrollbars */
-::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
-}
-
-::-webkit-scrollbar-track {
-  background: var(--bg);
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--surface-3);
-  border-radius: 99px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--gold);
-}
-
-/* Inputs & Forms */
-input, select, textarea {
-  background-color: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--text);
-  font-family: 'Outfit', sans-serif;
-  font-size: 15.5px;
-  border-radius: 12px;
-  padding: 14px 16px;
-  width: 100%;
-  outline: none;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-input[type="date"] {
-  display: block;
-  min-height: 50px;
-  line-height: 1.2;
-  -webkit-appearance: none;
-  appearance: none;
-}
-
-input[type="date"]::-webkit-calendar-picker-indicator {
-  filter: invert(0.8);
-  opacity: 0.7;
-}
-
-input:focus, select:focus, textarea:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 2px var(--primary-glow);
-  background-color: var(--surface-3);
-}
-
-input::placeholder {
-  color: var(--text-dim);
-}
-
-label {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-bottom: 6px;
-  display: block;
-}
-
-/* Buttons */
-.btn {
-  display: inline-flex;
+  align-items: center;
   justify-content: center;
-  align-items: center;
-  padding: 15px 24px;
-  border-radius: 99px;
-  font-family: 'Outfit', sans-serif;
-  font-weight: 600;
-  font-size: 15px;
-  border: none;
+  gap: 16px;
+  background: var(--color-parchment);
+}
+
+.vintage-title {
+  font-size: 48px;
+  font-weight: 700;
+  color: var(--color-ink);
+  letter-spacing: -1px;
+}
+
+.vintage-subtitle {
+  font-size: 16px;
+  color: var(--color-faded-ink);
+  font-style: italic;
+}
+
+/* Hide scrollbars globally for app feel */
+::-webkit-scrollbar {
+  display: none;
+}
+* {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Ghost Mode Sun/Moon Switch */
+.switch {
+  font-size: 17px;
+  position: relative;
+  display: inline-block;
+  width: 64px;
+  height: 34px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
   cursor: pointer;
-  transition: all 0.2s ease;
-  width: 100%;
-  text-align: center;
-  gap: 8px;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: #73C0FC;
+  transition: .4s;
+  border-radius: 30px;
 }
 
-.btn-primary {
-  background: var(--primary-gradient);
-  color: #ffffff;
-  box-shadow: 0 4px 15px rgba(249, 115, 22, 0.35);
-}
-
-.btn-primary:active {
-  transform: scale(0.97);
-  opacity: 0.9;
-}
-
-.btn-secondary {
-  background-color: var(--surface-2);
-  color: var(--text);
-  border: 1px solid var(--border);
-}
-
-.btn-secondary:active {
-  transform: scale(0.97);
-  background-color: var(--surface-3);
-}
-
-.btn-disabled {
-  background: var(--surface-2);
-  color: var(--text-dim);
-  border: 1px solid var(--border);
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-/* Glassmorphism helpers */
-.glass-panel {
-  background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--border);
-}
-
-/* Utility Animations */
-@keyframes pulse-glow {
-  0% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.4); }
-  70% { box-shadow: 0 0 0 10px rgba(249, 115, 22, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0); }
-}
-
-.glow-pulse {
-  animation: pulse-glow 2s infinite;
-}
-
-/* Hide scrollbars for sliders, steps and tab views */
-.pronouns-scroll::-webkit-scrollbar,
-.interests-scroll::-webkit-scrollbar,
-.step-scroll::-webkit-scrollbar {
-  display: none;
-  width: 0 !important;
-  height: 0 !important;
-}
-.pronouns-scroll,
-.interests-scroll,
-.step-scroll {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-
-/* Stitch Redesign Custom Helpers */
-.glass-card {
-  background: rgba(255, 255, 255, 0.03);
-  backdrop-filter: blur(40px);
-  -webkit-backdrop-filter: blur(40px);
-  border: 1.5px solid rgba(255, 255, 255, 0.08);
-}
-
-/* Background Atmosphere Glow Spheres */
-.glow-sphere {
+.slider:before {
   position: absolute;
-  width: 300px;
-  height: 300px;
-  background: radial-gradient(circle, rgba(249, 115, 22, 0.12) 0%, rgba(234, 88, 12, 0.04) 50%, transparent 80%);
-  filter: blur(40px);
-  z-index: 0;
-  pointer-events: none;
-  transition: transform 0.2s ease-out;
-}
-
-/* Underlined Minimalist Inputs */
-.input-underline {
-  background: transparent !important;
-  border: none !important;
-  border-bottom: 1.5px solid rgba(255, 255, 255, 0.15) !important;
-  border-radius: 0px !important;
-  padding: 12px 0px !important;
-  color: var(--text) !important;
-  font-size: 18.5px !important;
-  transition: all 0.3s ease !important;
-}
-
-.input-underline:focus {
-  outline: none !important;
-  border-bottom: 1.5px solid var(--primary) !important;
-  box-shadow: none !important;
-  background: linear-gradient(to top, rgba(249, 115, 22, 0.02), transparent) !important;
-}
-
-/* OTP Code Box Styles */
-.otp-input {
-  width: 48px;
-  height: 56px;
-  background: rgba(255, 255, 255, 0.03) !important;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.08) !important;
-  border-radius: 12px !important;
-  text-align: center !important;
-  font-size: 24px !important;
-  font-weight: 700 !important;
-  color: var(--text) !important;
-  transition: all 0.25s ease !important;
-}
-
-.otp-input:focus {
-  outline: none !important;
-  border: 1px solid var(--primary) !important;
-  box-shadow: 0 4px 12px -2px rgba(249, 115, 22, 0.3) !important;
-  background: rgba(255, 255, 255, 0.06) !important;
-}
-
-/* Premium Twilight Gradient Button */
-.gradient-btn {
-  background: var(--primary-gradient);
-  color: #ffffff;
-  font-weight: 700;
-  letter-spacing: 1.5px;
-  text-transform: uppercase;
-  transition: all 0.3s ease;
-  box-shadow: 0 4px 15px rgba(249, 115, 22, 0.35);
-}
-
-.gradient-btn:hover {
-  box-shadow: 0 0 24px rgba(249, 115, 22, 0.5);
-  transform: translateY(-1px);
-}
-
-.gradient-btn:active {
-  transform: scale(0.98);
-}
-
-/* Shimmer animations */
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
-.academic-shine {
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.04), transparent);
-  background-size: 200% 100%;
-  animation: shimmer 4s infinite linear;
-}
-
-/* New match avatar unread glow rings */
-.unread-glow {
-  position: relative;
-  z-index: 1;
-}
-
-.unread-glow::after {
-  content: '';
-  position: absolute;
-  inset: -2.5px;
-  border-radius: 50%;
-  background: var(--primary-gradient);
-  z-index: -1;
-  padding: 2.5px;
-}
-
-
-/* Matchalize Bento Grid Styles */
-.bento-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px 12px 0px 12px;
-  background: transparent;
-}
-
-.bento-block {
-  background: rgba(255, 255, 255, 0.03);
-  border: 0.5px solid rgba(255, 255, 255, 0.06);
-  padding: 16px;
-  border-radius: 20px;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  overflow: hidden;
-}
-
-.glass-bento {
-  background: rgba(255, 255, 255, 0.03);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 0.5px solid rgba(255, 255, 255, 0.06);
-  border-top: 0.5px solid rgba(255, 255, 255, 0.1);
-}
-
-.bento-row {
-  display: flex;
-  flex-direction: row;
-  gap: 10px;
-}
-
-.bento-col-half {
-  flex: 1;
-}
-
-.bento-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 8px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  font-family: 'Geist', sans-serif;
-}
-
-.vital-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.vital-chip {
-  background: rgba(255, 255, 255, 0.04);
-  border: 0.5px solid rgba(255, 255, 255, 0.08);
-  padding: 6px 12px;
-  border-radius: 20px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13.4px;
-  font-weight: 500;
-  color: var(--text);
-  font-family: 'Inter', sans-serif;
-}
-
-/* Gradient Border Interest Chips */
-.gradient-border-chip {
-  position: relative;
-  padding: 6px 14px;
-  border-radius: 9999px;
-  font-size: 12.4px;
-  font-weight: 600;
-  color: #fdba74;
-  font-family: 'Geist', sans-serif;
-  background: rgba(255, 255, 255, 0.03);
-  letter-spacing: 0.3px;
-  display: inline-flex;
-  align-items: center;
-}
-
-.gradient-border-chip::before {
   content: "";
+  height: 30px;
+  width: 30px;
+  border-radius: 20px;
+  left: 2px;
+  bottom: 2px;
+  z-index: 2;
+  background-color: #e8e8e8;
+  transition: .4s;
+}
+
+.sun svg {
   position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(135deg, #f97316, #ea580c);
-  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
+  top: 6px;
+  left: 36px;
+  z-index: 1;
+  width: 24px;
+  height: 24px;
+  fill: #fff;
+  animation: rotate 15s linear infinite;
 }
 
-.hide-scrollbar::-webkit-scrollbar {
-  display: none;
+.moon svg {
+  fill: #73C0FC;
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  z-index: 1;
+  width: 24px;
+  height: 24px;
+  animation: tilt 5s linear infinite;
 }
 
-.hide-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
+@keyframes rotate {
+  0% { transform: rotate(0); }
   100% { transform: rotate(360deg); }
 }
 
-.nav-item {
-  color: var(--text-dim);
-  text-decoration: none;
-  transition: color 0.2s ease, transform 0.2s ease;
+@keyframes tilt {
+  0% { transform: rotate(0deg); }
+  25% { transform: rotate(-10deg); }
+  75% { transform: rotate(10deg); }
+  100% { transform: rotate(0deg); }
 }
-.nav-item.active {
-  color: var(--primary) !important;
-  transform: translateY(-2px);
+
+input:checked + .slider {
+  background-color: #183153;
+}
+
+input:checked + .slider:before {
+  transform: translateX(30px);
+}
+
+/* Tactile press feedback for all plain (non-Framer-Motion) buttons.
+   Framer Motion buttons override this via inline transforms, so they are unaffected. */
+button { transition: transform 0.1s ease; }
+button:active { transform: scale(0.98); }
+
+/* ==========================================
+   PERFORMANCE-OPTIMIZED ARCHIVAL ANIMATIONS
+   ========================================== */
+
+/* 1. Global Shimmer Engine for Skeletons */
+.archival-skeleton::after,
+.pc-skeleton-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.4) 50%,
+    transparent 100%
+  );
+  animation: skeleton-shimmer 1.8s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+  will-change: transform;
+}
+
+@keyframes skeleton-shimmer {
+  0% { transform: translate3d(-100%, 0, 0); }
+  100% { transform: translate3d(100%, 0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .archival-skeleton::after,
+  .pc-skeleton-shimmer::after {
+    animation: none !important;
+    background: rgba(255, 255, 255, 0.2);
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* 2. Cassette Tape Player Spin Mechanics */
+.cassette-spool {
+  transition: transform 0.2s linear;
+}
+
+.cassette-spool.playing {
+  animation: cassetteSpin 2.5s linear infinite;
+  will-change: transform;
+}
+
+@keyframes cassetteSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }

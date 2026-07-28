@@ -5,9 +5,10 @@ import crypto from 'crypto';
 import OTP from '../models/OTP.js';
 import User from '../models/User.js';
 import { validate } from '../middleware/validate.js';
-import { protect } from '../middleware/auth.js';
+import { protect, setAuthCookie, clearAuthCookie } from '../middleware/auth.js';
 import { sendOTP } from '../utils/email.js';
 import { COLLEGE_MAP } from '../config/appData.js';
+import { verifyOtpLimiter, otpIpLimiter } from '../middleware/rateLimiters.js';
 
 const router = express.Router();
 
@@ -38,6 +39,7 @@ const extractCollegeDetails = (email) => {
 // @access  Public
 router.post(
   '/send-otp',
+  otpIpLimiter,
   [
     body('email')
       .isEmail()
@@ -95,6 +97,7 @@ router.post(
 // @access  Public
 router.post(
   '/verify-otp',
+  verifyOtpLimiter,
   [
     body('email').isEmail().withMessage('Valid email required'),
     body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits'),
@@ -143,6 +146,23 @@ router.post(
           isOnboarded: false,
         });
       } else {
+        // 🛡️ Block suspended users from logging in
+        if (user.suspended) {
+          return res.status(403).json({
+            message: 'Your account has been suspended. Contact support for assistance.',
+            suspended: true,
+            reason: user.suspendedReason || 'Multiple community reports',
+          });
+        }
+
+        // 🛡️ Block deleted users from logging in
+        if (user.isDeleted) {
+          return res.status(403).json({
+            message: 'This account has been deleted.',
+            deleted: true,
+          });
+        }
+
         user.isVerified = true;
         // Update college/collegeCode if they were empty
         if (!user.college) user.college = college;
@@ -159,6 +179,9 @@ router.post(
         process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );
+
+      // Set httpOnly cookie (primary auth mechanism)
+      setAuthCookie(res, token);
 
       res.status(200).json({
         token,
@@ -177,6 +200,14 @@ router.post(
     }
   }
 );
+
+// @route   POST /api/auth/logout
+// @desc    Clear auth cookie
+// @access  Public
+router.post('/logout', (req, res) => {
+  clearAuthCookie(res);
+  res.status(200).json({ message: 'Logged out successfully' });
+});
 
 // @route   GET /api/auth/me
 // @desc    Get current user profile from token
