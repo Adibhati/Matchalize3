@@ -116,7 +116,6 @@ router.get('/reports', async (req, res) => {
       reason: r.reason,
       details: r.details,
       status: r.status,
-      reportCount: reportCounts[r.reported?._id?.toString()] || 0,
       createdAt: r.createdAt,
     }));
 
@@ -132,6 +131,10 @@ router.get('/reports', async (req, res) => {
 
 router.put('/reports/:id', async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid report ID' });
+    }
+
     const { status } = req.body;
     if (status && !VALID_REPORT_STATUSES.includes(status)) {
       return res.status(400).json({ message: `Invalid status. Must be one of: ${VALID_REPORT_STATUSES.join(', ')}` });
@@ -153,8 +156,11 @@ router.put('/reports/:id', async (req, res) => {
 router.put('/reports/bulk', async (req, res) => {
   try {
     const { ids, status } = req.body;
-    if (!ids?.length || !status) {
-      return res.status(400).json({ message: 'ids and status required' });
+    if (!Array.isArray(ids) || !ids.length || !status) {
+      return res.status(400).json({ message: 'ids (array) and status required' });
+    }
+    if (ids.some(id => !mongoose.Types.ObjectId.isValid(id))) {
+      return res.status(400).json({ message: 'One or more invalid report IDs' });
     }
     if (!VALID_REPORT_STATUSES.includes(status)) {
       return res.status(400).json({ message: `Invalid status. Must be one of: ${VALID_REPORT_STATUSES.join(', ')}` });
@@ -257,16 +263,32 @@ router.get('/users/:id', async (req, res) => {
 
 router.put('/users/:id', async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid user ID' });
+    }
     const { suspended, suspendedReason, isGhost, adminNotes } = req.body;
     const update = {};
 
     if (suspended !== undefined) {
+      if (typeof suspended !== 'boolean') {
+        return res.status(400).json({ message: 'suspended must be a boolean' });
+      }
       update.suspended = suspended;
       update.suspendedAt = suspended ? new Date() : null;
       update.suspendedReason = suspended ? (suspendedReason || null) : null;
     }
-    if (isGhost !== undefined) update.isGhost = isGhost;
-    if (adminNotes !== undefined) update.adminNotes = adminNotes;
+    if (isGhost !== undefined) {
+      if (typeof isGhost !== 'boolean') {
+        return res.status(400).json({ message: 'isGhost must be a boolean' });
+      }
+      update.isGhost = isGhost;
+    }
+    if (adminNotes !== undefined) {
+      if (typeof adminNotes !== 'string') {
+        return res.status(400).json({ message: 'adminNotes must be a string' });
+      }
+      update.adminNotes = adminNotes;
+    }
 
     const user = await User.findByIdAndUpdate(req.params.id, update, { new: true })
       .select('name email suspended suspendedReason isGhost adminNotes');
@@ -290,6 +312,10 @@ router.put('/users/:id', async (req, res) => {
 
 router.post('/users/:id/disconnect', async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid user id' });
+    }
+
     const io = req.app.get('io');
     if (io) {
       io.to(req.params.id.toString()).emit('force-disconnect', {
@@ -363,7 +389,24 @@ router.get('/settings', async (req, res) => {
 
 router.put('/settings', async (req, res) => {
   try {
-    const entries = Object.entries(req.body);
+    const entries = Object.entries(req.body || {});
+    if (!entries.length) {
+      return res.status(400).json({ message: 'No settings provided' });
+    }
+    if (entries.length > 50) {
+      return res.status(400).json({ message: 'Too many settings at once' });
+    }
+
+    for (const [key, value] of entries) {
+      if (key === 'shadowbanThreshold') {
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1000) {
+          return res.status(400).json({ message: 'shadowbanThreshold must be a finite number between 0 and 1000' });
+        }
+      } else if (typeof value === 'string' && value.trim().length > 50) {
+        return res.status(400).json({ message: `${key} must be 50 characters or fewer` });
+      }
+    }
+
     const ops = entries.map(([key, value]) =>
       Setting.findOneAndUpdate({ key }, { key, value }, { upsert: true, new: true })
     );

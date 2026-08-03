@@ -150,6 +150,10 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    adminNotes: {
+      type: String,
+      default: '',
+    },
     // 🚀 DETERMINISTIC SEED: Allows instant indexed random sampling without $sample
     randomSeed: {
       type: Number,

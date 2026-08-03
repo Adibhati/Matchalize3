@@ -42,8 +42,23 @@ async function apiFetch(path, opts = {}) {
     window.location.href = '/';
     throw new Error('Unauthorized');
   }
-  if (!res.ok) throw new Error((await res.json()).message || 'Request failed');
-  return res.json();
+
+  const text = await res.text();
+  let payload = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = null;
+    }
+  }
+
+  if (!res.ok) {
+    const msg = payload?.message || text || 'Request failed';
+    throw new Error(msg);
+  }
+
+  return payload ?? {};
 }
 
 function Card({ children, style = {}, ...props }) {
@@ -472,7 +487,7 @@ function UsersTab() {
                   style={{ padding: '10px 12px', borderRadius: 8, border: 'none', background: detailUser.suspended ? T.success : T.crimson, color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 12 }}>
                   {detailUser.suspended ? 'Unsuspend' : 'Suspend'}
                 </button>
-                <button onClick={() => updateUser(detailUser._1d, { isGhost: !detailUser.isGhost })}
+                <button onClick={() => updateUser(detailUser._id, { isGhost: !detailUser.isGhost })}
                   style={{ padding: '10px 12px', borderRadius: 8, border: `1px solid ${T.border}`, background: detailUser.isGhost ? T.paper : `${T.amber}15`, color: detailUser.isGhost ? T.inkSoft : T.amber, cursor: 'pointer', fontWeight: 600, fontSize: 12 }}>
                   {detailUser.isGhost ? 'Unshadowban' : 'Shadowban'}
                 </button>
@@ -566,7 +581,7 @@ function SettingsTab() {
       { key: 'maintenanceMode', label: 'Maintenance Mode', type: 'bool' },
     ]},
     { group: 'Moderation', items: [
-      { key: 'shadowbanThreshold', label: 'Shadowban Score Threshold', type: 'text' },
+      { key: 'shadowbanThreshold', label: 'Shadowban Score Threshold', type: 'number' },
       { key: 'autoShadowban', label: 'Auto-Shadowban', type: 'bool' },
     ]},
   ];
@@ -591,8 +606,12 @@ function SettingsTab() {
                     </button>
                     <span style={{ fontSize: 12, color: T.inkMuted }}>{settings[f.key] ? 'Enabled' : 'Disabled'}</span>
                   </div>
-                : <input value={settings[f.key] || ''} onChange={e => set(f.key, e.target.value)}
-                    style={{ width: '100%', maxWidth: 300, padding: '8px 12px', borderRadius: 8, border: `1px solid ${T.border}`, backgroundColor: T.paper, fontSize: 14, color: T.ink, fontFamily: T.fontBody }} />
+                : <input
+                    type={f.type === 'number' ? 'number' : 'text'}
+                    value={settings[f.key] ?? ''}
+                    onChange={e => set(f.key, f.type === 'number' ? Number(e.target.value) : e.target.value)}
+                    style={{ width: '100%', maxWidth: 300, padding: '8px 12px', borderRadius: 8, border: `1px solid ${T.border}`, backgroundColor: T.paper, fontSize: 14, color: T.ink, fontFamily: T.fontBody }}
+                  />
               }
             </div>
           ))}
