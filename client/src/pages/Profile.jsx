@@ -4,6 +4,9 @@ import { api } from '../utils/api';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppConfig } from '../utils/AppConfigContext';
 import { triggerHaptic } from '../utils/haptics';
+import { useAuth } from '../utils/AuthContext';
+import ShadowbanBanner from '../components/ShadowbanBanner';
+import LearnMoreSheet from '../components/LearnMoreSheet';
 import { theme as design } from '../utils/theme';
 import { toast } from '../utils/toast';
 import { Settings, Sparkle, MapPin, X, Pencil, Camera, Plus, CheckCircle2 } from 'lucide-react';
@@ -73,6 +76,29 @@ const Profile = ({ onSignOut }) => {
   const [blockedOpen, setBlockedOpen] = useState(false);
   const [blockedList, setBlockedList] = useState([]);
   const [loadingBlocked, setLoadingBlocked] = useState(false);
+  const { user: authUser } = useAuth();
+  const [showLearnMore, setShowLearnMore] = useState(false);
+  const contentFreezeMessage = 'This feature is temporarily unavailable while your account is under review.';
+
+  const contentFrozen = userData?.contentFrozen ?? authUser?.contentFrozen ?? false;
+  const shadowbanScore = userData?.shadowbanScore ?? authUser?.shadowbanScore ?? 0;
+
+  const openEditDrawer = (config) => {
+    if (contentFrozen) {
+      toast.error(contentFreezeMessage);
+      return;
+    }
+    setDrawerConfig(config);
+  };
+
+  const openPhotoSlot = (slot) => {
+    if (contentFrozen) {
+      toast.error(contentFreezeMessage);
+      return;
+    }
+    setPhotoSlot(slot);
+    fileInputRef.current?.click();
+  };
 
   const fetchBlockedUsers = async () => {
     setLoadingBlocked(true);
@@ -187,6 +213,11 @@ const Profile = ({ onSignOut }) => {
   }, []);
 
   const updateProfile = async (updates) => {
+    if (contentFrozen) {
+      toast.error(contentFreezeMessage);
+      return;
+    }
+
     try {
       const updated = await api.put('/users/profile', updates);
       setUserData(prev => ({ ...prev, ...updated }));
@@ -269,7 +300,7 @@ const Profile = ({ onSignOut }) => {
                 <div style={{ padding: '4px 12px', background: 'rgba(253,251,247,0.2)', backdropFilter: 'blur(12px)', borderRadius: design?.radius?.sm || '4px', border: '1px solid rgba(255,255,255,0.35)' }}>
                   <span style={{ fontFamily: theme.font.body, fontSize: '10px', color: '#fff', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: 700 }}>Subject Identity</span>
                 </div>
-                <button onClick={() => setDrawerConfig({ type: 'identity' })} className="tactile-btn" style={styles.editBtn}><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit</button>
+                <button onClick={() => openEditDrawer({ type: 'identity' })} className="tactile-btn" style={styles.editBtn}><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit</button>
               </div>
               <h2 style={{ fontFamily: theme.font.display, fontSize: 'clamp(30px, 7vw, 42px)', color: '#fff', margin: 0, fontWeight: 700, letterSpacing: '-0.025em', lineHeight: 1.05, textShadow: '0 4px 20px rgba(0,0,0,0.6)' }}>
                 {userData.name || 'Anonymous'}, {userData.age || '—'}
@@ -280,7 +311,7 @@ const Profile = ({ onSignOut }) => {
             </div>
             
             <div style={{ position: 'absolute', top: '16px', left: '16px', zIndex: 5 }}>
-              <button onClick={() => { setPhotoSlot(0); fileInputRef.current?.click(); }} className="tactile-btn" style={styles.editBtnAlt}>
+              <button onClick={() => openPhotoSlot(0)} className="tactile-btn" style={styles.editBtnAlt}>
                 {uploading && photoSlot === 0 ? 'Developing...' : <><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit Portrait</>}
               </button>
             </div>
@@ -291,7 +322,7 @@ const Profile = ({ onSignOut }) => {
         <div style={{ padding: '24px 24px 0 24px' }}>
           
           {/* 2. VITALS & BIO */}
-          <SectionLabel onEdit={() => setDrawerConfig({ type: 'vitals' })}>Vitals</SectionLabel>
+          <SectionLabel onEdit={() => openEditDrawer({ type: 'vitals' })}>Vitals</SectionLabel>
           <div style={{ display: 'flex', gap: '8px', marginBottom: '24px', flexWrap: 'wrap' }}>
             {userData.gender && <span className="pc-pill" style={styles.vitalStyle}>{userData.gender}</span>}
             {userData.pronouns && <span className="pc-pill" style={styles.vitalStyle}>{userData.pronouns}</span>}
@@ -299,7 +330,7 @@ const Profile = ({ onSignOut }) => {
           </div>
 
           <div style={{ marginBottom: '24px' }}>
-             <SectionLabel onEdit={() => setDrawerConfig({ type: 'bio' })}>About Me</SectionLabel>
+             <SectionLabel onEdit={() => openEditDrawer({ type: 'bio' })}>About Me</SectionLabel>
              <p style={{ fontFamily: "'Special Elite', 'Courier New', monospace", fontSize: '13px', color: theme.color.inkSoft, lineHeight: 1.55, margin: 0, padding: '16px', backgroundColor: theme.color.surfaceAlt, border: `1px solid ${theme.color.borderDark}`, borderRadius: '8px', boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)' }}>
                {userData.bio || "No foreword inscribed in this folio."}
              </p>
@@ -361,7 +392,7 @@ const Profile = ({ onSignOut }) => {
 
           {/* 4. SEEKING PARAMETERS */}
           <div style={{ margin: '24px 0' }}>
-            <SectionLabel onEdit={() => setDrawerConfig({ type: 'intent' })}>Seeking Parameters</SectionLabel>
+            <SectionLabel onEdit={() => openEditDrawer({ type: 'intent' })}>Seeking Parameters</SectionLabel>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               {(userData.intent?.length > 0 ? userData.intent : ['None recorded']).map((item, i) => (
                 <span key={i} className="pc-pill" style={{ ...styles.vitalStyle, backgroundColor: theme.color.ink, color: theme.color.paper, borderColor: theme.color.ink, fontWeight: 600, boxShadow: '0 4px 12px rgba(26,26,26,0.15)' }}>{item}</span>
@@ -371,7 +402,7 @@ const Profile = ({ onSignOut }) => {
 
           {/* 5. RECORDED CURIOSITIES */}
           <div style={{ marginBottom: '32px' }}>
-            <SectionLabel onEdit={() => setDrawerConfig({ type: 'interests' })}>Recorded Curiosities</SectionLabel>
+            <SectionLabel onEdit={() => openEditDrawer({ type: 'interests' })}>Recorded Curiosities</SectionLabel>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
               {userData.interests?.length > 0 ? userData.interests.map((interest, i) => (
                 <span key={i} className="pc-pill" style={styles.interestStyle}>{interest}</span>
@@ -387,18 +418,18 @@ const Profile = ({ onSignOut }) => {
               {/* Prompt 0 */}
               <div className="pc-dynamic-shadow" style={{ ...styles.bentoPrompt, transform: `rotate(${TILT.prompt_0})` }}>
                 <div style={styles.tapeCenter} />
-                <button onClick={() => setDrawerConfig({ type: 'prompt', slot: 0 })} className="tactile-btn" style={styles.absoluteEditBtn}><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit</button>
+                <button onClick={() => openEditDrawer({ type: 'prompt', slot: 0 })} className="tactile-btn" style={styles.absoluteEditBtn}><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit</button>
                 <span style={styles.quoteMark}>“</span>
                 <p style={styles.promptText}>{userData.prompts?.[0]?.question || "Draft a whisper..."}</p>
               </div>
 
               {/* Photo 1 */}
               <div className="pc-dynamic-shadow" style={{ ...styles.bentoPhoto, transform: `rotate(${TILT.photo_1})` }}>
-                <button onClick={() => { setPhotoSlot(1); fileInputRef.current?.click(); }} className="tactile-btn" style={styles.absoluteEditBtn}><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit</button>
+                <button onClick={() => openPhotoSlot(1)} className="tactile-btn" style={styles.absoluteEditBtn}><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit</button>
                 {userData.photos?.[1] ? (
                   <img src={userData.photos[1]} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: 0, transition: 'opacity 0.4s ease-out' }} alt="Artifact II" onLoad={(e) => { e.currentTarget.style.opacity = 1; }} onError={(e) => { e.currentTarget.style.opacity = 1; }} />
                 ) : (
-                  <div onClick={() => { setPhotoSlot(1); fileInputRef.current?.click(); }} style={styles.emptyPhotoSlot}>
+                  <div onClick={() => openPhotoSlot(1)} style={styles.emptyPhotoSlot}>
                     <Camera size={24} color={theme.color.accent} style={{ opacity: 0.6, marginBottom: '8px' }} />
                     <span style={styles.emptySlotText}>Affix Artifact II</span>
                   </div>
@@ -407,11 +438,11 @@ const Profile = ({ onSignOut }) => {
 
               {/* Photo 2 */}
               <div className="pc-dynamic-shadow" style={{ ...styles.bentoPhoto, transform: `rotate(${TILT.photo_2})` }}>
-                <button onClick={() => { setPhotoSlot(2); fileInputRef.current?.click(); }} className="tactile-btn" style={styles.absoluteEditBtn}><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit</button>
+                <button onClick={() => openPhotoSlot(2)} className="tactile-btn" style={styles.absoluteEditBtn}><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit</button>
                 {userData.photos?.[2] ? (
                   <img src={userData.photos[2]} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: 0, transition: 'opacity 0.4s ease-out' }} alt="Artifact III" onLoad={(e) => { e.currentTarget.style.opacity = 1; }} onError={(e) => { e.currentTarget.style.opacity = 1; }} />
                 ) : (
-                  <div onClick={() => { setPhotoSlot(2); fileInputRef.current?.click(); }} style={styles.emptyPhotoSlot}>
+                  <div onClick={() => openPhotoSlot(2)} style={styles.emptyPhotoSlot}>
                     <Camera size={24} color={theme.color.accent} style={{ opacity: 0.6, marginBottom: '8px' }} />
                     <span style={styles.emptySlotText}>Affix Artifact III</span>
                   </div>
@@ -421,7 +452,7 @@ const Profile = ({ onSignOut }) => {
               {/* Prompt 1 */}
               <div className="pc-dynamic-shadow" style={{ ...styles.bentoPrompt, transform: `rotate(${TILT.prompt_1})` }}>
                 <div style={styles.tapeLeft} />
-                <button onClick={() => setDrawerConfig({ type: 'prompt', slot: 1 })} className="tactile-btn" style={styles.absoluteEditBtn}><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit</button>
+                <button onClick={() => openEditDrawer({ type: 'prompt', slot: 1 })} className="tactile-btn" style={styles.absoluteEditBtn}><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit</button>
                 <span style={styles.quoteMark}>“</span>
                 <p style={styles.promptText}>{userData.prompts?.[1]?.question || "Draft a whisper..."}</p>
               </div>
@@ -429,18 +460,18 @@ const Profile = ({ onSignOut }) => {
               {/* Prompt 2 (Wide) */}
               <div className="pc-dynamic-shadow" style={{ ...styles.bentoPrompt, gridColumn: 'span 2', minHeight: '136px', transform: `rotate(${TILT.prompt_2})` }}>
                 <div style={styles.tapeCenter} />
-                <button onClick={() => setDrawerConfig({ type: 'prompt', slot: 2 })} className="tactile-btn" style={styles.absoluteEditBtn}><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit</button>
+                <button onClick={() => openEditDrawer({ type: 'prompt', slot: 2 })} className="tactile-btn" style={styles.absoluteEditBtn}><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit</button>
                 <span style={styles.quoteMark}>“</span>
                 <p style={styles.promptText}>{userData.prompts?.[2]?.question || "Draft a final whisper..."}</p>
               </div>
 
               {/* Photo 3 (Wide) */}
               <div className="pc-dynamic-shadow" style={{ ...styles.bentoPhoto, gridColumn: 'span 2', aspectRatio: '16/9', transform: `rotate(${TILT.photo_3})` }}>
-                <button onClick={() => { setPhotoSlot(3); fileInputRef.current?.click(); }} className="tactile-btn" style={styles.absoluteEditBtn}><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit</button>
+                <button onClick={() => openPhotoSlot(3)} className="tactile-btn" style={styles.absoluteEditBtn}><Pencil size={12} color="currentColor" style={{ marginRight: '4px', verticalAlign: 'middle' }} /> Edit</button>
                 {userData.photos?.[3] ? (
                   <img src={userData.photos[3]} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: 0, transition: 'opacity 0.4s ease-out' }} alt="Artifact IV" onLoad={(e) => { e.currentTarget.style.opacity = 1; }} onError={(e) => { e.currentTarget.style.opacity = 1; }} />
                 ) : (
-                  <div onClick={() => { setPhotoSlot(3); fileInputRef.current?.click(); }} style={styles.emptyPhotoSlot}>
+                  <div onClick={() => openPhotoSlot(3)} style={styles.emptyPhotoSlot}>
                     <Plus size={28} color={theme.color.accent} style={{ opacity: 0.6, marginBottom: '8px' }} />
                     <span style={styles.emptySlotText}>Affix Wide Panorama Artifact IV</span>
                   </div>

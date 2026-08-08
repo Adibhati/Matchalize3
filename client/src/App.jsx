@@ -5,6 +5,7 @@ import { AppConfigProvider } from './utils/AppConfigContext';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import Splash from './pages/Splash.jsx';
+import Admin from './pages/Admin.jsx';
 import Auth from './pages/Auth.jsx';
 import Onboarding from './pages/Onboarding.jsx';
 import AppShell from './components/AppShell';
@@ -12,6 +13,10 @@ import socket from './utils/socket';
 import ArchivalToast from './components/ArchivalToast.jsx';
 
 function AppInner() {
+  // If the app is loaded at /admin, render the standalone Admin panel
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
+    return <Admin />;
+  }
   const { logout } = useAuth();
   const [screen, setScreen] = useState(() => {
     try {
