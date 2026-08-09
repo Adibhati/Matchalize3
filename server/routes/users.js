@@ -1,5 +1,5 @@
 import express from 'express';
-import { body } from 'express-validator';
+import { body } from '../middleware/validate.js';
 import User from '../models/User.js';
 import Match from '../models/Match.js';
 import Message from '../models/Message.js';
@@ -90,6 +90,12 @@ router.post(
     try {
       const user = await User.findById(req.user._id);
       if (!user) return res.status(404).json({ message: 'User not found' });
+      if (user.contentFrozen) {
+        return res.status(403).json({
+          message: 'This feature is temporarily unavailable. Contact support@matchalize.com',
+          code: 'CONTENT_FROZEN',
+        });
+      }
 
       // VALIDATION: Check image URLs
       const photosToSave = (Array.isArray(photos) ? photos : []).filter(Boolean).slice(0, 6);
@@ -183,6 +189,12 @@ router.put('/profile', protect, async (req, res) => {
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
+    }
+    if (user.contentFrozen) {
+      return res.status(403).json({
+        message: 'This feature is temporarily unavailable. Contact support@matchalize.com',
+        code: 'CONTENT_FROZEN',
+      });
     }
 
     const oldPhotos = collectUserPhotos(user);

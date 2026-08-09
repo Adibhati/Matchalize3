@@ -6,6 +6,8 @@ import ProfileCard from '../components/ProfileCard';
 import ProfileCardSkeleton from '../components/ProfileCardSkeleton';
 import { api } from '../utils/api';
 import { useAuth } from '../utils/AuthContext';
+import ShadowbanBanner from '../components/ShadowbanBanner';
+import LearnMoreSheet from '../components/LearnMoreSheet';
 import { triggerHaptic } from '../utils/haptics';
 import { theme as design } from '../utils/theme';
 import { RotateCw, Send, X, Compass, Users } from 'lucide-react';
@@ -55,6 +57,8 @@ const Discover = ({ onOpenChat }) => {
   const isActionFlip = useRef(false);
   const actionPendingRef = useRef(false);
   const { user: myUser } = useAuth();
+  const [showLearnMore, setShowLearnMore] = useState(false);
+  const shadowbanScore = myUser?.shadowbanScore || 0;
 
   // Prevent WebKit/Safari NotFoundError during unmount animations
   useEffect(() => {
@@ -283,6 +287,8 @@ const Discover = ({ onOpenChat }) => {
         </div>
       </div>
 
+      <ShadowbanBanner score={shadowbanScore} onLearnMore={() => setShowLearnMore(true)} />
+      {showLearnMore && <LearnMoreSheet onClose={() => setShowLearnMore(false)} />}
       <div style={styles.stageContainer}>
         <div style={{ width: '100%', height: '100%', padding: '0 8px 8px 0' }}>
           {/* TRUE 3D CORNER-CURLING BOOK ENGINE */}

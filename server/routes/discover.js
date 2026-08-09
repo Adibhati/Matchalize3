@@ -10,7 +10,7 @@ import { sendPushNotification } from '../utils/push.js';
 import { addToQueue } from '../utils/queue.js';
 import { discoverLimiter } from '../middleware/rateLimiters.js';
 import { getBlockExclusionQuery } from '../middleware/blockFilter.js';
-import { body } from 'express-validator';
+import { body } from '../middleware/validate.js';
 import { validate } from '../middleware/validate.js';
 
 const router = express.Router();

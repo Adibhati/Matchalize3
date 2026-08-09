@@ -1,5 +1,5 @@
 import express from 'express';
-import { body } from 'express-validator';
+import { body } from '../middleware/validate.js';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import OTP from '../models/OTP.js';
@@ -192,6 +192,13 @@ router.post(
           collegeCode: user.collegeCode,
           isOnboarded: user.isOnboarded,
           name: user.name,
+          isGhost: user.isGhost,
+          suspended: user.suspended,
+          suspendedReason: user.suspendedReason,
+          isDeleted: user.isDeleted,
+          shadowbanScore: user.shadowbanScore || 0,
+          shadowbannedAt: user.shadowbannedAt || null,
+          contentFrozen: user.contentFrozen || false,
         },
       });
     } catch (error) {

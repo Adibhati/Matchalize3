@@ -150,6 +150,19 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Report system — shadowban fields
+    shadowbanScore: {
+      type: Number,
+      default: 0,
+    },
+    shadowbannedAt: {
+      type: Date,
+      default: null,
+    },
+    contentFrozen: {
+      type: Boolean,
+      default: false,
+    },
     adminNotes: {
       type: String,
       default: '',
@@ -168,7 +181,7 @@ const userSchema = new mongoose.Schema(
 
 userSchema.index({ name: 'text', email: 'text' });
 userSchema.index(
-  { collegeCode: 1, isOnboarded: 1, isGhost: 1, isVerified: 1, suspended: 1, isDeleted: 1, randomSeed: 1 },
+  { collegeCode: 1, isOnboarded: 1, isGhost: 1, isVerified: 1, suspended: 1, isDeleted: 1, shadowbannedAt: 1, randomSeed: 1 },
   { name: 'discover_deck_filter_index' }
 );
 

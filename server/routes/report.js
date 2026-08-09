@@ -48,12 +48,21 @@ router.post('/:userId', protect, async (req, res) => {
     const reportCount = await Report.countDocuments({ reported: reportedId });
     if (reportCount >= 3 && reportCount < 5) {
       reported.isGhost = true; // Hidden from Discover, existing matches remain active
+      reported.shadowbannedAt = reported.shadowbannedAt || new Date();
+      reported.contentFrozen = true;
       await reported.save();
     } else if (reportCount >= 5) {
       reported.suspended = true;
       reported.suspendedAt = new Date();
       reported.suspendedReason = 'Multiple community reports';
       reported.isGhost = true;
+      reported.shadowbannedAt = reported.shadowbannedAt || new Date();
+      reported.contentFrozen = false;
+      await reported.save();
+    } else {
+      reported.isGhost = false;
+      reported.shadowbannedAt = null;
+      reported.contentFrozen = false;
       await reported.save();
     }
 
