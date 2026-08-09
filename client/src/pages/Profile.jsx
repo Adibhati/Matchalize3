@@ -288,7 +288,9 @@ const Profile = ({ onSignOut }) => {
 
       {/* MAIN SCROLL AREA */}
       <div className="pc-scroll" style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: '120px', position: 'relative', zIndex: 1 }}>
-        
+        <ShadowbanBanner score={shadowbanScore} onLearnMore={() => setShowLearnMore(true)} />
+        {showLearnMore && <LearnMoreSheet onClose={() => setShowLearnMore(false)} />}
+
         {/* 1. HERO PORTRAIT */}
         <div style={{ width: '100%', position: 'relative' }}>
           <div style={{ width: '100%', aspectRatio: '4/5.8', position: 'relative', backgroundColor: theme.color.surfaceAlt, overflow: 'hidden' }}>
