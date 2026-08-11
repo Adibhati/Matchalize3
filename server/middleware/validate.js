@@ -49,55 +49,55 @@ export const body = (field) => {
   const rules = [];
   let lastRule = null;
 
-  const chain = {
-    optional(options = {}) {
-      lastRule = { type: 'optional', options };
-      rules.push(lastRule);
-      return chain;
-    },
-    notEmpty() {
-      lastRule = { type: 'notEmpty' };
-      rules.push(lastRule);
-      return chain;
-    },
-    isEmail() {
-      lastRule = { type: 'isEmail' };
-      rules.push(lastRule);
-      return chain;
-    },
-    isInt(options = {}) {
-      lastRule = { type: 'isInt', options };
-      rules.push(lastRule);
-      return chain;
-    },
-    isLength(options = {}) {
-      lastRule = { type: 'isLength', options };
-      rules.push(lastRule);
-      return chain;
-    },
-    matches(pattern) {
-      lastRule = { type: 'matches', pattern };
-      rules.push(lastRule);
-      return chain;
-    },
-    custom(fn) {
-      lastRule = { type: 'custom', fn };
-      rules.push(lastRule);
-      return chain;
-    },
-    withMessage(message) {
-      if (lastRule) {
-        lastRule.message = message;
-      }
-      return chain;
-    },
-  };
-
-  return (req, _res, next) => {
+  const register = (req, _res, next) => {
     req.__validationRules ??= [];
     req.__validationRules.push({ field, rules });
     next();
   };
+
+  register.optional = (options = {}) => {
+    lastRule = { type: 'optional', options };
+    rules.push(lastRule);
+    return register;
+  };
+  register.notEmpty = () => {
+    lastRule = { type: 'notEmpty' };
+    rules.push(lastRule);
+    return register;
+  };
+  register.isEmail = () => {
+    lastRule = { type: 'isEmail' };
+    rules.push(lastRule);
+    return register;
+  };
+  register.isInt = (options = {}) => {
+    lastRule = { type: 'isInt', options };
+    rules.push(lastRule);
+    return register;
+  };
+  register.isLength = (options = {}) => {
+    lastRule = { type: 'isLength', options };
+    rules.push(lastRule);
+    return register;
+  };
+  register.matches = (pattern) => {
+    lastRule = { type: 'matches', pattern };
+    rules.push(lastRule);
+    return register;
+  };
+  register.custom = (fn) => {
+    lastRule = { type: 'custom', fn };
+    rules.push(lastRule);
+    return register;
+  };
+  register.withMessage = (message) => {
+    if (lastRule) {
+      lastRule.message = message;
+    }
+    return register;
+  };
+
+  return register;
 };
 
 export const validate = (req, res, next) => {
