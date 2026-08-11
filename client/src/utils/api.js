@@ -15,6 +15,11 @@ const handleResponse = async (response) => {
     const errorData = await response.json().catch(() => ({}));
     localStorage.removeItem('matchalize_user');
     if (errorData.suspended) {
+      // Save suspension data for the lock screen to pick up
+      localStorage.setItem('matchalize_suspended', JSON.stringify({
+        reason: errorData.reason || 'Account suspended',
+        suspendedAt: new Date().toISOString(),
+      }));
       toast.error('Your account has been suspended. Please contact support.');
     }
     if (typeof window !== 'undefined' && window.location.pathname !== '/auth') {

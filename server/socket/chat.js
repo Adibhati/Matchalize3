@@ -20,9 +20,9 @@ const parseCookies = (cookieHeader) => {
 };
 
 export const socketHandler = (io) => {
+  // ─── MIDDLEWARE 1: Auth (runs at connect/handshake) ───
   io.use(async (socket, next) => {
     try {
-      // Try httpOnly cookie first, fall back to auth token payload
       let token = null;
       const cookies = parseCookies(socket.handshake.headers.cookie);
       if (cookies.matchalize_jwt) {
@@ -47,13 +47,56 @@ export const socketHandler = (io) => {
     }
   });
 
+  // ─── MIDDLEWARE 2: Connect-time suspension check ───
+  // Blocks suspended/deleted users from establishing a connection at all.
+  // NOTE: io.use() runs only during the handshake — per-event enforcement
+  // for already-connected sockets lives in socket.use() inside the connection handler.
+  io.use(async (socket, next) => {
+    try {
+      const user = await User.findById(socket.user._id)
+        .select('suspended isDeleted')
+        .lean();
+
+      if (!user || user.isDeleted || user.suspended) {
+        return next(new Error(user?.suspended ? 'Account suspended' : 'Account unavailable'));
+      }
+
+      next();
+    } catch (err) {
+      console.error('Suspension check error:', err);
+      next(); // Let it pass on DB error — don't lock everyone out
+    }
+  });
+
   io.on('connection', (socket) => {
     const userId = socket.user._id.toString();
-    // Join the user's personal room so targeted emits (e.g. 'new-letter') reach them
     socket.join(userId);
     console.log(`User connected: ${socket.user.name} (${userId})`);
 
-    // Multi-device support: track all socket IDs per user
+    // ─── PER-EVENT SUSPENSION CHECK ───
+    // Runs before EVERY inbound event on an already-connected socket.
+    // Catches users suspended mid-session and force-disconnects them instantly.
+    socket.use(async (packet, next) => {
+      try {
+        const user = await User.findById(userId)
+          .select('suspended isDeleted')
+          .lean();
+
+        if (!user || user.isDeleted || user.suspended) {
+          socket.emit('force-disconnect', {
+            reason: user?.suspended ? 'Account suspended' : 'Account unavailable',
+          });
+          socket.disconnect(true);
+          return next(new Error('Account suspended or deleted'));
+        }
+
+        next();
+      } catch (err) {
+        console.error('Suspension check error:', err);
+        next(); // Let it pass on DB error — don't lock everyone out
+      }
+    });
+
     if (!onlineUsers.has(userId)) {
       onlineUsers.set(userId, new Set());
     }
@@ -64,7 +107,6 @@ export const socketHandler = (io) => {
     socket.on('join-match', async (matchId) => {
       if (!matchId || typeof matchId !== 'string') return;
 
-      // Validate match membership and block status
       try {
         const match = await Match.findOne({ _id: matchId, users: userId, isActive: true });
         if (!match) return socket.emit('error', { message: 'Not authorized for this match' });
@@ -89,10 +131,8 @@ export const socketHandler = (io) => {
     socket.on('typing', async ({ matchId }) => {
       if (!matchId || typeof matchId !== 'string') return;
       try {
-        // VERIFY: Ensure the user is actually in this active match
         const match = await Match.findOne({ _id: matchId, users: userId, isActive: true });
-        if (!match) return; // Silently ignore if not authorized
-
+        if (!match) return;
         socket.to(matchId).emit('user-typing', { userName: socket.user.name });
       } catch (err) {
         console.error('typing validation error:', err);
@@ -102,10 +142,8 @@ export const socketHandler = (io) => {
     socket.on('stop-typing', async ({ matchId }) => {
       if (!matchId || typeof matchId !== 'string') return;
       try {
-        // VERIFY: Ensure the user is actually in this active match
         const match = await Match.findOne({ _id: matchId, users: userId, isActive: true });
-        if (!match) return; // Silently ignore if not authorized
-
+        if (!match) return;
         socket.to(matchId).emit('user-stop-typing');
       } catch (err) {
         console.error('stop-typing validation error:', err);
@@ -115,14 +153,14 @@ export const socketHandler = (io) => {
     socket.on('check-online', async ({ matchId, targetUserId }) => {
       try {
         if (!matchId || !targetUserId) return;
-        
+
         // 🔒 STALKING PREVENTION: Verifies active match membership before disclosing online activity
         const validMatch = await Match.findOne({
           _id: matchId,
           users: { $all: [userId, targetUserId] },
           isActive: true,
         });
-        
+
         if (!validMatch) return; // Silently drop unauthorized stalking queries
 
         const isOnline = onlineUsers.has(targetUserId) && onlineUsers.get(targetUserId).size > 0;

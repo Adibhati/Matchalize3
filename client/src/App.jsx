@@ -20,6 +20,10 @@ function AppInner() {
   const { logout } = useAuth();
   const [screen, setScreen] = useState(() => {
     try {
+      // Suspended users go straight to auth (where the lock screen renders) — skip Splash
+      const suspended = JSON.parse(localStorage.getItem('matchalize_suspended') || 'null');
+      if (suspended?.reason) return 'auth';
+
       const user = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
       if (user && user._id) {
         // If they are logged in but haven't onboarded, force them to onboarding

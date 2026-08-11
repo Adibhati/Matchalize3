@@ -14,7 +14,7 @@ import ReplyPreview from '../components/chat/ReplyPreview';
 import SearchOverlay from '../components/chat/SearchOverlay';
 import ReportModal from '../components/chat/ReportModal';
 import { theme as design } from '../utils/theme';
-import { Search, ChevronLeft, Sparkle, MapPin } from 'lucide-react';
+import { Search, ChevronLeft, Sparkle, MapPin, Lock } from 'lucide-react';
 
 /* ==================================================================
    ARCHIVAL THEME & TEXTURES
@@ -169,8 +169,26 @@ const ChatIndexCard = ({ children, tilt, wide, tape = 'center' }) => {
   );
 };
 
-const ChatProfileView = ({ profile, onClose }) => {
+const ChatProfileView = ({ profile, onClose, unavailable }) => {
   if (!profile) return null;
+
+  if (unavailable) {
+    return (
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(20,15,10,0.7)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
+        <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxHeight: '50dvh', backgroundColor: chatTheme.color.paper, borderTopLeftRadius: '24px', borderTopRightRadius: '24px', display: 'flex', flexDirection: 'column', boxShadow: '0 -20px 50px rgba(0,0,0,0.4)', alignItems: 'center', justifyContent: 'center', padding: '60px 24px' }}>
+          <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'rgba(139, 69, 19, 0.08)', border: '2px solid rgba(139, 69, 19, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '20px' }}>
+            <Lock size={28} color={chatTheme.color.inkMuted} strokeWidth={1.5} />
+          </div>
+          <p style={{ fontFamily: chatTheme.font.display, fontSize: '20px', fontWeight: 700, color: chatTheme.color.ink, margin: '0 0 8px', textAlign: 'center', letterSpacing: '-0.02em' }}>
+            This user is no longer available
+          </p>
+          <p style={{ fontFamily: chatTheme.font.body, fontSize: '13px', color: chatTheme.color.inkMuted, margin: 0, textAlign: 'center', lineHeight: 1.5 }}>
+            This profile is no longer accessible.
+          </p>
+        </motion.div>
+      </motion.div>
+    );
+  }
   const score = profile.compatScore || 0;
   const circumference = 2 * Math.PI * 34;
   const ringOffset = circumference - (score / 100) * circumference;
@@ -411,6 +429,7 @@ const Chat = ({ match, onBack }) => {
   const prevMessagesLengthRef = useRef(0);
   const pendingMsgIdRef = useRef(null);
   const [socketConnected, setSocketConnected] = useState(socket?.connected ?? true);
+  const otherUnavailable = matchUser?.suspended || matchUser?.isDeleted;
 
   const { user } = useAuth();
   const myId = user?._id;
@@ -868,6 +887,20 @@ const Chat = ({ match, onBack }) => {
         </div>
       )}
 
+      {otherUnavailable && (
+        <div style={{
+          background: 'rgba(139, 69, 19, 0.06)',
+          borderBottom: '1px solid rgba(139, 69, 19, 0.12)',
+          padding: '10px 24px',
+          textAlign: 'center',
+          position: 'relative', zIndex: 5,
+        }}>
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 600, color: '#8c8275', margin: 0 }}>
+            This user can no longer receive messages
+          </p>
+        </div>
+      )}
+
       {/* MESSAGES STAGE WITH ZERO-LAG ENGINE */}
       <div 
         ref={messagesContainerRef}
@@ -982,7 +1015,7 @@ const Chat = ({ match, onBack }) => {
       </AnimatePresence>
 
       {/* INPUT BAR WITH WASHI TAPE */}
-      {match.isActive !== false ? (
+      {match.isActive !== false && !otherUnavailable ? (
       <div style={styles.inputBar}>
         <div style={styles.washiTape} aria-hidden="true" />
         
@@ -1117,7 +1150,7 @@ const Chat = ({ match, onBack }) => {
 
       {/* ARCHIVAL PROFILE SHEET */}
       <AnimatePresence>
-        {showProfile && <ChatProfileView profile={matchUser} onClose={() => setShowProfile(false)} />}
+        {showProfile && <ChatProfileView profile={matchUser} unavailable={otherUnavailable} onClose={() => setShowProfile(false)} />}
       </AnimatePresence>
     </div>
   );

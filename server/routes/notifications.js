@@ -85,7 +85,7 @@ router.get('/', protect, async (req, res) => {
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit)
-      .populate('senderId', 'name photos branch year gender hostel pronouns interests age bio prompts')
+      .populate('senderId', 'name photos branch year gender hostel pronouns interests age bio prompts suspended isDeleted')
       .populate('interactionRef');
 
     res.status(200).json({
@@ -122,6 +122,12 @@ router.post('/:id/accept', protect, async (req, res) => {
 
     const originalSender = incoming.actorId;
     const me = req.user._id;
+
+    // Check if the original sender is suspended or deleted
+    const senderUser = await User.findById(originalSender).select('suspended isDeleted').lean();
+    if (!senderUser || senderUser.isDeleted || senderUser.suspended) {
+      return res.status(410).json({ message: 'This profile is no longer available', code: 'USER_UNAVAILABLE' });
+    }
 
     // Record my response (bypasses the daily like limit) so they're excluded from deck/likes-you
     const alreadyResponded = await Interaction.findOne({

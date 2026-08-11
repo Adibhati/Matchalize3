@@ -109,6 +109,7 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
     const avatarUrl = sender.photos?.[0] || 'https://via.placeholder.com/100?text=?';
     const noteText = n.interactionRef?.letterContent || (isPriority ? 'Sent a Priority Telegram.' : 'Left a flower on your profile.');
     const isDeclining = decliningIds.has(n._id);
+    const senderUnavailable = sender.suspended || sender.isDeleted;
 
     return (
       <motion.div 
@@ -127,6 +128,7 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
           ...styles.row,
           backgroundColor: isPriority ? theme.color.telegramTint : 'transparent',
           borderLeft: isPriority ? `3px solid ${theme.color.accent}` : 'none',
+          opacity: senderUnavailable ? 0.5 : 1,
         }}
         onClick={() => openProfile(sender, n._id)}
       >
@@ -155,10 +157,15 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
           <button 
             className="tactile-btn" 
             onClick={(e) => handleAccept(e, n._id, sender)}
-            style={styles.acceptBtn}
+            style={{
+              ...styles.acceptBtn,
+              opacity: senderUnavailable ? 0.4 : 1,
+              cursor: senderUnavailable ? 'not-allowed' : 'pointer',
+            }}
+            disabled={senderUnavailable}
             aria-label="Accept"
           >
-            Connect
+            {senderUnavailable ? 'Unavailable' : 'Connect'}
           </button>
           <button 
             className="tactile-btn" 

@@ -5,6 +5,7 @@ import socket from '../utils/socket';
 import { theme as design } from '../utils/theme';
 import { triggerHaptic } from '../utils/haptics';
 import { Feather, KeySquare, CheckCircle2 } from 'lucide-react';
+import AccountSuspendedScreen from '../components/AccountSuspendedScreen';
 
 const theme = {
   paper: '#fdfbf7',
@@ -30,6 +31,13 @@ const Auth = ({ onSuccess }) => {
   const [error, setError] = useState('');
   const [verified, setVerified] = useState(false);
   const inputRefs = useRef([]);
+
+  const [suspendedData, setSuspendedData] = useState(() => {
+    try {
+      const data = JSON.parse(localStorage.getItem('matchalize_suspended'));
+      return data?.reason ? data : null;
+    } catch { return null; }
+  });
 
   useEffect(() => {
     if (step === 'otp' && inputRefs.current[0]) {
@@ -97,6 +105,12 @@ const Auth = ({ onSuccess }) => {
     } catch (err) {
       const exactError = err.response?.data?.message || err.response?.data?.error || err.message;
       
+      // If this was a suspension, show the lock screen
+      try {
+        const susData = JSON.parse(localStorage.getItem('matchalize_suspended'));
+        if (susData?.reason) { setSuspendedData(susData); return; }
+      } catch {}
+
       if (exactError?.includes('Network Error')) {
         setError('The courier was lost. Check your connection.');
       } else {
@@ -151,6 +165,10 @@ const Auth = ({ onSuccess }) => {
       inputRefs.current[index - 1].focus();
     }
   };
+
+  if (suspendedData) {
+    return <AccountSuspendedScreen reason={suspendedData.reason} suspendedAt={suspendedData.suspendedAt} />;
+  }
 
   return (
     <div style={{

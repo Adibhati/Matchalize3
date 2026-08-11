@@ -36,7 +36,7 @@ router.get('/', protect, async (req, res) => {
           pipeline: [
             { $match: { $expr: { $in: ['$_id', '$$userIds'] } } },
             { $match: { _id: { $ne: userId } } },
-            { $project: { name: 1, photos: 1, branch: 1, year: 1, lastActive: 1, gender: 1, hostel: 1, bio: 1, prompts: 1, intent: 1, interests: 1 } }
+            { $project: { name: 1, photos: 1, branch: 1, year: 1, lastActive: 1, gender: 1, hostel: 1, bio: 1, prompts: 1, intent: 1, interests: 1, suspended: 1, isDeleted: 1 } }
           ],
           as: 'otherUserArr'
         }
