@@ -19,7 +19,7 @@ const theme = {
 
 const GRAIN_SVG = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E`;
 
-const PopoutItem = ({ children, targetId, onAction, type, style }) => {
+const PopoutItem = ({ children, targetId, onAction, type, style, compatScore }) => {
   const [isPopped, setIsPopped] = useState(false);
   const [rect, setRect] = useState(null);
   const [noteText, setNoteText] = useState('');
@@ -49,14 +49,13 @@ const PopoutItem = ({ children, targetId, onAction, type, style }) => {
       triggerHaptic('medium');
       updateRect();
       setIsPopped(true);
-    }, 280); // 280ms tactile hold
+    }, 280);
   };
 
   const handleTouchMove = () => clearTimeout(pressTimer.current);
   const handleTouchEnd = () => clearTimeout(pressTimer.current);
   const handleTouchCancel = () => clearTimeout(pressTimer.current);
 
-  // ONE-SHOT DISPATCH: Flash the seal for 200ms, then trigger the page flip in the parent
   const triggerSealAnimation = (callback) => {
     setShowSeal(true);
     setTimeout(() => {
@@ -115,7 +114,12 @@ const PopoutItem = ({ children, targetId, onAction, type, style }) => {
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={closePopout} className="progressive-overlay" style={{ position: 'fixed', inset: 0, zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', contain: 'strict' }}>
               <motion.div initial={{ scale: 0.85, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.88, opacity: 0, y: 20 }} transition={{ type: 'spring', damping: 25, stiffness: 350 }} onClick={(e) => e.stopPropagation()} style={{ backgroundColor: theme.paper, border: `2px solid ${theme.borderDark}`, borderRadius: '24px', padding: '36px 28px 28px', width: '340px', maxWidth: '90vw', textAlign: 'center', position: 'relative', boxShadow: '0 40px 80px rgba(0,0,0,0.5)', overflow: 'hidden', transform: 'translateZ(0)' }}>
                 <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${GRAIN_SVG}")`, mixBlendMode: 'multiply', opacity: 0.6, pointerEvents: 'none', zIndex: 1 }} />
-                <h4 style={{ fontFamily: "'Playfair Display', serif", fontSize: '26px', color: theme.ink, margin: '0 0 24px 0', fontWeight: 800, letterSpacing: '-0.03em' }}>Compatibility Scan</h4>
+                <h4 style={{ fontFamily: "'Playfair Display', serif", fontSize: '26px', color: theme.ink, margin: '0 0 8px 0', fontWeight: 800, letterSpacing: '-0.03em' }}>Compatibility Scan</h4>
+                {compatScore !== undefined && compatScore !== null && (
+                  <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: theme.inkMuted, margin: '0 0 24px 0', lineHeight: 1.5 }}>
+                    You scored <strong style={{ color: theme.crimson, fontSize: '16px' }}>{compatScore}%</strong> on the compatibility matrix.
+                  </p>
+                )}
                 <div style={{ position: 'relative', width: '140px', height: '140px', margin: '0 auto 32px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <motion.div animate={{ rotate: 360 }} transition={{ duration: 20, repeat: Infinity, ease: "linear" }} style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: `2.5px dashed ${theme.accent}`, opacity: 0.5 }} />
                   <motion.div animate={{ rotate: -360 }} transition={{ duration: 15, repeat: Infinity, ease: "linear" }} style={{ position: 'absolute', inset: '16px', borderRadius: '50%', border: `1.5px dotted ${theme.crimson}`, opacity: 0.4 }} />
@@ -150,7 +154,6 @@ const PopoutItem = ({ children, targetId, onAction, type, style }) => {
         {children}
       </motion.div>
 
-      {/* The Instant Reward Wax Seal */}
       <AnimatePresence>
         {showSeal && rect && createPortal(
           <motion.div initial={{ opacity: 0, scale: 2.5, rotate: -20 }} animate={{ opacity: 1, scale: 1, rotate: 0 }} exit={{ opacity: 0, scale: 0.8 }} transition={{ type: 'spring', damping: 14, stiffness: 200 }} style={{ position: 'fixed', top: rect.top + (rect.height / 2) - 40, left: rect.left + (rect.width / 2) - 40, width: '80px', height: '80px', zIndex: 10000, pointerEvents: 'none' }}>
@@ -187,7 +190,6 @@ const PopoutItem = ({ children, targetId, onAction, type, style }) => {
                 style={{ willChange: 'transform', transform: 'translateZ(0)', touchAction: 'none' }}
               >
                 
-                {/* 1. TOP PANEL: Fast Connection (Flower) */}
                 <div className="panel-wrapper panel-top">
                   <div className="panel-inner premium-panel-light">
                     <button onClick={handleLike} disabled={actionSent} className="action-btn flower-btn">
@@ -196,14 +198,12 @@ const PopoutItem = ({ children, targetId, onAction, type, style }) => {
                   </div>
                 </div>
 
-                {/* 2. CENTER PANEL: The Artifact */}
                 <div className="sandwich-center" onClick={() => setIsCardExpanded(!isCardExpanded)}>
                   <div className="card-content-inner">
                     {children}
                   </div>
                 </div>
 
-                {/* 3. BOTTOM PANEL: Deep Connection (Letter) */}
                 <div className="panel-wrapper panel-bottom">
                   <div className="panel-inner premium-panel-dark">
                     <div className={`letter-accordion ${showInput ? 'input-active' : ''}`}>
@@ -256,24 +256,39 @@ const PopoutItem = ({ children, targetId, onAction, type, style }) => {
               .progressive-overlay { background: linear-gradient(180deg, rgba(15, 10, 8, 0.5) 0%, rgba(5, 3, 2, 0.95) 100%); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
               .scrollable-safe-area { width: 100%; height: 100%; position: absolute; inset: 0; overflow-y: auto; display: flex; justify-content: center; align-items: center; padding: 24px 0; -webkit-overflow-scrolling: touch; contain: strict; }
               .scrollable-safe-area::-webkit-scrollbar { display: none; }
+              
               .sandwich-container { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 328px; position: relative; }
-              .sandwich-center { position: relative; z-index: 5; width: 100%; background-color: #f9f0d0; border-radius: 16px; box-shadow: 0 16px 50px rgba(0,0,0,0.5); transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); backface-visibility: hidden; }
-              .sandwich-center::before { content: ''; position: absolute; inset: 0; background-image: url("${GRAIN_SVG}"); opacity: 0.12; pointer-events: none; border-radius: 16px; z-index: 0; mix-blend-mode: multiply; }
-              .sandwich-container.expanded .sandwich-center { transform: scale(1.03); box-shadow: 0 30px 80px rgba(0,0,0,0.7); border: 4px solid #fdfbf7; }
-              .card-content-inner .pc-hint-pulse, .card-content-inner .pc-tape { display: none !important; }
-              .card-content-inner { width: 100%; transform: none !important; position: relative; z-index: 2; }
-              .card-content-inner > div { transform: rotate(0deg) !important; border: none !important; box-shadow: none !important; margin: 0 !important; background: transparent !important; border-radius: 12px !important; height: auto !important; min-height: auto !important; max-height: 40vh !important; padding: 16px !important; }
-              .card-content-inner img { width: 100% !important; height: 100% !important; max-height: 40vh !important; object-fit: cover !important; border-radius: 12px !important; border: 2px solid #e0d8c8 !important; display: block; }
-              .panel-wrapper { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); width: 96%; z-index: 1; will-change: grid-template-rows; }
+              
+              /* Removed all backgrounds, borders, and grain from the sandwich center */
+              .sandwich-center { position: relative; z-index: 5; width: 100%; transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); backface-visibility: hidden; }
+              .sandwich-container.expanded .sandwich-center { transform: scale(1.03); }
+              
+              /* Inner content formatting */
+              .card-content-inner { width: 100%; position: relative; z-index: 2; display: flex; justify-content: center; align-items: center; }
+              
+              /* Force the inner component to sit perfectly straight */
+              .card-content-inner * { transform: rotate(0deg) !important; }
+              
+              /* Hide Hold Hints in the popout */
+              .card-content-inner div[style*="pointer-events: none"] { display: none !important; }
+              
+              /* Deep shadow on the photo/card itself so it pops */
+              .card-content-inner > div { box-shadow: 0 30px 60px rgba(0,0,0,0.6) !important; }
+
+              /* Panel alignment - width 100% to attach seamlessly to the photo */
+              .panel-wrapper { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); width: 100%; z-index: 1; will-change: grid-template-rows; }
               .sandwich-container.expanded .panel-wrapper { grid-template-rows: 1fr; }
               .panel-inner { overflow: hidden; display: flex; flex-direction: column; transform: translateZ(0); }
-              .premium-panel-light { background: linear-gradient(180deg, #ffffff 0%, #f4f1ea 100%); border: 1px solid ${theme.borderDark}; border-top-left-radius: 20px; border-top-right-radius: 20px; border-bottom: none; padding-bottom: 16px; box-shadow: inset 0 2px 10px rgba(255,255,255,1); }
-              .premium-panel-dark { background: linear-gradient(180deg, #242424 0%, #121212 100%); border: 1px solid #000; border-bottom-left-radius: 20px; border-bottom-right-radius: 20px; border-top: none; padding-top: 16px; box-shadow: inset 0 -4px 20px rgba(0,0,0,0.6); }
+              
+              .premium-panel-light { background: linear-gradient(180deg, #ffffff 0%, #f4f1ea 100%); border: 1px solid ${theme.borderDark}; border-top-left-radius: 12px; border-top-right-radius: 12px; border-bottom: none; padding-bottom: 16px; box-shadow: inset 0 2px 10px rgba(255,255,255,1); }
+              .premium-panel-dark { background: linear-gradient(180deg, #242424 0%, #121212 100%); border: 1px solid #000; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; border-top: none; padding-top: 16px; box-shadow: inset 0 -4px 20px rgba(0,0,0,0.6); }
+              
               .action-btn { display: flex; align-items: center; justify-content: center; gap: 12px; width: 100%; height: 72px; background: transparent; border: none; font-family: 'Playfair Display', serif; font-size: 20px; font-weight: 700; cursor: pointer; letter-spacing: -0.02em; line-height: 1.15; transition: transform 0.1s cubic-bezier(0.2, 0.8, 0.2, 1); }
               .action-btn:active { transform: scale(0.97); }
               .flower-btn { color: ${theme.crimson}; text-shadow: 0 1px 2px rgba(139,26,26,0.1); }
               .letter-btn { color: ${theme.paper}; text-shadow: 0 2px 4px rgba(0,0,0,0.8); transition: opacity 0.2s; }
               .letter-btn.hide-trigger { opacity: 0; pointer-events: none; position: absolute; }
+              
               .letter-accordion { display: flex; flex-direction: column; overflow: hidden; height: 72px; transition: height 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); will-change: height; position: relative; }
               .letter-accordion.input-active { height: 264px; }
               .input-area { display: flex; flex-direction: column; padding: 0 16px 20px; gap: 16px; opacity: 0; transition: opacity 0.3s ease; will-change: opacity; position: absolute; top: 0; left: 0; right: 0; pointer-events: none; }
