@@ -146,8 +146,7 @@ const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
 const styles = {
   navContainer: {
     marginTop: 'auto', // Flexbox silver bullet: forces navbar to the bottom
-    position: 'sticky',
-    bottom: 0,
+    flexShrink: 0,
     backgroundColor: theme.paper,
     zIndex: 10,
     boxShadow: `0 -8px 24px ${theme.shadowWarm}`,

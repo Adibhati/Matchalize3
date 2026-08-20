@@ -1163,7 +1163,7 @@ const styles = {
   page: { position: 'fixed', inset: 0, backgroundColor: theme.paper, display: 'flex', flexDirection: 'column', zIndex: 50, overflow: 'hidden' },
   paperGrain: { position: 'absolute', inset: 0, backgroundImage: `url("${design?.texture?.grain || ''}")`, mixBlendMode: 'multiply', opacity: 0.85, pointerEvents: 'none', zIndex: 1 },
   
-  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 24px', paddingTop: 'max(12px, env(safe-area-inset-top))', backgroundColor: theme.surface, borderBottom: `2px solid ${theme.borderDark}`, position: 'relative', zIndex: 10, boxShadow: `0 4px 16px ${theme.shadowWarm}`, contain: 'layout style' },
+  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '45px', boxSizing: 'border-box', padding: '0 24px', backgroundColor: theme.surface, borderBottom: `2px solid ${theme.borderDark}`, position: 'relative', zIndex: 10, boxShadow: `0 4px 16px ${theme.shadowWarm}`, contain: 'layout style' },
   backBtn: { background: theme.surface, border: `1px solid ${theme.border}`, color: theme.ink, borderRadius: design?.radius?.md || '8px', padding: '10px', marginRight: '4px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'transform 0.15s ease', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation', minWidth: '44px', minHeight: '44px' },
   headerLeft: { display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', flex: 1 },
   headerAvatar: { width: '44px', height: '44px', borderRadius: '12px', objectFit: 'cover', border: `2px solid ${theme.borderDark}`, boxShadow: `0 2px 8px ${theme.shadowWarm}` },

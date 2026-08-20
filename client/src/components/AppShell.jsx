@@ -167,7 +167,7 @@ const AppShell = ({ onSignOut }) => {
 ================================================================== */
 const styles = {
   shellRoot: {
-    flex: 1,
+    flexShrink: 0,
     display: 'flex',
     flexDirection: 'column',
     height: '100dvh', // Modern mobile viewport height

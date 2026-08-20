@@ -136,7 +136,7 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
                 aria-label="View notifications"
                 title="Letters Received"
               >
-                <Bell size={20} color={design.color.inkSoft || '#4a4a4a'} strokeWidth={2.5} />
+                <Bell size={17} color={design.color.inkSoft || '#4a4a4a'} strokeWidth={2.5} />
 
                 {/* Animated Crimson Wax-Seal Badge */}
                 <AnimatePresence>
@@ -191,7 +191,9 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
 ================================================================== */
 const styles = {
   header: {
-    padding: 'max(12px, env(safe-area-inset-top)) 24px 12px',
+    height: '45px',
+    boxSizing: 'border-box',
+    padding: '0 20px',
     backgroundColor: design.color.paper,
     position: 'sticky',
     top: 0,
@@ -219,17 +221,17 @@ const styles = {
   },
   logoWordmark: {
     fontFamily: design?.font?.display || "'Playfair Display', serif",
-    fontSize: '28px',
+    fontSize: '20px',
     fontWeight: 900,
     color: design.color.ink,
-    letterSpacing: '-0.04em',
+    letterSpacing: '-0.03em',
     margin: 0,
     lineHeight: 1,
     textTransform: 'lowercase', // Aligned with the Splash screen style
   },
   pageTitle: {
     fontFamily: design?.font?.display || "'Playfair Display', serif",
-    fontSize: '24px',
+    fontSize: '20px',
     fontWeight: 800,
     color: design.color.ink,
     letterSpacing: '-0.02em',
@@ -244,9 +246,9 @@ const styles = {
     position: 'relative',
     backgroundColor: design.color.surface,
     border: `1.5px solid ${design.color.borderDark}`,
-    borderRadius: design?.radius?.md || '12px',
-    width: '40px',
-    height: '40px',
+    borderRadius: design?.radius?.sm || '8px',
+    width: '32px',
+    height: '32px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -255,16 +257,16 @@ const styles = {
   },
   unreadBadge: {
     position: 'absolute',
-    top: '-6px',
-    right: '-6px',
+    top: '-5px',
+    right: '-5px',
     backgroundColor: design.color.crimson,
-    minWidth: '20px',
-    height: '20px',
-    borderRadius: '10px',
+    minWidth: '17px',
+    height: '17px',
+    borderRadius: '9px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: '0 4px',
+    padding: '0 3px',
     border: `1.5px solid ${design.color.paper}`,
     boxShadow: '0 2px 6px rgba(139, 26, 26, 0.4), inset 0 1px 2px rgba(255, 255, 255, 0.25)',
     willChange: 'transform',
@@ -272,7 +274,7 @@ const styles = {
   },
   badgeText: {
     fontFamily: "'Inter', sans-serif",
-    fontSize: '10px',
+    fontSize: '9px',
     fontWeight: 800,
     color: '#ffffff',
     letterSpacing: '0.3px',

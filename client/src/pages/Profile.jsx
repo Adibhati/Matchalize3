@@ -497,7 +497,7 @@ const Profile = ({ onSignOut }) => {
           >
             <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${design?.texture?.grain || ''}")`, mixBlendMode: 'multiply', opacity: 0.85, pointerEvents: 'none' }} />
             
-            <div style={{ padding: 'max(16px, env(safe-area-inset-top)) 24px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.color.borderDark}`, backgroundColor: theme.color.surface, zIndex: 2 }}>
+            <div style={{ height: '45px', boxSizing: 'border-box', padding: '0 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.color.borderDark}`, backgroundColor: theme.color.surface, zIndex: 2 }}>
               <h2 style={{ fontFamily: theme.font.display, fontSize: '24px', margin: 0, color: theme.color.ink, fontWeight: 700 }}>Vault Settings</h2>
               <button onClick={() => setSettingsOpen(false)} className="tactile-btn" aria-label="Close settings" style={{ background: 'none', border: 'none', fontSize: '24px', color: theme.color.inkMuted, cursor: 'pointer', padding: '4px' }}><X size={24} color="currentColor" /></button>
             </div>
