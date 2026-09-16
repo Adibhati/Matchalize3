@@ -133,7 +133,10 @@ const ProfileCard = ({ profile = {}, scrollRef: externalScrollRef, onAction, onN
     const currentDrag = dragY.get();
     if (Math.abs(currentDrag) >= OVERSCROLL_THRESHOLD) {
       triggerHaptic('heavy');
-      if (onNavigate) onNavigate('up', false); 
+      if (onNavigate) {
+        const direction = currentDrag > 0 ? 'down' : 'up';
+        onNavigate(direction, false);
+      }
     }
     animate(dragY, 0, { type: 'spring', stiffness: 400, damping: 25 });
     isAtBoundary.current = false;

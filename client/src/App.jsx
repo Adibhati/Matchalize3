@@ -11,22 +11,23 @@ import Onboarding from './pages/Onboarding.jsx';
 import AppShell from './components/AppShell';
 import socket from './utils/socket';
 import ArchivalToast from './components/ArchivalToast.jsx';
+import { useIsDesktop } from './utils/useIsDesktop';
 
 function AppInner() {
+  const isDesktop = useIsDesktop();
+  
   // If the app is loaded at /admin, render the standalone Admin panel
   if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
     return <Admin />;
   }
+
   const { logout } = useAuth();
   const [screen, setScreen] = useState(() => {
     try {
-      // Suspended users go straight to auth (where the lock screen renders) — skip Splash
       const suspended = JSON.parse(localStorage.getItem('matchalize_suspended') || 'null');
       if (suspended?.reason) return 'auth';
-
       const user = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
       if (user && user._id) {
-        // If they are logged in but haven't onboarded, force them to onboarding
         return user.isOnboarded ? 'home' : 'onboarding';
       }
       return 'splash';
@@ -36,18 +37,18 @@ function AppInner() {
   });
 
   const handleSignOut = () => {
-    if (socket) socket.disconnect(); // Disconnect real-time connection
+    if (socket) socket.disconnect();
     logout();
     setScreen('splash');
   };
 
   return (
-    <main style={{ 
-      maxWidth: '430px', 
-      margin: '0 auto', 
-      minHeight: '100dvh', // 📱 NATIVE FLEX: Allows Safari to compress cleanly when keyboard slides up
-      backgroundColor: '#f4f1ea', 
-      boxShadow: '0 0 60px rgba(0,0,0,0.08)', 
+    <main style={{
+      maxWidth: isDesktop ? '100%' : '430px',
+      margin: '0 auto',
+      minHeight: '100dvh',
+      backgroundColor: '#f4f1ea',
+      boxShadow: isDesktop ? 'none' : '0 0 60px rgba(0,0,0,0.08)',
       display: 'flex',
       flexDirection: 'column',
       position: 'relative',
@@ -92,8 +93,8 @@ function AppInner() {
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 1000 * 60 * 2, // 2 minutes - prevents refetching the same data too often
-      refetchOnWindowFocus: false, // Don't refetch when user switches tabs
+      staleTime: 1000 * 60 * 2,
+      refetchOnWindowFocus: false,
     },
   },
 });

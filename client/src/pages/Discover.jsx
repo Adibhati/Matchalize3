@@ -9,6 +9,7 @@ import ShadowbanBanner from '../components/ShadowbanBanner';
 import LearnMoreSheet from '../components/LearnMoreSheet';
 import { triggerHaptic } from '../utils/haptics';
 import { theme as design } from '../utils/theme';
+import { discoverStore, resetDiscoverStore } from '../utils/discoverStore';
 import { RotateCw, Compass, AlertTriangle } from 'lucide-react';
 
 const theme = {
@@ -64,14 +65,27 @@ const Discover = ({ onOpenChat }) => {
   const shadowbanScore = myUser?.shadowbanScore || 0;
 
   const fetchProfiles = useCallback(async (append = false) => {
-    if (!append) { setLoading(true); setError(null); }
+    if (!append) { setLoading(true); setError(null); resetDiscoverStore(); }
     else setFetchingMore(true);
 
     try {
       const data = await api.get('/discover?limit=10');
       const newProfiles = data.users || [];
-      if (append) setProfiles((prev) => [...prev, ...newProfiles]);
-      else { setProfiles(newProfiles); setCurrentIndex(0); }
+      if (append) {
+        setProfiles((prev) => {
+          const next = [...prev, ...newProfiles];
+          discoverStore.profiles = next;
+          discoverStore.hasMore = data.hasMore;
+          return next;
+        });
+      }
+      else {
+        setProfiles(newProfiles);
+        setCurrentIndex(0);
+        discoverStore.profiles = newProfiles;
+        discoverStore.currentIndex = 0;
+        discoverStore.hasMore = data.hasMore;
+      }
       setHasMore(data.hasMore);
     } catch (err) {
       console.error('Failed to fetch archival profiles:', err);
@@ -82,9 +96,29 @@ const Discover = ({ onOpenChat }) => {
     }
   }, []);
 
-  useEffect(() => { fetchProfiles(false); }, [fetchProfiles]);
+  useEffect(() => {
+    if (discoverStore.profiles.length > 0) {
+      setProfiles(discoverStore.profiles);
+      setCurrentIndex(discoverStore.currentIndex);
+      setHasMore(discoverStore.hasMore);
+      setLoading(false);
+      return;
+    }
+    fetchProfiles(false);
+  }, [fetchProfiles]);
 
   const handleNextProfile = useCallback((direction = 'up', isAction = false) => {
+    if (direction === 'down') {
+      if (currentIndex <= 0) return;
+      setCurrentIndex((prev) => {
+        const next = Math.max(0, prev - 1);
+        discoverStore.currentIndex = next;
+        return next;
+      });
+      setSlideDirection('down');
+      return;
+    }
+
     if (currentIndex >= profiles.length) return;
     
     setSlideDirection(direction);
@@ -97,7 +131,12 @@ const Discover = ({ onOpenChat }) => {
       }
     }
 
-    setCurrentIndex((prev) => prev + 1);
+    setCurrentIndex((prev) => {
+      const next = prev + 1;
+      discoverStore.currentIndex = next;
+      discoverStore.profiles = profiles;
+      return next;
+    });
 
     if (profiles.length - currentIndex <= 4 && hasMore && !fetchingMore) {
       fetchProfiles(true);

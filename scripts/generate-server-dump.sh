@@ -29,7 +29,7 @@ emit_file() {
 # ---- Server Source ---------------------------------------------------------
 printf '## Server Source\n\n\n' >> "$OUT"
 emit_file ./server/package.json
-find ./server -type f -name '*.js' -not -path '*/node_modules/*' \
+find ./server -type f -name '*.js' -not -path '*/node_modules/*' -not -path '*/uploads/*' -not -name '.DS_Store' \
   | LC_ALL=C sort | while read -r f; do
     emit_file "./${f#./}"
   done

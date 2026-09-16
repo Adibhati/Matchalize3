@@ -46,7 +46,7 @@
 
 ## Dev Mode
 
-`ALLOW_ALL_EMAILS=true` bypasses `.ac.in` restriction. When `SENDGRID_API_KEY` is unset, OTP codes log to console only (no email sent). Both conditions print warnings at startup.
+`ALLOW_ALL_EMAILS=true` bypasses `.ac.in` restriction. When `RESEND_API_KEY` is unset, OTP codes log to console only (no email sent). Both conditions print warnings at startup.
 
 ---
 

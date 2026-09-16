@@ -53,8 +53,8 @@ for (const envVar of requiredEnvVars) {
 }
 
 // Warn about missing optional services
-if (!process.env.SENDGRID_API_KEY) {
-  console.warn('⚠️  SendGrid API key not configured — OTP codes will be logged to console only (users won\'t receive emails)');
+if (!process.env.RESEND_API_KEY) {
+  console.warn('⚠️  Resend API key not configured — OTP codes will be logged to console only (users won\'t receive emails)');
 }
 if (!process.env.CLOUDINARY_CLOUD_NAME) {
   console.warn('⚠️  Cloudinary not configured — photo uploads will fail');

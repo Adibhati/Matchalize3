@@ -310,7 +310,9 @@ server/
 | `MONGODB_URI` | MongoDB Atlas | Configured |
 | `JWT_SECRET` | JWT secret | Required (server exits if missing) |
 | `ALLOW_ALL_EMAILS` | Dev bypass | `true` in dev |
-| `SENDGRID_API_KEY` | Email OTP | Optional (console fallback) |
+| `RESEND_API_KEY` | Email OTP | Optional (console fallback) |
+| `RESEND_SENDER_EMAIL` | Email sender address | Optional (defaults `onboarding@resend.dev`) |
+| `RESEND_SENDER_NAME` | Email sender display name | Optional (defaults `Matchalize`) |
 | `CLOUDINARY_*` | Photo/audio storage | Configured |
 | `VAPID_*` | Push notifications | Configured |
 | `SENTRY_DSN` | Error monitoring | Configured |
