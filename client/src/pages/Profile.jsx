@@ -628,32 +628,48 @@ const Profile = ({ onSignOut }) => {
                 {/* PROMPT EDITOR */}
                 {drawerConfig.type === 'prompt' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <label style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', color: theme.color.accent, fontFamily: theme.font.body }}>Whisper</label>
                     <textarea 
                       placeholder="Type your whisper here..."
                       defaultValue={userData.prompts[drawerConfig.slot]?.question || ''}
                       onBlur={(e) => {
                         const updated = [...userData.prompts];
-                        updated[drawerConfig.slot] = { question: e.target.value.trim() };
+                        updated[drawerConfig.slot] = { ...updated[drawerConfig.slot], question: e.target.value.trim() };
+                        updateProfile({ prompts: updated });
+                      }}
+                      style={{ ...styles.drawerInput, minHeight: '80px', resize: 'none' }}
+                    />
+                    <label style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', color: theme.color.accent, fontFamily: theme.font.body }}>Answer</label>
+                    <textarea 
+                      placeholder="Type your answer here..."
+                      defaultValue={userData.prompts[drawerConfig.slot]?.answer || ''}
+                      onBlur={(e) => {
+                        const updated = [...userData.prompts];
+                        updated[drawerConfig.slot] = { ...updated[drawerConfig.slot], answer: e.target.value.trim() };
                         updateProfile({ prompts: updated });
                       }}
                       style={{ ...styles.drawerInput, minHeight: '80px', resize: 'none' }}
                     />
                     <div style={{ height: '1px', backgroundColor: theme.color.borderDark, margin: '8px 0' }} />
-                    {config?.prompts?.map((p, i) => (
-                      <button 
-                        key={i}
-                        className="tactile-btn"
-                        onClick={() => {
-                          const updated = [...userData.prompts];
-                          updated[drawerConfig.slot] = { question: p.question };
-                          updateProfile({ prompts: updated });
-                          setDrawerConfig(null);
-                        }}
-                        style={styles.promptListBtn}
-                      >
-                        "{p.question}"
-                      </button>
-                    ))}
+                    {config?.prompts?.map((p, i) => {
+                      const promptText = typeof p === 'string' ? p : p.question;
+                      if (!promptText) return null;
+                      return (
+                        <button 
+                          key={i}
+                          className="tactile-btn"
+                          onClick={() => {
+                            const updated = [...userData.prompts];
+                            updated[drawerConfig.slot] = { ...updated[drawerConfig.slot], question: promptText };
+                            updateProfile({ prompts: updated });
+                            setDrawerConfig(null);
+                          }}
+                          style={styles.promptListBtn}
+                        >
+                          "{promptText}"
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
 

@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { motion, useScroll, AnimatePresence } from 'framer-motion';
+import React, { useState, useRef, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useAppConfig } from '../utils/AppConfigContext';
 import { useAuth } from '../utils/AuthContext';
 import { api } from '../utils/api';
@@ -7,9 +7,9 @@ import { toast } from '../utils/toast';
 import { triggerHaptic } from '../utils/haptics';
 import { theme as design } from '../utils/theme';
 import { 
-  Check, X, Camera, ChevronDown, ChevronRight, Lock, RotateCcw, 
+  X, Camera, ChevronDown, ChevronRight, Lock, RotateCcw, 
   Fingerprint, MapPin, MessageSquare, Sliders, Layers, PenTool, 
-  CheckCircle2, LogOut, Edit3, Sparkle, UserCheck, Award, Calendar 
+  LogOut, Edit3, Sparkle, UserCheck, Award, Calendar 
 } from 'lucide-react';
 
 const theme = {
@@ -228,7 +228,7 @@ const Onboarding = ({ onComplete }) => {
   const [formData, setFormData] = useState({
     name: '', dob: '', gender: '', pronouns: '', branch: '', year: '', hostel: '',
     photos: [], bio: '', intent: [], interestedIn: [], interests: [], compatAnswers: [],
-    prompts: [{ question: '' }, { question: '' }, { question: '' }],
+    prompts: [{ question: '', answer: '' }, { question: '', answer: '' }, { question: '', answer: '' }],
   });
   
   const [uploadingSlot, setUploadingSlot] = useState(null);
@@ -275,7 +275,9 @@ const Onboarding = ({ onComplete }) => {
           interestedIn: Array.isArray(saved.interestedIn) ? saved.interestedIn : prev.interestedIn,
           interests: Array.isArray(saved.interests) ? saved.interests : prev.interests,
           compatAnswers: Array.isArray(saved.compatAnswers) ? saved.compatAnswers : prev.compatAnswers,
-          prompts: (Array.isArray(saved.prompts) && saved.prompts.length >= 3) ? saved.prompts : prev.prompts
+          prompts: (Array.isArray(saved.prompts) && saved.prompts.length >= 3)
+            ? saved.prompts.map(p => ({ question: p?.question || '', answer: p?.answer || '', photoUrl: p?.photoUrl || '' }))
+            : prev.prompts
         }));
       }
     }).catch(() => {});
@@ -376,7 +378,7 @@ const Onboarding = ({ onComplete }) => {
   const isVitalsComplete = !!formData.name.trim() && age >= 18 && age <= 40;
   const isCoordsComplete = !!formData.gender && !!formData.branch && !!formData.year && formData.interestedIn.length > 0;
   const isPortraitComplete = !!formData.photos[0] && !!formData.bio.trim() && formData.bio.length <= 160;
-  const isWhispersComplete = formData.prompts.filter(p => p?.question?.trim()).length >= 3 && formData.photos.filter((_, i) => i > 0 && formData.photos[i]).length >= 1;
+  const isWhispersComplete = formData.prompts.filter(p => p?.question?.trim() && p?.answer?.trim()).length >= 3;
   const isParamsComplete = formData.intent.length > 0;
   const isAlignComplete = formData.compatAnswers.length >= (config.compatQuestions?.length || 7);
   const isFullyComplete = isVitalsComplete && isCoordsComplete && isPortraitComplete && isWhispersComplete && isParamsComplete && isAlignComplete && uploadingSlot === null;
@@ -395,7 +397,11 @@ const Onboarding = ({ onComplete }) => {
     if (!isFullyComplete || uploadingSlot !== null) { triggerHaptic('heavy'); return; }
     triggerHaptic('heavy');
     try {
-      const res = await api.post('/users/setup', { ...formData, age });
+      const finalPrompts = formData.prompts.map((p) => ({
+        question: p?.question || '',
+        answer: p?.answer || '',
+      }));
+      const res = await api.post('/users/setup', { ...formData, prompts: finalPrompts, age });
       await api.delete('/users/onboarding/clear').catch(() => {});
 
       const storedUser = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
@@ -669,12 +675,22 @@ const Onboarding = ({ onComplete }) => {
             const prompt = formData.prompts[slot];
             const hasQuestion = prompt?.question;
             return (
-              <div key={slot} style={{ minWidth: '85%', minHeight: hasQuestion ? '380px' : '160px', height: hasQuestion ? 'auto' : '160px', scrollSnapAlign: 'center', borderRadius: '16px', padding: '20px', border: `1px dashed ${theme.ink}`, position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', backgroundColor: theme.paper, transition: 'all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)' }}>
+              <div key={slot} style={{ minWidth: '85%', minHeight: hasQuestion ? '420px' : '160px', height: hasQuestion ? 'auto' : '160px', scrollSnapAlign: 'center', borderRadius: '16px', padding: '20px', border: `1px dashed ${theme.ink}`, position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', backgroundColor: theme.paper, transition: 'all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)' }}>
                 <label style={styles.label}>Whisper #{slot + 1}</label>
                 {hasQuestion ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: 1 }}>
                     <span style={{ fontFamily: TYPEWRITER_FONT, fontSize: '15px', fontWeight: '600', color: theme.ink, lineHeight: 1.4, wordBreak: 'break-word' }}>"{prompt.question}"</span>
                     <button className="tactile-btn" onClick={() => setPromptPickerSlot(slot)} style={{ background: 'none', border: 'none', color: theme.accent, fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', cursor: 'pointer', padding: 0, textAlign: 'left', fontFamily: LABEL_FONT }}>Change Whisper</button>
+                    <textarea
+                      placeholder="Your answer..."
+                      value={prompt.answer || ''}
+                      onChange={(e) => {
+                        const updated = [...formData.prompts];
+                        updated[slot] = { ...updated[slot], answer: e.target.value };
+                        updateField('prompts', updated);
+                      }}
+                      style={{ ...styles.textarea, minHeight: '80px', fontSize: '14px', padding: '12px', flex: 1 }}
+                    />
                     <div style={{ marginTop: 'auto', display: 'flex', justifyContent: 'center', paddingTop: '8px' }}>
                       {renderPhotoSlot(slot + 1, 'Attach Polaroid', true)}
                     </div>
@@ -1023,7 +1039,7 @@ const Onboarding = ({ onComplete }) => {
                   <label style={styles.label}>Draft Your Own</label>
                   <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                     <input style={{...styles.input, fontSize: '15px', padding: '8px 4px'}} placeholder="Type your own whisper..." value={customPromptText} onChange={e => setCustomPromptText(e.target.value)} spellCheck="false" autoComplete="off" />
-                    <button className="tactile-btn" onClick={() => { if (customPromptText.trim()) { const updated = [...formData.prompts]; updated[promptPickerSlot] = { question: customPromptText.trim() }; updateField('prompts', updated); setCustomPromptText(''); setPromptPickerSlot(null); }}} disabled={!customPromptText.trim()} style={{ padding: '10px 18px', backgroundColor: customPromptText.trim() ? theme.crimson : 'transparent', color: customPromptText.trim() ? '#fff' : theme.ink, border: customPromptText.trim() ? 'none' : `1px solid ${theme.ink}`, borderRadius: '8px', fontFamily: LABEL_FONT, fontSize: '12px', fontWeight: '700', textTransform: 'uppercase', cursor: 'pointer' }}>Affix</button>
+                    <button className="tactile-btn" onClick={() => { if (customPromptText.trim()) { const updated = [...formData.prompts]; updated[promptPickerSlot] = { ...updated[promptPickerSlot], question: customPromptText.trim() }; updateField('prompts', updated); setCustomPromptText(''); setPromptPickerSlot(null); }}} disabled={!customPromptText.trim()} style={{ padding: '10px 18px', backgroundColor: customPromptText.trim() ? theme.crimson : 'transparent', color: customPromptText.trim() ? '#fff' : theme.ink, border: customPromptText.trim() ? 'none' : `1px solid ${theme.ink}`, borderRadius: '8px', fontFamily: LABEL_FONT, fontSize: '12px', fontWeight: '700', textTransform: 'uppercase', cursor: 'pointer' }}>Affix</button>
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -1033,7 +1049,8 @@ const Onboarding = ({ onComplete }) => {
                     const alreadyUsed = formData.prompts.some((pr, si) => si !== promptPickerSlot && pr?.question === promptText);
                     
                     return (
-                      <button key={i} className={alreadyUsed ? "" : "tactile-btn"} disabled={alreadyUsed} onClick={() => { const updated = [...formData.prompts]; updated[promptPickerSlot] = { question: promptText }; updateField('prompts', updated); setPromptPickerSlot(null); }} style={{ width: '100%', textAlign: 'left', padding: '14px 18px', borderRadius: '10px', border: `1px solid ${theme.borderDark}`, backgroundColor: 'transparent', cursor: alreadyUsed ? 'not-allowed' : 'pointer', fontFamily: TYPEWRITER_FONT, fontSize: '15px', color: alreadyUsed ? theme.borderDark : theme.ink, opacity: alreadyUsed ? 0.5 : 1 }}>
+                      <button key={i} className={alreadyUsed ? "" : "tactile-btn"} disabled={alreadyUsed} onClick={() => { const updated = [...formData.prompts]; updated[promptPickerSlot] = { ...updated[promptPickerSlot], question: promptText }; updateField('prompts', updated); setPromptPickerSlot(null); }}
+                      style={{ width: '100%', textAlign: 'left', padding: '14px 18px', borderRadius: '10px', border: `1px solid ${theme.borderDark}`, backgroundColor: 'transparent', cursor: alreadyUsed ? 'not-allowed' : 'pointer', fontFamily: TYPEWRITER_FONT, fontSize: '15px', color: alreadyUsed ? theme.borderDark : theme.ink, opacity: alreadyUsed ? 0.5 : 1 }}>
                         "{promptText}"
                       </button>
                     );

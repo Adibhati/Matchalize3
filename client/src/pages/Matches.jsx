@@ -7,7 +7,26 @@ import { useAuth } from '../utils/AuthContext';
 import socket from '../utils/socket';
 import { theme as design } from '../utils/theme';
 import { SkeletonBox } from '../components/Skeleton';
-import { Heart, MoreVertical, Search } from 'lucide-react';
+import { Heart, MoreVertical, Search, X } from 'lucide-react';
+import { triggerHaptic } from '../utils/haptics';
+
+/* Locked tokens — same family as ProfileCard */
+const t = {
+  desk: '#ece4d4',
+  paper: '#fdfbf7',
+  card: '#fffdf8',
+  surfaceAlt: '#f4f1ea',
+  lineDark: '#d4c5a9',
+  ink: '#1a1a1a',
+  inkSoft: '#4a4a4a',
+  inkMuted: '#8c8275',
+  accent: '#8b4513',
+  crimson: '#8b1a1a',
+  fontDisplay: design?.font?.heading || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  fontType: "'Special Elite', 'Courier New', monospace",
+  grain: design?.texture?.grain || '',
+};
 
 const Matches = ({ onOpenChat }) => {
   const queryClient = useQueryClient();
@@ -111,17 +130,14 @@ const Matches = ({ onOpenChat }) => {
 
   if (isLoading) {
     return (
-      <div style={{ flex: 1, overflowY: 'auto', backgroundColor: design.color.bg, padding: '16px 24px' }}>
-        <h2 style={{ fontFamily: design.font.display, fontSize: '24px', color: design.color.ink, marginBottom: '24px', marginTop: '8px' }}>
-          Your Connections
-        </h2>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: '16px 14px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {[0, 1, 2].map((i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '16px', backgroundColor: design.color.surface, border: `1px solid ${design.color.borderDark}`, borderRadius: '12px', padding: '16px', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
-              <SkeletonBox width="60px" height="60px" radius="12px" />
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <SkeletonBox width="120px" height="18px" />
-                <SkeletonBox width="180px" height="14px" />
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 14, backgroundColor: t.paper, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 18, padding: 16, boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)' }}>
+              <SkeletonBox width={56} height={56} radius="50%" />
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <SkeletonBox width={120} height={14} />
+                <SkeletonBox width={180} height={11} />
               </div>
             </div>
           ))}
@@ -134,216 +150,225 @@ const Matches = ({ onOpenChat }) => {
     return (
       <div style={{
         flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        flexDirection: 'column', gap: '16px', padding: '32px', backgroundColor: design.color.bg
+        flexDirection: 'column', gap: 16, padding: 32, backgroundColor: t.desk,
       }}>
-        <div style={{ width: '72px', height: '72px', borderRadius: design.radius.md, backgroundColor: design.color.surface, border: `1px solid ${design.color.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 24px rgba(139,69,19,0.08)' }}>
-          <Heart size={32} style={{ opacity: 0.4, color: design.color.accent || '#8b4513' }} />
+        <div style={{ width: 48, height: 48, borderRadius: 12, backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Heart size={18} strokeWidth={2} color={t.accent} />
         </div>
-        <p style={{ fontFamily: design.font.display, fontSize: '22px', color: design.color.ink, textAlign: 'center', margin: 0, fontWeight: 700 }}>
+        <p style={{ fontFamily: t.fontDisplay, fontSize: 22, color: t.ink, textAlign: 'center', margin: 0, fontWeight: 800, letterSpacing: '-0.02em' }}>
           No connections yet
         </p>
-        <p style={{ fontFamily: design.font.body, fontSize: '14px', color: design.color.inkMuted, textAlign: 'center', maxWidth: '280px', margin: 0, lineHeight: 1.5 }}>
-          Say hello 👋 — start exploring and leave a flower to begin your story.
+        <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 450, color: t.inkMuted, textAlign: 'center', maxWidth: 280, margin: 0, lineHeight: 1.6 }}>
+          Start exploring and leave a flower to begin your story.
         </p>
       </div>
     );
   }
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', backgroundColor: design.color.bg, padding: '16px 24px' }}>
-      {/* GPU-Promoted Zero-Lag Card & Input Interactions */}
+    <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: '16px 14px' }}>
+      {/* Grain film */}
+      <div aria-hidden="true" style={{ position: 'fixed', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 0 }} />
+
       <style>{`
         .match-card {
-          will-change: transform, box-shadow;
-          transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.2s ease, background-color 0.2s ease;
+          will-change: transform;
+          transition: transform 0.15s ease-out, box-shadow 0.2s ease;
           contain: layout style;
         }
-
         @media (hover: hover) {
           .match-card:hover {
-            transform: translate3d(0, -3px, 0) scale3d(1.01, 1.01, 1);
-            box-shadow: 0 10px 24px rgba(26, 26, 26, 0.08), 0 2px 8px rgba(139, 69, 19, 0.06);
-            border-color: ${design.color.accent || '#8b4513'};
-            z-index: 2;
+            transform: translateY(-2px);
+            box-shadow: 0 18px 40px rgba(88,63,30,0.2), 0 4px 12px rgba(88,63,30,0.1);
           }
         }
-
         .match-card:active {
-          transform: scale3d(0.985, 0.985, 1) translate3d(0, 0, 0) !important;
-          transition: transform 0.08s cubic-bezier(0, 0, 0.2, 1) !important;
+          transform: scale(0.98) !important;
+          transition: transform 0.08s ease-out !important;
         }
-
-        .search-container {
-          transition: border-color 0.2s ease, box-shadow 0.2s ease;
-        }
-
         @media (prefers-reduced-motion: reduce) {
-          .match-card, .search-container {
-            transition: none !important;
-            transform: none !important;
-          }
+          .match-card { transition: none !important; transform: none !important; }
         }
       `}</style>
 
-      <h2 style={{ fontFamily: design.font.display, fontSize: '26px', color: design.color.ink, marginBottom: '20px', marginTop: '8px', fontWeight: 700, letterSpacing: '-0.02em' }}>
-        Your Connections
-      </h2>
+      <div style={{ position: 'relative', zIndex: 1 }}>
+        <h2 style={{ fontFamily: t.fontDisplay, fontSize: 24, color: t.ink, marginBottom: 16, marginTop: 4, fontWeight: 800, letterSpacing: '-0.02em' }}>
+          Your Connections
+        </h2>
 
-      {/* Accessible Search Input with Tactile Focus State */}
-      <div 
-        className="search-container"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-          padding: '0 16px',
-          marginBottom: '20px',
-          backgroundColor: design.color.surface,
-          border: `1px solid ${isFocused ? (design.color.accent || '#8b4513') : design.color.border}`,
-          borderRadius: design.radius.md,
-          boxShadow: isFocused ? '0 4px 12px rgba(139, 69, 19, 0.08)' : '0 2px 4px rgba(0,0,0,0.02)',
-        }}
-      >
-        <Search size={18} color={isFocused ? (design.color.accent || '#8b4513') : design.color.inkMuted} style={{ transition: 'color 0.2s ease' }} />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
-          placeholder="Search connections..."
-          aria-label="Search connections"
+        {/* Search — box-tier input */}
+        <div
           style={{
-            width: '100%',
-            boxSizing: 'border-box',
-            padding: '14px 0',
-            backgroundColor: 'transparent',
-            border: 'none',
-            fontFamily: design.font.body,
-            fontSize: '14px',
-            color: design.color.ink,
-            outline: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '0 14px',
+            marginBottom: 18,
+            backgroundColor: t.paper,
+            border: `1px solid ${isFocused ? 'rgba(139,69,19,0.45)' : 'rgba(212,197,169,0.7)'}`,
+            borderRadius: 6,
+            transition: 'border-color 0.2s ease',
           }}
-        />
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        {filtered.map((match) => {
-          const user = match.user;
-          if (!user) return null;
-
-          const lastMessage = match.lastMessage;
-          const unread =
-            match.yourTurn ||
-            (lastMessage && lastMessage.senderId && lastMessage.senderId !== myId && !lastMessage.readAt);
-          const isOpen = openMenuId === match._id;
-
-          return (
-            <div
-              key={match._id}
-              className="match-card"
-              role="button"
-              tabIndex={0}
-              onClick={() => onOpenChat(match)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onOpenChat(match);
-                }
-              }}
-              style={{
-                position: 'relative',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '16px',
-                backgroundColor: unread ? 'rgba(139, 69, 19, 0.03)' : design.color.surface,
-                border: `1px solid ${unread ? 'rgba(139, 69, 19, 0.3)' : design.color.borderDark}`,
-                borderRadius: '12px',
-                padding: '14px 16px',
-                boxShadow: unread ? '0 4px 12px rgba(139, 69, 19, 0.06)' : '0 2px 6px rgba(0,0,0,0.03)',
-                cursor: 'pointer',
-              }}
+        >
+          <Search size={14} strokeWidth={2} color={isFocused ? t.accent : t.inkMuted} style={{ transition: 'color 0.2s ease', flexShrink: 0 }} />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
+            placeholder="Search connections..."
+            aria-label="Search connections"
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              padding: '12px 0',
+              backgroundColor: 'transparent',
+              border: 'none',
+              fontFamily: t.fontBody,
+              fontSize: 13.5,
+              color: t.ink,
+              outline: 'none',
+            }}
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => { triggerHaptic('light'); setSearch(''); }}
+              aria-label="Clear search"
+              style={{ background: 'none', border: 'none', color: t.inkMuted, cursor: 'pointer', display: 'flex', padding: 4, flexShrink: 0 }}
             >
-              <img
-                src={user.photos?.[0] || 'https://via.placeholder.com/80'}
-                alt={user.name}
-                loading="lazy"
-                decoding="async"
-                style={{ width: '56px', height: '56px', borderRadius: design.radius.md, objectFit: 'cover', border: `1px solid ${design.color.border}`, flexShrink: 0 }}
-              />
-              
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <p style={{ fontFamily: design.font.display, fontSize: '16px', fontWeight: unread ? 700 : 600, color: design.color.ink, margin: 0, letterSpacing: '-0.01em' }}>
-                    {user.name}, {user.age}
+              <X size={14} strokeWidth={2} />
+            </button>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {filtered.map((match) => {
+            const user = match.user;
+            if (!user) return null;
+
+            const lastMessage = match.lastMessage;
+            const unread =
+              match.yourTurn ||
+              (lastMessage && lastMessage.senderId && lastMessage.senderId !== myId && !lastMessage.readAt);
+            const isOpen = openMenuId === match._id;
+
+            const lastIsMedia = lastMessage && (lastMessage.type === 'image' || lastMessage.type === 'audio');
+
+            return (
+              <div
+                key={match._id}
+                className="match-card"
+                role="button"
+                tabIndex={0}
+                onClick={() => { triggerHaptic('light'); onOpenChat(match); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onOpenChat(match);
+                  }
+                }}
+                style={{
+                  position: 'relative',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 14,
+                  backgroundColor: unread ? t.card : t.paper,
+                  border: `1px solid ${unread ? 'rgba(139,69,19,0.35)' : 'rgba(212,197,169,0.7)'}`,
+                  borderRadius: 18,
+                  padding: '14px 16px',
+                  boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)',
+                  cursor: 'pointer',
+                }}
+              >
+                {/* Avatar — circular with hairline ring, matching every other avatar in the app */}
+                <img
+                  src={user.photos?.[0] || 'https://via.placeholder.com/80'}
+                  alt={user.name}
+                  loading="lazy"
+                  decoding="async"
+                  style={{ width: 56, height: 56, borderRadius: '50%', objectFit: 'cover', border: '1px solid rgba(212,197,169,0.9)', backgroundColor: t.surfaceAlt, flexShrink: 0 }}
+                />
+
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <p style={{ fontFamily: t.fontBody, fontSize: 15, fontWeight: unread ? 700 : 600, color: t.ink, margin: 0 }}>
+                      {user.name}{user.age ? <span style={{ fontWeight: 400, color: t.inkMuted }}>, {user.age}</span> : null}
+                    </p>
+                    {unread && (
+                      <span
+                        aria-label="Unread message"
+                        style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: t.crimson, flexShrink: 0, boxShadow: '0 0 0 3px rgba(139,26,26,0.12)' }}
+                      />
+                    )}
+                  </div>
+                  <p style={{ fontFamily: t.fontType, fontSize: 12.5, color: unread ? t.inkSoft : t.inkMuted, margin: '4px 0 0 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: unread ? 700 : 400 }}>
+                    {lastMessage
+                      ? lastIsMedia
+                        ? (lastMessage.type === 'image' ? 'Sent a photograph' : 'Sent a voice note')
+                        : lastMessage.text
+                      : 'Say hello'}
                   </p>
-                  {unread && (
-                    <span 
-                      aria-label="Unread message"
-                      style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: design.color.crimson, flexShrink: 0, boxShadow: '0 0 0 3px rgba(185, 28, 28, 0.15)' }} 
-                    />
-                  )}
                 </div>
-                <p style={{ fontFamily: design.font.body, fontSize: '13px', color: unread ? design.color.ink : design.color.inkMuted, margin: '4px 0 0 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: unread ? 600 : 400 }}>
-                  {lastMessage ? lastMessage.text : 'Say hello 👋'}
-                </p>
-              </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px', flexShrink: 0 }}>
-                <span style={{ fontFamily: design.font.body, fontSize: '11px', color: unread ? design.color.accent : design.color.inkMuted, fontWeight: unread ? 600 : 400, whiteSpace: 'nowrap' }}>
-                  {lastMessage ? fmtTime(lastMessage.createdAt) : `Matched ${timeAgo(match.createdAt)}`}
-                </span>
-                <button
-                  type="button"
-                  onClick={(e) => { 
-                    e.stopPropagation(); 
-                    setOpenMenuId(isOpen ? null : match._id); 
-                  }}
-                  style={{ background: 'none', border: 'none', color: design.color.inkMuted, cursor: 'pointer', padding: '4px', margin: '-4px', display: 'flex', alignItems: 'center', borderRadius: '4px' }}
-                  aria-label="More options"
-                  title="More options"
-                >
-                  <MoreVertical size={18} />
-                </button>
-              </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
+                  <span style={{ fontFamily: t.fontType, fontSize: 10.5, color: unread ? t.accent : t.inkMuted, fontWeight: unread ? 700 : 400, whiteSpace: 'nowrap' }}>
+                    {lastMessage ? fmtTime(lastMessage.createdAt) : `Matched ${timeAgo(match.createdAt)}`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      triggerHaptic('light');
+                      setOpenMenuId(isOpen ? null : match._id);
+                    }}
+                    style={{ background: 'none', border: 'none', color: t.inkMuted, cursor: 'pointer', padding: 4, margin: -4, display: 'flex', alignItems: 'center', borderRadius: 4 }}
+                    aria-label="More options"
+                    title="More options"
+                  >
+                    <MoreVertical size={16} strokeWidth={2} />
+                  </button>
+                </div>
 
-              {/* AnimatePresence restores smooth exit transitions for the contextual menu */}
-              <AnimatePresence>
-                {isOpen && (
-                  <>
-                    <div 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOpenMenuId(null);
-                      }} 
-                      style={{ position: 'fixed', inset: 0, zIndex: 90, cursor: 'default' }} 
-                    />
-                    <motion.div
-                      initial={{ opacity: 0, scale: 0.95, y: -6 }}
-                      animate={{ opacity: 1, scale: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.95, y: -6 }}
-                      transition={{ duration: 0.15, ease: 'easeOut' }}
-                      style={{ position: 'absolute', top: '48px', right: '16px', backgroundColor: design.color.surface, border: `1px solid ${design.color.border}`, borderRadius: design.radius.md, boxShadow: '0 12px 32px rgba(0,0,0,0.18)', zIndex: 100, overflow: 'hidden', minWidth: '160px' }}
-                    >
-                      <button
-                        type="button"
+                {/* Contextual menu */}
+                <AnimatePresence>
+                  {isOpen && (
+                    <>
+                      <div
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleUnmatch(match._id);
+                          setOpenMenuId(null);
                         }}
-                        style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%', padding: '12px 16px', background: 'none', border: 'none', fontFamily: design.font.body, fontSize: '13px', fontWeight: 600, color: design.color.crimson, cursor: 'pointer', textAlign: 'left', transition: 'background-color 0.15s ease' }}
-                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(185, 28, 28, 0.05)'}
-                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        style={{ position: 'fixed', inset: 0, zIndex: 90, cursor: 'default' }}
+                      />
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.96, y: -6 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.96, y: -6 }}
+                        transition={{ duration: 0.15, ease: 'easeOut' }}
+                        style={{ position: 'absolute', top: 48, right: 16, backgroundColor: t.paper, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 8, boxShadow: '0 12px 28px rgba(88,63,30,0.22)', zIndex: 100, overflow: 'hidden', minWidth: 150, padding: 6 }}
                       >
-                        Unmatch
-                      </button>
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
-            </div>
-          );
-        })}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleUnmatch(match._id);
+                          }}
+                          style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 12px', background: 'none', border: 'none', fontFamily: t.fontBody, fontSize: 12, fontWeight: 800, color: t.crimson, cursor: 'pointer', textAlign: 'left', borderRadius: 5, transition: 'background-color 0.15s ease' }}
+                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(139, 26, 26, 0.05)'}
+                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                          Unmatch
+                        </button>
+                      </motion.div>
+                    </>
+                  )}
+                </AnimatePresence>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

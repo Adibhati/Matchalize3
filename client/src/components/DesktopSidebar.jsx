@@ -4,10 +4,24 @@ import { Compass, Heart, User, LogOut, Bell } from 'lucide-react';
 import { theme as design } from '../utils/theme';
 import { triggerHaptic } from '../utils/haptics';
 
+/* Locked tokens — same family as ProfileCard */
+const t = {
+  paper: '#fdfbf7',
+  card: '#fffdf8',
+  surfaceAlt: '#f4f1ea',
+  lineDark: '#d4c5a9',
+  ink: '#1a1a1a',
+  inkMuted: '#8c8275',
+  accent: '#8b4513',
+  crimson: '#8b1a1a',
+  fontDisplay: design?.font?.heading || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+};
+
 const tabs = [
-  { key: 'discover', label: 'Discover', subtext: 'Archive', Icon: Compass },
-  { key: 'matches', label: 'Matches', subtext: 'Synergy', Icon: Heart },
-  { key: 'profile', label: 'Profile', subtext: 'Subject', Icon: User },
+  { key: 'discover', label: 'Discover', Icon: Compass },
+  { key: 'matches', label: 'Matches', Icon: Heart },
+  { key: 'profile', label: 'Profile', Icon: User },
 ];
 
 const DesktopSidebar = ({ activeTab, onTabChange, matchBadge = 0, onSignOut, onOpenNotifications }) => {
@@ -19,18 +33,47 @@ const DesktopSidebar = ({ activeTab, onTabChange, matchBadge = 0, onSignOut, onO
   };
 
   return (
-    <aside style={styles.sidebar}>
-      {/* Paper Grain Texture */}
-      <div aria-hidden="true" style={styles.grain} />
+    /* Floating panel: the parent shell should paint the desk behind it — backgroundColor '#ece4d4' */
+    <aside
+      style={{
+        width: 260,
+        height: 'calc(100dvh - 32px)',
+        margin: 16,
+        backgroundColor: t.paper,
+        border: '1px solid rgba(212,197,169,0.7)',
+        borderRadius: 18,
+        boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)',
+        display: 'flex',
+        flexDirection: 'column',
+        position: 'relative',
+        flexShrink: 0,
+        overflow: 'hidden',
+        boxSizing: 'border-box',
+        zIndex: 100,
+      }}
+    >
+      {/* Grain — same film, same strength as the card */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          backgroundImage: `url("${design?.texture?.grain || ''}")`,
+          mixBlendMode: 'multiply',
+          opacity: 0.3,
+          pointerEvents: 'none',
+          zIndex: 1,
+        }}
+      />
 
-      {/* Logo / Header Area */}
-      <div style={styles.header}>
-        <h1 style={styles.logo}>matchalize</h1>
-        <p style={styles.tagline}>Campus Ledger</p>
+      {/* Header */}
+      <div style={{ padding: '22px 20px 18px', borderBottom: '1px solid rgba(212,197,169,0.7)', position: 'relative', zIndex: 2 }}>
+        <h1 style={{ fontFamily: t.fontDisplay, fontSize: 26, fontWeight: 900, color: t.ink, margin: 0, letterSpacing: '-0.02em', lineHeight: 1 }}>matchalize</h1>
+        <p style={{ fontFamily: t.fontBody, fontSize: 9.5, fontWeight: 800, color: t.inkMuted, margin: '8px 0 0 0', letterSpacing: '1.5px', textTransform: 'uppercase' }}>Campus Ledger</p>
       </div>
 
-      {/* Navigation Items */}
-      <nav style={styles.nav}>
+      {/* Navigation */}
+      <nav style={{ flex: 1, padding: '16px 12px', display: 'flex', flexDirection: 'column', gap: 8, position: 'relative', zIndex: 2 }}>
         {tabs.map((tab) => {
           const isActive = activeTab === tab.key;
           const showBadge = tab.key === 'matches' && matchBadge > 0;
@@ -39,40 +82,31 @@ const DesktopSidebar = ({ activeTab, onTabChange, matchBadge = 0, onSignOut, onO
             <motion.button
               key={tab.key}
               onClick={() => handleTabClick(tab.key)}
-              whileHover={{ x: 4 }}
+              whileHover={isActive ? {} : { x: 3 }}
               whileTap={{ scale: 0.98 }}
               style={{
-                ...styles.navItem,
-                backgroundColor: isActive ? 'rgba(139, 69, 19, 0.08)' : 'transparent',
-                borderLeft: isActive ? `3px solid ${design.color.crimson}` : '3px solid transparent',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '11px 14px',
+                borderRadius: 12,
+                border: isActive ? '1px solid rgba(212,197,169,0.9)' : '1px solid transparent',
+                backgroundColor: isActive ? t.card : 'transparent',
+                boxShadow: isActive ? '0 6px 16px rgba(88,63,30,0.12)' : 'none',
+                cursor: 'pointer',
+                width: '100%',
+                textAlign: 'left',
               }}
             >
-              <div style={styles.navItemLeft}>
-                <tab.Icon 
-                  size={20} 
-                  color={isActive ? design.color.crimson : design.color.inkMuted} 
-                  strokeWidth={isActive ? 2.5 : 2} 
-                />
-                <div style={styles.navText}>
-                  <span style={{ 
-                    ...styles.navLabel, 
-                    color: isActive ? design.color.crimson : design.color.ink,
-                    fontWeight: isActive ? 700 : 500 
-                  }}>
-                    {tab.label}
-                  </span>
-                  <span style={{ ...styles.navSubtext, opacity: isActive ? 0.8 : 0.5 }}>
-                    {tab.subtext}
-                  </span>
-                </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <tab.Icon size={18} color={isActive ? t.crimson : t.inkMuted} strokeWidth={isActive ? 2.5 : 2} />
+                <span style={{ fontFamily: t.fontBody, fontSize: 13.5, letterSpacing: '0.3px', color: t.ink, fontWeight: isActive ? 700 : 500 }}>
+                  {tab.label}
+                </span>
               </div>
-              
+
               {showBadge && (
-                <motion.div 
-                  initial={{ scale: 0 }} 
-                  animate={{ scale: 1 }} 
-                  style={styles.badge}
-                >
+                <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} style={{ backgroundColor: t.crimson, color: '#fff', fontFamily: t.fontBody, fontSize: 10, fontWeight: 800, padding: '3px 8px', borderRadius: 999, minWidth: 20, textAlign: 'center', boxShadow: '0 2px 6px rgba(139,26,26,0.25)', fontVariantNumeric: 'tabular-nums' }}>
                   {matchBadge > 99 ? '99+' : matchBadge}
                 </motion.div>
               )}
@@ -81,148 +115,27 @@ const DesktopSidebar = ({ activeTab, onTabChange, matchBadge = 0, onSignOut, onO
         })}
       </nav>
 
-      {/* Footer / Actions */}
-      <div style={styles.footer}>
-        <button 
-          onClick={onOpenNotifications}
-          style={styles.iconBtn}
+      {/* Footer actions */}
+      <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(212,197,169,0.7)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', zIndex: 2 }}>
+        <motion.button
+          onClick={() => { triggerHaptic('light'); onOpenNotifications(); }}
+          whileTap={{ scale: 0.94 }}
           title="Letters Received"
+          style={{ backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 12, width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
         >
-          <Bell size={20} color={design.color.inkMuted} />
-        </button>
-        <button 
-          onClick={onSignOut}
-          style={styles.iconBtn}
+          <Bell size={18} color={t.inkMuted} strokeWidth={2} />
+        </motion.button>
+        <motion.button
+          onClick={() => { triggerHaptic('light'); onSignOut(); }}
+          whileTap={{ scale: 0.94 }}
           title="Log Out"
+          style={{ backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 12, width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
         >
-          <LogOut size={20} color={design.color.inkMuted} />
-        </button>
+          <LogOut size={18} color={t.inkMuted} strokeWidth={2} />
+        </motion.button>
       </div>
     </aside>
   );
-};
-
-const styles = {
-  sidebar: {
-    width: '260px',
-    height: '100dvh',
-    backgroundColor: design.color.paper,
-    borderRight: `1px solid ${design.color.borderDark}`,
-    display: 'flex',
-    flexDirection: 'column',
-    position: 'relative',
-    flexShrink: 0,
-    boxShadow: '4px 0 24px rgba(0,0,0,0.03)',
-    zIndex: 100,
-  },
-  grain: {
-    position: 'absolute',
-    inset: 0,
-    backgroundImage: `url("${design?.texture?.grain || ''}")`,
-    mixBlendMode: 'multiply',
-    opacity: 0.6,
-    pointerEvents: 'none',
-    zIndex: 1,
-  },
-  header: {
-    padding: '32px 24px 24px',
-    borderBottom: `1px solid ${design.color.border}`,
-    position: 'relative',
-    zIndex: 2,
-  },
-  logo: {
-    fontFamily: "'Playfair Display', serif",
-    fontSize: '28px',
-    fontWeight: 900,
-    color: design.color.ink,
-    margin: 0,
-    letterSpacing: '-0.03em',
-    textTransform: 'lowercase',
-  },
-  tagline: {
-    fontFamily: "'Inter', sans-serif",
-    fontSize: '11px',
-    fontWeight: 600,
-    color: design.color.inkMuted,
-    margin: '4px 0 0 0',
-    letterSpacing: '2px',
-    textTransform: 'uppercase',
-  },
-  nav: {
-    flex: 1,
-    padding: '24px 12px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-    position: 'relative',
-    zIndex: 2,
-  },
-  navItem: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '12px 16px',
-    borderRadius: '8px',
-    border: 'none',
-    cursor: 'pointer',
-    transition: 'background-color 0.2s ease',
-    width: '100%',
-    textAlign: 'left',
-  },
-  navItemLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '14px',
-  },
-  navText: {
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  navLabel: {
-    fontFamily: "'Inter', sans-serif",
-    fontSize: '14px',
-    letterSpacing: '0.5px',
-  },
-  navSubtext: {
-    fontFamily: "'Playfair Display', serif",
-    fontSize: '11px',
-    fontStyle: 'italic',
-    color: design.color.accent,
-    marginTop: '2px',
-  },
-  badge: {
-    backgroundColor: design.color.crimson,
-    color: '#fff',
-    fontFamily: "'Inter', sans-serif",
-    fontSize: '10px',
-    fontWeight: 800,
-    padding: '2px 7px',
-    borderRadius: '10px',
-    minWidth: '20px',
-    textAlign: 'center',
-    boxShadow: '0 2px 4px rgba(139, 26, 26, 0.3)',
-  },
-  footer: {
-    padding: '20px 24px',
-    borderTop: `1px solid ${design.color.border}`,
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    position: 'relative',
-    zIndex: 2,
-  },
-  iconBtn: {
-    background: 'none',
-    border: `1px solid ${design.color.border}`,
-    borderRadius: '8px',
-    width: '40px',
-    height: '40px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    cursor: 'pointer',
-    transition: 'all 0.2s ease',
-  }
 };
 
 export default DesktopSidebar;

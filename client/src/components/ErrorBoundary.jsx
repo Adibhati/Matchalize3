@@ -3,17 +3,20 @@ import * as Sentry from '@sentry/react';
 import { theme as design } from '../utils/theme';
 import { FileWarning, RotateCw } from 'lucide-react';
 
-/* ==================================================================
-   ARCHIVAL THEME SYSTEM (Localized for crash resilience)
-================================================================== */
-const theme = {
+/* Locked tokens — same family as ProfileCard */
+const t = {
+  desk: '#ece4d4',
   paper: '#fdfbf7',
   surfaceAlt: '#f4f1ea',
-  borderDark: '#d4c5a9',
+  lineDark: '#d4c5a9',
   ink: '#1a1a1a',
+  inkSoft: '#4a4a4a',
   inkMuted: '#8c8275',
+  accent: '#8b4513',
   crimson: '#8b1a1a',
-  shadowWarm: 'rgba(139, 69, 19, 0.12)',
+  fontDisplay: design?.font?.heading || design?.font?.display || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  fontType: "'Special Elite', 'Courier New', monospace",
 };
 
 class ErrorBoundary extends React.Component {
@@ -42,106 +45,125 @@ class ErrorBoundary extends React.Component {
           minHeight: '100dvh',
           width: '100%',
           display: 'flex',
-          flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          padding: '32px',
-          backgroundColor: theme.paper,
-          position: 'relative',
-          overflow: 'hidden',
-          contain: 'strict',
+          padding: '16px',
+          backgroundColor: t.desk,
+          boxSizing: 'border-box',
         }}>
-          {/* GPU Promoted Zero-Lag Animations & Tactile Physics */}
           <style>{`
             @keyframes errorFadeUp {
-              from { opacity: 0; transform: translate3d(0, 16px, 0); filter: blur(4px); }
-              to   { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0px); }
+              from { opacity: 0; transform: translate3d(0, 16px, 0); }
+              to   { opacity: 1; transform: translate3d(0, 0, 0); }
             }
             .error-anim {
-              animation: errorFadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+              animation: errorFadeUp 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
               will-change: transform, opacity;
             }
-            .tactile-btn {
-              transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.2s ease;
-              will-change: transform;
-            }
-            @media (hover: hover) {
-              .tactile-btn:hover {
-                transform: translate3d(0, -2px, 0) scale3d(1.02, 1.02, 1);
-                box-shadow: 0 8px 24px rgba(139, 26, 26, 0.3);
-              }
-            }
-            .tactile-btn:active {
-              transform: scale3d(0.96, 0.96, 1) translate3d(0, 0, 0) !important;
-              transition: transform 0.08s cubic-bezier(0, 0, 0.2, 1) !important;
-              box-shadow: 0 2px 8px rgba(139, 26, 26, 0.15) !important;
-            }
+            .tactile-btn { transition: transform 0.15s ease-out; will-change: transform; }
+            .tactile-btn:active { transform: scale(0.96) !important; }
             @media (prefers-reduced-motion: reduce) {
               .error-anim { animation: none !important; opacity: 1 !important; transform: none !important; }
               .tactile-btn { transition: none !important; transform: none !important; }
             }
           `}</style>
 
-          {/* Cinematic Film Grain Overlay */}
+          {/* Grain film — same strength as every other surface */}
           <div
             aria-hidden="true"
             style={{
-              position: 'absolute',
+              position: 'fixed',
               inset: 0,
               backgroundImage: `url("${design?.texture?.grain || ''}")`,
               mixBlendMode: 'multiply',
-              opacity: 0.85,
+              opacity: 0.3,
               pointerEvents: 'none',
               zIndex: 1,
             }}
           />
 
-          <div className="error-anim" style={{ 
-            position: 'relative', 
-            zIndex: 2, 
-            display: 'flex', 
-            flexDirection: 'column', 
-            alignItems: 'center',
-            textAlign: 'center',
-            maxWidth: '400px'
-          }}>
+          {/* The floating paper panel */}
+          <div
+            className="error-anim"
+            style={{
+              position: 'relative',
+              zIndex: 2,
+              maxWidth: 380,
+              width: '100%',
+              backgroundColor: t.paper,
+              border: '1px solid rgba(212,197,169,0.7)',
+              borderRadius: 18,
+              boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)',
+              padding: '32px 28px 28px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              textAlign: 'center',
+              boxSizing: 'border-box',
+            }}
+          >
+            {/* Icon in the standard 12px-radius tile */}
             <div style={{
-              width: '64px',
-              height: '64px',
-              borderRadius: '16px',
-              backgroundColor: 'rgba(139, 26, 26, 0.08)',
-              border: `1.5px dashed ${theme.crimson}`,
+              width: 48,
+              height: 48,
+              borderRadius: 12,
+              backgroundColor: t.surfaceAlt,
+              border: '1px solid rgba(212,197,169,0.7)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              marginBottom: '24px'
+              marginBottom: 20,
             }}>
-              <FileWarning size={32} color={theme.crimson} strokeWidth={1.5} />
+              <FileWarning size={18} color={t.accent} strokeWidth={2} />
             </div>
 
-            <h1 style={{ 
-              fontFamily: design?.font?.display || "'Playfair Display', serif", 
-              fontSize: '32px', 
+            <h1 style={{
+              fontFamily: t.fontDisplay,
+              fontSize: 30,
               fontWeight: 800,
-              color: theme.ink, 
-              marginBottom: '12px',
+              color: t.ink,
+              margin: 0,
               letterSpacing: '-0.02em',
-              lineHeight: 1.1
+              lineHeight: 1.1,
             }}>
               Ink Spilled
             </h1>
-            
-            <p style={{ 
-              fontFamily: design?.font?.body || "'Inter', sans-serif",
-              fontSize: '15px', 
-              color: theme.inkMuted, 
-              marginBottom: '32px', 
-              lineHeight: 1.6 
+
+            <p style={{
+              fontFamily: t.fontBody,
+              fontSize: 14,
+              color: t.inkSoft,
+              margin: '12px 0 0 0',
+              lineHeight: 1.6,
             }}>
-              The archival ledger encountered an unexpected tear. 
-              Please refresh the page to restore your correspondence session.
+              Something tore in the archive. Refresh to restore your session.
             </p>
-            
+
+            {/* Findings-style error note — typewriter, hairline box */}
+            {this.state.error?.message && (
+              <div style={{
+                width: '100%',
+                marginTop: 18,
+                border: '1px solid rgba(139,69,19,0.3)',
+                borderRadius: 6,
+                backgroundColor: 'rgba(139,69,19,0.03)',
+                padding: '10px 12px',
+                boxSizing: 'border-box',
+              }}>
+                <p style={{
+                  fontFamily: t.fontType,
+                  fontSize: 11.5,
+                  color: t.inkMuted,
+                  margin: 0,
+                  lineHeight: 1.5,
+                  wordBreak: 'break-word',
+                }}>
+                  {this.state.error.message}
+                </p>
+              </div>
+            )}
+
+            {/* The one crimson moment — pill CTA */}
             <button
               className="tactile-btn"
               onClick={() => {
@@ -153,22 +175,23 @@ class ErrorBoundary extends React.Component {
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: '8px',
-                padding: '16px 24px',
-                backgroundColor: theme.crimson,
+                gap: 8,
+                marginTop: 24,
+                padding: '14px 26px',
+                backgroundColor: t.crimson,
                 color: '#ffffff',
                 border: 'none',
-                borderRadius: design?.radius?.md || '12px',
-                fontFamily: design?.font?.body || "'Inter', sans-serif",
-                fontSize: '13px',
+                borderRadius: 999,
+                fontFamily: t.fontBody,
+                fontSize: 11,
                 fontWeight: 800,
-                letterSpacing: '1px',
+                letterSpacing: '1.8px',
                 textTransform: 'uppercase',
                 cursor: 'pointer',
-                boxShadow: '0 4px 16px rgba(139, 26, 26, 0.25)'
+                boxShadow: '0 6px 18px rgba(139,26,26,0.28)',
               }}
             >
-              <RotateCw size={16} strokeWidth={2.5} />
+              <RotateCw size={14} strokeWidth={2.5} />
               Restore Ledger
             </button>
           </div>

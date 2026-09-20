@@ -25,7 +25,7 @@ export const discoverLimiter = rateLimit({
 // This allows a small group on shared Wi-Fi to make typos, but stops automated scripts dead.
 export const verifyOtpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 15,
+  max: Number(process.env.OTP_VERIFY_MAX) || 15,
   keyGenerator: (req) => req.ip,
   message: { 
     message: 'Too many verification attempts. Please wait 15 minutes before trying again.' 
@@ -37,7 +37,7 @@ export const verifyOtpLimiter = rateLimit({
 // Limit OTP requests by IP to prevent spamming across multiple emails
 export const otpIpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 10,
+  max: Number(process.env.OTP_IP_LIMIT_MAX) || 10,
   keyGenerator: (req) => req.ip,
   message: { message: 'Too many verification requests from this network. Please try again later.' },
   standardHeaders: true,

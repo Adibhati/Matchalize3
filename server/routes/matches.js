@@ -7,7 +7,6 @@ import Interaction from '../models/Interaction.js';
 import { sendPushNotification } from '../utils/push.js';
 import { addToQueue } from '../utils/queue.js';
 import { protect } from '../middleware/auth.js';
-import { areBlocked } from '../middleware/blockFilter.js';
 
 const router = express.Router();
 
@@ -51,7 +50,7 @@ router.get('/', protect, async (req, res) => {
             { $match: { $expr: { $eq: ['$matchId', '$$matchId'] } } },
             { $sort: { createdAt: -1 } },
             { $limit: 1 },
-            { $project: { text: 1, senderId: 1, createdAt: 1, readAt: 1 } }
+            { $project: { text: 1, senderId: 1, createdAt: 1, readAt: 1, type: 1, mediaUrl: 1 } }
           ],
           as: 'lastMessageArr'
         }
@@ -88,6 +87,18 @@ router.get('/', protect, async (req, res) => {
           lastMessage: '$lastMessageArr',
           originInteraction: 1,
           updatedAt: 1,
+          yourTurn: {
+             $cond: {
+               if: { $ifNull: ['$lastMessageArr.senderId', false] },
+               then: {
+                 $and: [
+                   { $ne: ['$lastMessageArr.senderId', userId] },
+                   { $eq: [{ $ifNull: ['$lastMessageArr.readAt', null] }, null] }
+                 ]
+               },
+               else: false
+             }
+           },
           sortDate: { $ifNull: ['$lastMessageArr.createdAt', '$updatedAt'] }
         }
       },

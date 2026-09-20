@@ -9,19 +9,23 @@ import ShadowbanBanner from '../components/ShadowbanBanner';
 import LearnMoreSheet from '../components/LearnMoreSheet';
 import { triggerHaptic } from '../utils/haptics';
 import { theme as design } from '../utils/theme';
-import { discoverStore, resetDiscoverStore } from '../utils/discoverStore';
+import { discoverStore, initDiscoverStore, saveDiscoverStore, resetDiscoverStore } from '../utils/discoverStore';
 import { RotateCw, Compass, AlertTriangle } from 'lucide-react';
 
-const theme = {
+/* Locked tokens — same family as ProfileCard */
+const t = {
+  desk: '#ece4d4',
   paper: '#fdfbf7',
-  surface: '#ffffff',
   surfaceAlt: '#f4f1ea',
-  border: '#e0d8c8',
-  borderDark: '#d4c5a9',
+  lineDark: '#d4c5a9',
   ink: '#1a1a1a',
   inkMuted: '#8c8275',
   accent: '#8b4513',
   crimson: '#8b1a1a',
+  fontDisplay: design?.font?.heading || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  fontType: "'Special Elite', 'Courier New', monospace",
+  grain: design?.texture?.grain || '',
 };
 
 const slideVariants = {
@@ -40,11 +44,11 @@ const slideVariants = {
   }),
 };
 
-const springTransition = { 
-  type: 'spring', 
-  stiffness: 300, 
-  damping: 30, 
-  mass: 1 
+const springTransition = {
+  type: 'spring',
+  stiffness: 300,
+  damping: 30,
+  mass: 1,
 };
 
 const Discover = ({ onOpenChat }) => {
@@ -55,7 +59,7 @@ const Discover = ({ onOpenChat }) => {
   const [fetchingMore, setFetchingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [slideDirection, setSlideDirection] = useState('up');
-  
+
   const [showAlignmentModal, setShowAlignmentModal] = useState(false);
   const [alignedProfile, setAlignedProfile] = useState(null);
 
@@ -76,6 +80,7 @@ const Discover = ({ onOpenChat }) => {
           const next = [...prev, ...newProfiles];
           discoverStore.profiles = next;
           discoverStore.hasMore = data.hasMore;
+          saveDiscoverStore();
           return next;
         });
       }
@@ -85,6 +90,7 @@ const Discover = ({ onOpenChat }) => {
         discoverStore.profiles = newProfiles;
         discoverStore.currentIndex = 0;
         discoverStore.hasMore = data.hasMore;
+        saveDiscoverStore();
       }
       setHasMore(data.hasMore);
     } catch (err) {
@@ -97,7 +103,10 @@ const Discover = ({ onOpenChat }) => {
   }, []);
 
   useEffect(() => {
-    if (discoverStore.profiles.length > 0) {
+    const userId = myUser?._id;
+    if (!userId) return;
+    const restored = initDiscoverStore(userId);
+    if (restored && discoverStore.profiles.length > 0) {
       setProfiles(discoverStore.profiles);
       setCurrentIndex(discoverStore.currentIndex);
       setHasMore(discoverStore.hasMore);
@@ -105,22 +114,21 @@ const Discover = ({ onOpenChat }) => {
       return;
     }
     fetchProfiles(false);
-  }, [fetchProfiles]);
+  }, [myUser?._id, fetchProfiles]);
 
   const handleNextProfile = useCallback((direction = 'up', isAction = false) => {
     if (direction === 'down') {
       if (currentIndex <= 0) return;
-      setCurrentIndex((prev) => {
-        const next = Math.max(0, prev - 1);
-        discoverStore.currentIndex = next;
-        return next;
-      });
+      const next = Math.max(0, currentIndex - 1);
+      setCurrentIndex(next);
+      discoverStore.currentIndex = next;
+      saveDiscoverStore();
       setSlideDirection('down');
       return;
     }
 
     if (currentIndex >= profiles.length) return;
-    
+
     setSlideDirection(direction);
 
     if (!isAction) {
@@ -131,12 +139,11 @@ const Discover = ({ onOpenChat }) => {
       }
     }
 
-    setCurrentIndex((prev) => {
-      const next = prev + 1;
-      discoverStore.currentIndex = next;
-      discoverStore.profiles = profiles;
-      return next;
-    });
+    const next = currentIndex + 1;
+    setCurrentIndex(next);
+    discoverStore.currentIndex = next;
+    discoverStore.profiles = profiles;
+    saveDiscoverStore();
 
     if (profiles.length - currentIndex <= 4 && hasMore && !fetchingMore) {
       fetchProfiles(true);
@@ -151,29 +158,29 @@ const Discover = ({ onOpenChat }) => {
       return;
     }
     const profile = profiles[currentIndex];
-    
+
     try {
-      if (action === 'like') { 
-        triggerHaptic('light'); 
+      if (action === 'like') {
+        triggerHaptic('light');
         const response = await api.post(`/discover/like/${profile._id}`, payload);
         if (response.matched) {
           setAlignedProfile({ ...response.user, matchId: response.matchId });
           setShowAlignmentModal(true);
         }
-      } 
-      else if (action === 'superlike') { 
-        triggerHaptic('heavy'); 
+      }
+      else if (action === 'superlike') {
+        triggerHaptic('heavy');
         const response = await api.post(`/discover/superlike/${profile._id}`, payload);
         if (response.matched) {
           setAlignedProfile({ ...response.user, matchId: response.matchId });
           setShowAlignmentModal(true);
         }
-      } 
-      else if (action === 'pass') { 
-        triggerHaptic('medium'); 
-        await api.post(`/discover/pass/${profile._id}`); 
       }
-      
+      else if (action === 'pass') {
+        triggerHaptic('medium');
+        await api.post(`/discover/pass/${profile._id}`);
+      }
+
       handleNextProfile('up', true);
 
     } catch (err) {
@@ -185,7 +192,7 @@ const Discover = ({ onOpenChat }) => {
 
   if (loading) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '12px' }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '12px', backgroundColor: t.desk }}>
         <ProfileCardSkeleton />
       </div>
     );
@@ -193,12 +200,14 @@ const Discover = ({ onOpenChat }) => {
 
   if (error && !loading) {
     return (
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', textAlign: 'center', width: '100%', color: theme.inkMuted, backgroundColor: theme.surfaceAlt }}>
-        <AlertTriangle size={48} strokeWidth={1.5} style={{ marginBottom: '16px', color: theme.crimson, opacity: 0.8 }} />
-        <h3 style={{ fontFamily: "'Playfair Display', serif", fontSize: '22px', color: theme.ink, marginBottom: '8px' }}>The Archive is Unreachable</h3>
-        <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', lineHeight: 1.6, maxWidth: '280px', marginBottom: '24px' }}>{error}</p>
-        <button onClick={() => fetchProfiles(false)} className="tactile-btn" style={{ padding: '12px 24px', borderRadius: '24px', backgroundColor: theme.accent, color: '#fff', border: 'none', fontWeight: 600, cursor: 'pointer', boxShadow: '0 4px 12px rgba(139, 69, 19, 0.2)', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-          <RotateCw size={18} /> Try Again
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', textAlign: 'center', width: '100%', backgroundColor: t.desk }}>
+        <div style={{ width: 48, height: 48, borderRadius: 12, backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
+          <AlertTriangle size={18} strokeWidth={2} color={t.crimson} />
+        </div>
+        <h3 style={{ fontFamily: t.fontDisplay, fontSize: 22, fontWeight: 800, color: t.ink, letterSpacing: '-0.02em', margin: '0 0 8px 0' }}>The Archive is Unreachable</h3>
+        <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 450, lineHeight: 1.6, maxWidth: 280, marginBottom: 24, color: t.inkMuted }}>{error}</p>
+        <button onClick={() => fetchProfiles(false)} className="tactile-btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '13px 24px', backgroundColor: t.crimson, color: '#fff', border: 'none', borderRadius: 999, fontFamily: t.fontBody, fontSize: 11, fontWeight: 800, letterSpacing: '1.8px', textTransform: 'uppercase', cursor: 'pointer', boxShadow: '0 6px 18px rgba(139,26,26,0.28)' }}>
+          <RotateCw size={14} strokeWidth={2.5} /> Try Again
         </button>
       </div>
     );
@@ -206,12 +215,14 @@ const Discover = ({ onOpenChat }) => {
 
   if (!profiles || profiles.length === 0 || currentIndex >= profiles.length) {
     return (
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', textAlign: 'center', width: '100%', color: theme.inkMuted, backgroundColor: theme.surfaceAlt }}>
-        <Compass size={48} strokeWidth={1.5} style={{ marginBottom: '16px', opacity: 0.6 }} />
-        <h3 style={{ fontFamily: "'Playfair Display', serif", fontSize: '22px', color: theme.ink, marginBottom: '8px' }}>The Archive is Quiet</h3>
-        <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', lineHeight: 1.6, maxWidth: '280px', marginBottom: '24px' }}>You've reviewed all available subjects at IIT Bombay for now. Check back later.</p>
-        <button onClick={() => fetchProfiles(false)} style={{ padding: '12px 24px', borderRadius: '24px', backgroundColor: theme.accent, color: '#fff', border: 'none', fontWeight: 600, cursor: 'pointer', boxShadow: '0 4px 12px rgba(139, 69, 19, 0.2)', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-          <RotateCw size={18} /> Refresh Archive
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', textAlign: 'center', width: '100%', backgroundColor: t.desk }}>
+        <div style={{ width: 48, height: 48, borderRadius: 12, backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
+          <Compass size={18} strokeWidth={2} color={t.accent} />
+        </div>
+        <h3 style={{ fontFamily: t.fontDisplay, fontSize: 22, fontWeight: 800, color: t.ink, letterSpacing: '-0.02em', margin: '0 0 8px 0' }}>The Archive is Quiet</h3>
+        <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 450, lineHeight: 1.6, maxWidth: 280, marginBottom: 24, color: t.inkMuted }}>You've reviewed everyone for now. Check back later.</p>
+        <button onClick={() => fetchProfiles(false)} className="tactile-btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '13px 24px', backgroundColor: t.crimson, color: '#fff', border: 'none', borderRadius: 999, fontFamily: t.fontBody, fontSize: 11, fontWeight: 800, letterSpacing: '1.8px', textTransform: 'uppercase', cursor: 'pointer', boxShadow: '0 6px 18px rgba(139,26,26,0.28)' }}>
+          <RotateCw size={14} strokeWidth={2.5} /> Refresh
         </button>
       </div>
     );
@@ -223,12 +234,13 @@ const Discover = ({ onOpenChat }) => {
 
       <style>{`
         .hide-scroll::-webkit-scrollbar { display: none; }
-        .tactile-btn:active { transform: scale(0.95); }
+        .tactile-btn { transition: transform 0.15s ease-out; will-change: transform; }
+        .tactile-btn:active { transform: scale(0.96) !important; }
       `}</style>
 
       <ShadowbanBanner score={shadowbanScore} onLearnMore={() => setShowLearnMore(true)} />
-      {showLearnMore && <LearnMoreSheet onClose={() => setShowLearnMore(false)} />}
-      
+      {showLearnMore && <LearnMoreSheet onClose={() => setShowLearnMore(true)} onClose={() => setShowLearnMore(false)} />}
+
       <div style={styles.stageContainer}>
         {/* Full width/height container. No overflow clipping here! */}
         <div style={{ position: 'relative', width: '100%', height: '100%' }}>
@@ -242,16 +254,16 @@ const Discover = ({ onOpenChat }) => {
                 animate="center"
                 exit="exit"
                 transition={springTransition}
-                style={{ 
-                  position: 'absolute', 
-                  inset: 0, 
-                  display: 'flex', flexDirection: 'column'
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex', flexDirection: 'column',
                 }}
               >
-                <ProfileCard 
-                  profile={profiles[currentIndex]} 
-                  onAction={handleAction} 
-                  onNavigate={handleNextProfile} 
+                <ProfileCard
+                  profile={profiles[currentIndex]}
+                  onAction={handleAction}
+                  onNavigate={handleNextProfile}
                 />
               </motion.div>
             )}
@@ -262,23 +274,38 @@ const Discover = ({ onOpenChat }) => {
       <AnimatePresence>
         {showAlignmentModal && alignedProfile && (
           <>
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(10, 8, 6, 0.85)', backdropFilter: 'blur(8px)', zIndex: 99998 }}
+              transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+              style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(28,19,10,0.72)', zIndex: 99998 }}
               onClick={() => { setShowAlignmentModal(false); setAlignedProfile(null); }}
             />
             <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.9, opacity: 0, y: 20 }} transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '90%', maxWidth: '360px', backgroundColor: '#fdfbf7', backgroundImage: `url("${design.texture.grain}")`, border: '2px solid #d4c5a9', borderRadius: '24px', padding: '32px 24px', textAlign: 'center', zIndex: 99999, boxShadow: '0 24px 60px rgba(0,0,0,0.4)' }}
+              initial={{ scale: 0.92, opacity: 0, y: 16 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.94, opacity: 0, y: 16 }} transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+              style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '90%', maxWidth: 340, backgroundColor: t.paper, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 18, padding: '32px 24px 24px', textAlign: 'center', zIndex: 99999, boxShadow: '0 24px 64px rgba(12,7,2,0.45)', overflow: 'hidden' }}
             >
-              <div style={{ width: '80px', height: '80px', margin: '0 auto 16px', backgroundColor: '#8b1a1a', borderRadius: '50%', border: '4px solid #b82e2e', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 24px rgba(139,26,26,0.4), inset 0 2px 8px rgba(255,255,255,0.2)' }}>
-                <span style={{ fontFamily: "'Playfair Display', serif", fontSize: '32px', fontWeight: 900, color: '#ffffff', letterSpacing: '2px' }}>M</span>
-              </div>
-              <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: '28px', color: '#1a1a1a', margin: '0 0 8px 0', fontWeight: 800 }}>You are Aligned</h2>
-              <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: '#8c8275', margin: '0 0 24px 0', lineHeight: 1.5 }}>You and {alignedProfile.name} have found common ground. The correspondence is now open.</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <button onClick={() => { triggerHaptic('heavy'); setShowAlignmentModal(false); if (onOpenChat && alignedProfile) { onOpenChat({ _id: alignedProfile.matchId, user: alignedProfile }); } setAlignedProfile(null); }} style={{ width: '100%', padding: '16px', backgroundColor: '#8b1a1a', color: '#fff', border: 'none', borderRadius: '12px', fontFamily: "'Inter', sans-serif", fontSize: '14px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', cursor: 'pointer', boxShadow: '0 4px 12px rgba(139,26,26,0.3)' }}>Open Correspondence</button>
-                <button onClick={() => { setShowAlignmentModal(false); setAlignedProfile(null); }} style={{ width: '100%', padding: '16px', backgroundColor: 'transparent', color: '#1a1a1a', border: '1px solid #d4c5a9', borderRadius: '12px', fontFamily: "'Inter', sans-serif", fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}>Continue Exploring</button>
+              {/* Grain film */}
+              <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none' }} />
+
+              {/* The match seal — stamp language, one crimson moment */}
+              <motion.div
+                initial={{ scale: 1.8, opacity: 0, rotate: -18 }}
+                animate={{ scale: 1, opacity: 1, rotate: -6 }}
+                transition={{ delay: 0.15, type: 'spring', damping: 16, stiffness: 260 }}
+                style={{ width: 96, height: 96, margin: '0 auto 18px', position: 'relative' }}
+              >
+                <svg viewBox="0 0 96 96" width="96" height="96">
+                  <circle cx="48" cy="48" r="45" fill="none" stroke={t.crimson} strokeWidth="3" />
+                  <circle cx="48" cy="48" r="37" fill="none" stroke={t.crimson} strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
+                  <text x="48" y="60" textAnchor="middle" fill={t.crimson} style={{ fontFamily: t.fontDisplay, fontSize: '38px', fontWeight: 900 }}>M</text>
+                </svg>
+              </motion.div>
+
+              <h2 style={{ fontFamily: t.fontDisplay, fontSize: 26, color: t.ink, margin: '0 0 8px 0', fontWeight: 800, letterSpacing: '-0.02em' }}>You are Aligned</h2>
+              <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 450, color: t.inkMuted, margin: '0 0 24px 0', lineHeight: 1.55 }}>You and {alignedProfile.name} have found common ground. The correspondence is now open.</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, position: 'relative' }}>
+                <button onClick={() => { triggerHaptic('heavy'); setShowAlignmentModal(false); if (onOpenChat && alignedProfile) { onOpenChat({ _id: alignedProfile.matchId, user: alignedProfile }); } setAlignedProfile(null); }} style={{ width: '100%', padding: '15px', backgroundColor: t.crimson, color: '#fff', border: 'none', borderRadius: 999, fontFamily: t.fontBody, fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '1.8px', cursor: 'pointer', boxShadow: '0 6px 18px rgba(139,26,26,0.28)' }}>Open Correspondence</button>
+                <button onClick={() => { setShowAlignmentModal(false); setAlignedProfile(null); }} style={{ width: '100%', padding: '15px', backgroundColor: 'transparent', color: t.ink, border: '1px solid rgba(212,197,169,0.9)', borderRadius: 999, fontFamily: t.fontBody, fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '1.8px', cursor: 'pointer' }}>Continue Exploring</button>
               </div>
             </motion.div>
           </>
@@ -289,9 +316,9 @@ const Discover = ({ onOpenChat }) => {
 };
 
 const styles = {
-  viewportRoot: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', backgroundColor: '#e8e4db', position: 'relative', overflow: 'hidden', userSelect: 'none', WebkitUserSelect: 'none' },
-  paperGrain: { position: 'absolute', inset: 0, backgroundImage: `url("${design.texture.grain}")`, mixBlendMode: 'multiply', opacity: 0.85, pointerEvents: 'none', zIndex: 1 },
-  stageContainer: { flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', position: 'relative', padding: 0, zIndex: 2 }
+  viewportRoot: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', backgroundColor: '#ece4d4', position: 'relative', overflow: 'hidden', userSelect: 'none', WebkitUserSelect: 'none' },
+  paperGrain: { position: 'absolute', inset: 0, backgroundImage: `url("${design.texture.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 1 },
+  stageContainer: { flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', position: 'relative', padding: 0, zIndex: 2 },
 };
 
 export default Discover;

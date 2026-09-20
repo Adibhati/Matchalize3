@@ -11,7 +11,6 @@ import mongoSanitize from 'express-mongo-sanitize';
 import dotenv from 'dotenv';
 import * as Sentry from '@sentry/node';
 import { nodeProfilingIntegration } from '@sentry/profiling-node';
-import { AppError } from './utils/AppError.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,6 +29,7 @@ import adminRoutes from './routes/admin.js';
 import uploadRoutes from './routes/upload.js';
 import notificationRoutes from './routes/notifications.js';
 import reportRoutes from './routes/report.js';
+import waitlistRoutes from './routes/waitlist.js';
 
 dotenv.config();
 
@@ -162,7 +162,7 @@ app.use(mongoSanitize());
 // Rate Limiting
 const limiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 500,
+  max: Number(process.env.API_GENERAL_MAX) || 500,
   message: { message: 'Too many requests from this IP, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -180,6 +180,7 @@ app.use('/api/config', configRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/report', reportRoutes);
+app.use('/api/waitlist', waitlistRoutes);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Serve production client build

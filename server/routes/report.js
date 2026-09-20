@@ -44,27 +44,28 @@ router.post('/:userId', protect, async (req, res) => {
       details: details || '',
     });
 
-    // Escalation: 3-4 reports = shadowban, 5+ = full suspension
-    const reportCount = await Report.countDocuments({ reported: reportedId });
-    if (reportCount >= 3 && reportCount < 5) {
-      reported.isGhost = true; // Hidden from Discover, existing matches remain active
-      reported.shadowbannedAt = reported.shadowbannedAt || new Date();
-      reported.contentFrozen = true;
-      await reported.save();
-    } else if (reportCount >= 5) {
+    // Escalation: count only non-dismissed reports so admin dismissals work
+    const activeReportCount = await Report.countDocuments({
+      reported: reportedId,
+      status: { $ne: 'dismissed' },
+    });
+
+    // Escalate only. Never auto-clear a restriction an admin applied.
+    if (activeReportCount >= 5) {
       reported.suspended = true;
-      reported.suspendedAt = new Date();
-      reported.suspendedReason = 'Multiple community reports';
+      reported.suspendedAt = reported.suspendedAt || new Date();
+      reported.suspendedReason = reported.suspendedReason || 'Multiple community reports';
       reported.isGhost = true;
       reported.shadowbannedAt = reported.shadowbannedAt || new Date();
       reported.contentFrozen = false;
       await reported.save();
-    } else {
-      reported.isGhost = false;
-      reported.shadowbannedAt = null;
-      reported.contentFrozen = false;
+    } else if (activeReportCount >= 3) {
+      reported.isGhost = true;
+      reported.shadowbannedAt = reported.shadowbannedAt || new Date();
+      reported.contentFrozen = true;
       await reported.save();
     }
+    // activeReportCount < 3 → leave the account as an admin last set it.
 
     res.status(201).json({ message: 'Report submitted', reportId: report._id });
   } catch (error) {

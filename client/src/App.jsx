@@ -6,6 +6,7 @@ import ErrorBoundary from './components/ErrorBoundary.jsx';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import Splash from './pages/Splash.jsx';
 import Admin from './pages/Admin.jsx';
+import Waitlist from './pages/Waitlist.jsx';
 import Auth from './pages/Auth.jsx';
 import Onboarding from './pages/Onboarding.jsx';
 import AppShell from './components/AppShell';
@@ -15,12 +16,6 @@ import { useIsDesktop } from './utils/useIsDesktop';
 
 function AppInner() {
   const isDesktop = useIsDesktop();
-  
-  // If the app is loaded at /admin, render the standalone Admin panel
-  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
-    return <Admin />;
-  }
-
   const { logout } = useAuth();
   const [screen, setScreen] = useState(() => {
     try {
@@ -35,6 +30,11 @@ function AppInner() {
       return 'splash';
     }
   });
+
+  // Admin check AFTER all hooks (Rules of Hooks)
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
+    return <Admin />;
+  }
 
   const handleSignOut = () => {
     if (socket) socket.disconnect();
@@ -100,6 +100,15 @@ const queryClient = new QueryClient({
 });
 
 function App() {
+  // Public /waitlist route lives outside AuthProvider (no auth required)
+  if (typeof window !== 'undefined' && window.location.pathname === '/waitlist') {
+    return (
+      <ErrorBoundary>
+        <Waitlist />
+      </ErrorBoundary>
+    );
+  }
+
   return (
     <AuthProvider>
       <ErrorBoundary>

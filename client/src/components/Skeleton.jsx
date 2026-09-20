@@ -1,20 +1,21 @@
 import React from 'react';
-import { theme } from '../utils/theme';
 
-export const SkeletonBox = ({ width, height, radius = theme.radius?.sm || '4px' }) => (
-  <div 
+/* Locked skeleton fill — the shimmer surface of the whole app */
+const SKELETON_FILL = '#f4f1ea';
+
+export const SkeletonBox = ({ width, height, radius = 4 }) => (
+  <div
     className="archival-skeleton"
     aria-hidden="true"
     style={{
-      width, 
-      height, 
+      width,
+      height,
       borderRadius: radius,
-      backgroundColor: theme.color?.surfaceAlt || '#f4f1ea',
+      backgroundColor: SKELETON_FILL,
       position: 'relative',
       overflow: 'hidden',
       flexShrink: 0,
       contain: 'paint layout',
-      boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.03)',
     }}
   />
 );

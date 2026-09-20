@@ -1,7 +1,7 @@
 # Matchalize — Full Codebase Dump
 
 > Verbatim contents of all project source and configuration files.
-> Generated Tue Sep 15 18:16:14 IST 2026. Organized into 4 sections: (1) Root & Project Config, (2) Client Source, (3) Server Source, (4) Docs & Meta.
+> Generated Sun Sep 20 11:58:12 IST 2026. Organized into 4 sections: (1) Root & Project Config, (2) Client Source, (3) Server Source, (4) Docs & Meta.
 
 
 ## Section 1 — Root & Project Config
@@ -20,11 +20,17 @@
     "build": "npm run build --prefix client",
     "start": "npm run build && npm start --prefix server",
     "dev:client": "npm run dev --prefix client",
-    "dev:server": "npm run dev --prefix server"
+    "dev:server": "npm run dev --prefix server",
+    "qa:build": "cd client && VITE_API_URL=http://localhost:5051 vite build",
+    "qa": "npm run qa:build && node server/tests/qa/run-qa.mjs",
+    "qa:only": "node server/tests/qa/run-qa.mjs"
   },
   "dependencies": {
     "@google/stitch-sdk": "^0.3.5",
     "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
   }
 }
 
@@ -44,7 +50,16 @@ node_modules/
 .env.development.local
 .env.test.local
 .env.production.local
+.env.qa
 /server/.env
+/server/.env.test
+
+# QA artifacts (videos, theater, photos, logs)
+/server/tests/qa/videos/
+/server/tests/qa/media/
+/server/tests/qa/report/
+/server/tests/.scratch/
+/server/uploads/qa/
 
 # OS Metadata
 .DS_Store
@@ -309,6 +324,7 @@ self.addEventListener('notificationclick', (event) => {
   "dependencies": {
     "@sentry/react": "^10.66.0",
     "@tanstack/react-query": "^5.101.2",
+    "canvas-confetti": "^1.9.4",
     "framer-motion": "^12.42.0",
     "gsap": "^3.15.0",
     "lucide-react": "^1.25.0",
@@ -362,6 +378,7 @@ import ErrorBoundary from './components/ErrorBoundary.jsx';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import Splash from './pages/Splash.jsx';
 import Admin from './pages/Admin.jsx';
+import Waitlist from './pages/Waitlist.jsx';
 import Auth from './pages/Auth.jsx';
 import Onboarding from './pages/Onboarding.jsx';
 import AppShell from './components/AppShell';
@@ -371,12 +388,6 @@ import { useIsDesktop } from './utils/useIsDesktop';
 
 function AppInner() {
   const isDesktop = useIsDesktop();
-  
-  // If the app is loaded at /admin, render the standalone Admin panel
-  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
-    return <Admin />;
-  }
-
   const { logout } = useAuth();
   const [screen, setScreen] = useState(() => {
     try {
@@ -391,6 +402,11 @@ function AppInner() {
       return 'splash';
     }
   });
+
+  // Admin check AFTER all hooks (Rules of Hooks)
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
+    return <Admin />;
+  }
 
   const handleSignOut = () => {
     if (socket) socket.disconnect();
@@ -456,6 +472,15 @@ const queryClient = new QueryClient({
 });
 
 function App() {
+  // Public /waitlist route lives outside AuthProvider (no auth required)
+  if (typeof window !== 'undefined' && window.location.pathname === '/waitlist') {
+    return (
+      <ErrorBoundary>
+        <Waitlist />
+      </ErrorBoundary>
+    );
+  }
+
   return (
     <AuthProvider>
       <ErrorBoundary>
@@ -1166,10 +1191,24 @@ import { Compass, Heart, User, LogOut, Bell } from 'lucide-react';
 import { theme as design } from '../utils/theme';
 import { triggerHaptic } from '../utils/haptics';
 
+/* Locked tokens — same family as ProfileCard */
+const t = {
+  paper: '#fdfbf7',
+  card: '#fffdf8',
+  surfaceAlt: '#f4f1ea',
+  lineDark: '#d4c5a9',
+  ink: '#1a1a1a',
+  inkMuted: '#8c8275',
+  accent: '#8b4513',
+  crimson: '#8b1a1a',
+  fontDisplay: design?.font?.heading || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+};
+
 const tabs = [
-  { key: 'discover', label: 'Discover', subtext: 'Archive', Icon: Compass },
-  { key: 'matches', label: 'Matches', subtext: 'Synergy', Icon: Heart },
-  { key: 'profile', label: 'Profile', subtext: 'Subject', Icon: User },
+  { key: 'discover', label: 'Discover', Icon: Compass },
+  { key: 'matches', label: 'Matches', Icon: Heart },
+  { key: 'profile', label: 'Profile', Icon: User },
 ];
 
 const DesktopSidebar = ({ activeTab, onTabChange, matchBadge = 0, onSignOut, onOpenNotifications }) => {
@@ -1181,18 +1220,47 @@ const DesktopSidebar = ({ activeTab, onTabChange, matchBadge = 0, onSignOut, onO
   };
 
   return (
-    <aside style={styles.sidebar}>
-      {/* Paper Grain Texture */}
-      <div aria-hidden="true" style={styles.grain} />
+    /* Floating panel: the parent shell should paint the desk behind it — backgroundColor '#ece4d4' */
+    <aside
+      style={{
+        width: 260,
+        height: 'calc(100dvh - 32px)',
+        margin: 16,
+        backgroundColor: t.paper,
+        border: '1px solid rgba(212,197,169,0.7)',
+        borderRadius: 18,
+        boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)',
+        display: 'flex',
+        flexDirection: 'column',
+        position: 'relative',
+        flexShrink: 0,
+        overflow: 'hidden',
+        boxSizing: 'border-box',
+        zIndex: 100,
+      }}
+    >
+      {/* Grain — same film, same strength as the card */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          backgroundImage: `url("${design?.texture?.grain || ''}")`,
+          mixBlendMode: 'multiply',
+          opacity: 0.3,
+          pointerEvents: 'none',
+          zIndex: 1,
+        }}
+      />
 
-      {/* Logo / Header Area */}
-      <div style={styles.header}>
-        <h1 style={styles.logo}>matchalize</h1>
-        <p style={styles.tagline}>Campus Ledger</p>
+      {/* Header */}
+      <div style={{ padding: '22px 20px 18px', borderBottom: '1px solid rgba(212,197,169,0.7)', position: 'relative', zIndex: 2 }}>
+        <h1 style={{ fontFamily: t.fontDisplay, fontSize: 26, fontWeight: 900, color: t.ink, margin: 0, letterSpacing: '-0.02em', lineHeight: 1 }}>matchalize</h1>
+        <p style={{ fontFamily: t.fontBody, fontSize: 9.5, fontWeight: 800, color: t.inkMuted, margin: '8px 0 0 0', letterSpacing: '1.5px', textTransform: 'uppercase' }}>Campus Ledger</p>
       </div>
 
-      {/* Navigation Items */}
-      <nav style={styles.nav}>
+      {/* Navigation */}
+      <nav style={{ flex: 1, padding: '16px 12px', display: 'flex', flexDirection: 'column', gap: 8, position: 'relative', zIndex: 2 }}>
         {tabs.map((tab) => {
           const isActive = activeTab === tab.key;
           const showBadge = tab.key === 'matches' && matchBadge > 0;
@@ -1201,40 +1269,31 @@ const DesktopSidebar = ({ activeTab, onTabChange, matchBadge = 0, onSignOut, onO
             <motion.button
               key={tab.key}
               onClick={() => handleTabClick(tab.key)}
-              whileHover={{ x: 4 }}
+              whileHover={isActive ? {} : { x: 3 }}
               whileTap={{ scale: 0.98 }}
               style={{
-                ...styles.navItem,
-                backgroundColor: isActive ? 'rgba(139, 69, 19, 0.08)' : 'transparent',
-                borderLeft: isActive ? `3px solid ${design.color.crimson}` : '3px solid transparent',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '11px 14px',
+                borderRadius: 12,
+                border: isActive ? '1px solid rgba(212,197,169,0.9)' : '1px solid transparent',
+                backgroundColor: isActive ? t.card : 'transparent',
+                boxShadow: isActive ? '0 6px 16px rgba(88,63,30,0.12)' : 'none',
+                cursor: 'pointer',
+                width: '100%',
+                textAlign: 'left',
               }}
             >
-              <div style={styles.navItemLeft}>
-                <tab.Icon 
-                  size={20} 
-                  color={isActive ? design.color.crimson : design.color.inkMuted} 
-                  strokeWidth={isActive ? 2.5 : 2} 
-                />
-                <div style={styles.navText}>
-                  <span style={{ 
-                    ...styles.navLabel, 
-                    color: isActive ? design.color.crimson : design.color.ink,
-                    fontWeight: isActive ? 700 : 500 
-                  }}>
-                    {tab.label}
-                  </span>
-                  <span style={{ ...styles.navSubtext, opacity: isActive ? 0.8 : 0.5 }}>
-                    {tab.subtext}
-                  </span>
-                </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <tab.Icon size={18} color={isActive ? t.crimson : t.inkMuted} strokeWidth={isActive ? 2.5 : 2} />
+                <span style={{ fontFamily: t.fontBody, fontSize: 13.5, letterSpacing: '0.3px', color: t.ink, fontWeight: isActive ? 700 : 500 }}>
+                  {tab.label}
+                </span>
               </div>
-              
+
               {showBadge && (
-                <motion.div 
-                  initial={{ scale: 0 }} 
-                  animate={{ scale: 1 }} 
-                  style={styles.badge}
-                >
+                <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} style={{ backgroundColor: t.crimson, color: '#fff', fontFamily: t.fontBody, fontSize: 10, fontWeight: 800, padding: '3px 8px', borderRadius: 999, minWidth: 20, textAlign: 'center', boxShadow: '0 2px 6px rgba(139,26,26,0.25)', fontVariantNumeric: 'tabular-nums' }}>
                   {matchBadge > 99 ? '99+' : matchBadge}
                 </motion.div>
               )}
@@ -1243,152 +1302,30 @@ const DesktopSidebar = ({ activeTab, onTabChange, matchBadge = 0, onSignOut, onO
         })}
       </nav>
 
-      {/* Footer / Actions */}
-      <div style={styles.footer}>
-        <button 
-          onClick={onOpenNotifications}
-          style={styles.iconBtn}
+      {/* Footer actions */}
+      <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(212,197,169,0.7)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', zIndex: 2 }}>
+        <motion.button
+          onClick={() => { triggerHaptic('light'); onOpenNotifications(); }}
+          whileTap={{ scale: 0.94 }}
           title="Letters Received"
+          style={{ backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 12, width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
         >
-          <Bell size={20} color={design.color.inkMuted} />
-        </button>
-        <button 
-          onClick={onSignOut}
-          style={styles.iconBtn}
+          <Bell size={18} color={t.inkMuted} strokeWidth={2} />
+        </motion.button>
+        <motion.button
+          onClick={() => { triggerHaptic('light'); onSignOut(); }}
+          whileTap={{ scale: 0.94 }}
           title="Log Out"
+          style={{ backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 12, width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
         >
-          <LogOut size={20} color={design.color.inkMuted} />
-        </button>
+          <LogOut size={18} color={t.inkMuted} strokeWidth={2} />
+        </motion.button>
       </div>
     </aside>
   );
 };
 
-const styles = {
-  sidebar: {
-    width: '260px',
-    height: '100dvh',
-    backgroundColor: design.color.paper,
-    borderRight: `1px solid ${design.color.borderDark}`,
-    display: 'flex',
-    flexDirection: 'column',
-    position: 'relative',
-    flexShrink: 0,
-    boxShadow: '4px 0 24px rgba(0,0,0,0.03)',
-    zIndex: 100,
-  },
-  grain: {
-    position: 'absolute',
-    inset: 0,
-    backgroundImage: `url("${design?.texture?.grain || ''}")`,
-    mixBlendMode: 'multiply',
-    opacity: 0.6,
-    pointerEvents: 'none',
-    zIndex: 1,
-  },
-  header: {
-    padding: '32px 24px 24px',
-    borderBottom: `1px solid ${design.color.border}`,
-    position: 'relative',
-    zIndex: 2,
-  },
-  logo: {
-    fontFamily: "'Playfair Display', serif",
-    fontSize: '28px',
-    fontWeight: 900,
-    color: design.color.ink,
-    margin: 0,
-    letterSpacing: '-0.03em',
-    textTransform: 'lowercase',
-  },
-  tagline: {
-    fontFamily: "'Inter', sans-serif",
-    fontSize: '11px',
-    fontWeight: 600,
-    color: design.color.inkMuted,
-    margin: '4px 0 0 0',
-    letterSpacing: '2px',
-    textTransform: 'uppercase',
-  },
-  nav: {
-    flex: 1,
-    padding: '24px 12px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-    position: 'relative',
-    zIndex: 2,
-  },
-  navItem: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '12px 16px',
-    borderRadius: '8px',
-    border: 'none',
-    cursor: 'pointer',
-    transition: 'background-color 0.2s ease',
-    width: '100%',
-    textAlign: 'left',
-  },
-  navItemLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '14px',
-  },
-  navText: {
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  navLabel: {
-    fontFamily: "'Inter', sans-serif",
-    fontSize: '14px',
-    letterSpacing: '0.5px',
-  },
-  navSubtext: {
-    fontFamily: "'Playfair Display', serif",
-    fontSize: '11px',
-    fontStyle: 'italic',
-    color: design.color.accent,
-    marginTop: '2px',
-  },
-  badge: {
-    backgroundColor: design.color.crimson,
-    color: '#fff',
-    fontFamily: "'Inter', sans-serif",
-    fontSize: '10px',
-    fontWeight: 800,
-    padding: '2px 7px',
-    borderRadius: '10px',
-    minWidth: '20px',
-    textAlign: 'center',
-    boxShadow: '0 2px 4px rgba(139, 26, 26, 0.3)',
-  },
-  footer: {
-    padding: '20px 24px',
-    borderTop: `1px solid ${design.color.border}`,
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    position: 'relative',
-    zIndex: 2,
-  },
-  iconBtn: {
-    background: 'none',
-    border: `1px solid ${design.color.border}`,
-    borderRadius: '8px',
-    width: '40px',
-    height: '40px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    cursor: 'pointer',
-    transition: 'all 0.2s ease',
-  }
-};
-
 export default DesktopSidebar;
-
 ```
 
 ### ./client/src/components/ErrorBoundary.jsx
@@ -1399,17 +1336,20 @@ import * as Sentry from '@sentry/react';
 import { theme as design } from '../utils/theme';
 import { FileWarning, RotateCw } from 'lucide-react';
 
-/* ==================================================================
-   ARCHIVAL THEME SYSTEM (Localized for crash resilience)
-================================================================== */
-const theme = {
+/* Locked tokens — same family as ProfileCard */
+const t = {
+  desk: '#ece4d4',
   paper: '#fdfbf7',
   surfaceAlt: '#f4f1ea',
-  borderDark: '#d4c5a9',
+  lineDark: '#d4c5a9',
   ink: '#1a1a1a',
+  inkSoft: '#4a4a4a',
   inkMuted: '#8c8275',
+  accent: '#8b4513',
   crimson: '#8b1a1a',
-  shadowWarm: 'rgba(139, 69, 19, 0.12)',
+  fontDisplay: design?.font?.heading || design?.font?.display || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  fontType: "'Special Elite', 'Courier New', monospace",
 };
 
 class ErrorBoundary extends React.Component {
@@ -1438,106 +1378,125 @@ class ErrorBoundary extends React.Component {
           minHeight: '100dvh',
           width: '100%',
           display: 'flex',
-          flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          padding: '32px',
-          backgroundColor: theme.paper,
-          position: 'relative',
-          overflow: 'hidden',
-          contain: 'strict',
+          padding: '16px',
+          backgroundColor: t.desk,
+          boxSizing: 'border-box',
         }}>
-          {/* GPU Promoted Zero-Lag Animations & Tactile Physics */}
           <style>{`
             @keyframes errorFadeUp {
-              from { opacity: 0; transform: translate3d(0, 16px, 0); filter: blur(4px); }
-              to   { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0px); }
+              from { opacity: 0; transform: translate3d(0, 16px, 0); }
+              to   { opacity: 1; transform: translate3d(0, 0, 0); }
             }
             .error-anim {
-              animation: errorFadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+              animation: errorFadeUp 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
               will-change: transform, opacity;
             }
-            .tactile-btn {
-              transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.2s ease;
-              will-change: transform;
-            }
-            @media (hover: hover) {
-              .tactile-btn:hover {
-                transform: translate3d(0, -2px, 0) scale3d(1.02, 1.02, 1);
-                box-shadow: 0 8px 24px rgba(139, 26, 26, 0.3);
-              }
-            }
-            .tactile-btn:active {
-              transform: scale3d(0.96, 0.96, 1) translate3d(0, 0, 0) !important;
-              transition: transform 0.08s cubic-bezier(0, 0, 0.2, 1) !important;
-              box-shadow: 0 2px 8px rgba(139, 26, 26, 0.15) !important;
-            }
+            .tactile-btn { transition: transform 0.15s ease-out; will-change: transform; }
+            .tactile-btn:active { transform: scale(0.96) !important; }
             @media (prefers-reduced-motion: reduce) {
               .error-anim { animation: none !important; opacity: 1 !important; transform: none !important; }
               .tactile-btn { transition: none !important; transform: none !important; }
             }
           `}</style>
 
-          {/* Cinematic Film Grain Overlay */}
+          {/* Grain film — same strength as every other surface */}
           <div
             aria-hidden="true"
             style={{
-              position: 'absolute',
+              position: 'fixed',
               inset: 0,
               backgroundImage: `url("${design?.texture?.grain || ''}")`,
               mixBlendMode: 'multiply',
-              opacity: 0.85,
+              opacity: 0.3,
               pointerEvents: 'none',
               zIndex: 1,
             }}
           />
 
-          <div className="error-anim" style={{ 
-            position: 'relative', 
-            zIndex: 2, 
-            display: 'flex', 
-            flexDirection: 'column', 
-            alignItems: 'center',
-            textAlign: 'center',
-            maxWidth: '400px'
-          }}>
+          {/* The floating paper panel */}
+          <div
+            className="error-anim"
+            style={{
+              position: 'relative',
+              zIndex: 2,
+              maxWidth: 380,
+              width: '100%',
+              backgroundColor: t.paper,
+              border: '1px solid rgba(212,197,169,0.7)',
+              borderRadius: 18,
+              boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)',
+              padding: '32px 28px 28px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              textAlign: 'center',
+              boxSizing: 'border-box',
+            }}
+          >
+            {/* Icon in the standard 12px-radius tile */}
             <div style={{
-              width: '64px',
-              height: '64px',
-              borderRadius: '16px',
-              backgroundColor: 'rgba(139, 26, 26, 0.08)',
-              border: `1.5px dashed ${theme.crimson}`,
+              width: 48,
+              height: 48,
+              borderRadius: 12,
+              backgroundColor: t.surfaceAlt,
+              border: '1px solid rgba(212,197,169,0.7)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              marginBottom: '24px'
+              marginBottom: 20,
             }}>
-              <FileWarning size={32} color={theme.crimson} strokeWidth={1.5} />
+              <FileWarning size={18} color={t.accent} strokeWidth={2} />
             </div>
 
-            <h1 style={{ 
-              fontFamily: design?.font?.display || "'Playfair Display', serif", 
-              fontSize: '32px', 
+            <h1 style={{
+              fontFamily: t.fontDisplay,
+              fontSize: 30,
               fontWeight: 800,
-              color: theme.ink, 
-              marginBottom: '12px',
+              color: t.ink,
+              margin: 0,
               letterSpacing: '-0.02em',
-              lineHeight: 1.1
+              lineHeight: 1.1,
             }}>
               Ink Spilled
             </h1>
-            
-            <p style={{ 
-              fontFamily: design?.font?.body || "'Inter', sans-serif",
-              fontSize: '15px', 
-              color: theme.inkMuted, 
-              marginBottom: '32px', 
-              lineHeight: 1.6 
+
+            <p style={{
+              fontFamily: t.fontBody,
+              fontSize: 14,
+              color: t.inkSoft,
+              margin: '12px 0 0 0',
+              lineHeight: 1.6,
             }}>
-              The archival ledger encountered an unexpected tear. 
-              Please refresh the page to restore your correspondence session.
+              Something tore in the archive. Refresh to restore your session.
             </p>
-            
+
+            {/* Findings-style error note — typewriter, hairline box */}
+            {this.state.error?.message && (
+              <div style={{
+                width: '100%',
+                marginTop: 18,
+                border: '1px solid rgba(139,69,19,0.3)',
+                borderRadius: 6,
+                backgroundColor: 'rgba(139,69,19,0.03)',
+                padding: '10px 12px',
+                boxSizing: 'border-box',
+              }}>
+                <p style={{
+                  fontFamily: t.fontType,
+                  fontSize: 11.5,
+                  color: t.inkMuted,
+                  margin: 0,
+                  lineHeight: 1.5,
+                  wordBreak: 'break-word',
+                }}>
+                  {this.state.error.message}
+                </p>
+              </div>
+            )}
+
+            {/* The one crimson moment — pill CTA */}
             <button
               className="tactile-btn"
               onClick={() => {
@@ -1549,22 +1508,23 @@ class ErrorBoundary extends React.Component {
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: '8px',
-                padding: '16px 24px',
-                backgroundColor: theme.crimson,
+                gap: 8,
+                marginTop: 24,
+                padding: '14px 26px',
+                backgroundColor: t.crimson,
                 color: '#ffffff',
                 border: 'none',
-                borderRadius: design?.radius?.md || '12px',
-                fontFamily: design?.font?.body || "'Inter', sans-serif",
-                fontSize: '13px',
+                borderRadius: 999,
+                fontFamily: t.fontBody,
+                fontSize: 11,
                 fontWeight: 800,
-                letterSpacing: '1px',
+                letterSpacing: '1.8px',
                 textTransform: 'uppercase',
                 cursor: 'pointer',
-                boxShadow: '0 4px 16px rgba(139, 26, 26, 0.25)'
+                boxShadow: '0 6px 18px rgba(139,26,26,0.28)',
               }}
             >
-              <RotateCw size={16} strokeWidth={2.5} />
+              <RotateCw size={14} strokeWidth={2.5} />
               Restore Ledger
             </button>
           </div>
@@ -1590,6 +1550,23 @@ import NotificationDrawer from './NotificationDrawer';
 import { theme as design } from '../utils/theme';
 import { Bell } from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
+
+/* Locked tokens — same family as ProfileCard */
+const t = {
+  paper: '#fdfbf7',
+  card: '#fffdf8',
+  surfaceAlt: '#f4f1ea',
+  lineDark: '#d4c5a9',
+  ink: '#1a1a1a',
+  inkSoft: '#4a4a4a',
+  inkMuted: '#8c8275',
+  accent: '#8b4513',
+  crimson: '#8b1a1a',
+  shadowWarm: 'rgba(88,63,30,0.16)',
+  fontDisplay: design?.font?.heading || design?.font?.display || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  grain: design?.texture?.grain || '',
+};
 
 const Header = ({ onNavigate, onSelectMatch, title }) => {
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -1617,7 +1594,7 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
         ...(old || {}),
         count: (old?.count || 0) + 1,
       }));
-      
+
       triggerHaptic('heavy');
       setToast(`${data?.senderName || 'An anonymous subject'} sent you a letter.`);
     };
@@ -1629,8 +1606,8 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
   // Auto-dismiss toast
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(null), 4000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(timer);
   }, [toast]);
 
   const toggleDrawer = () => {
@@ -1649,47 +1626,46 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
 
   return (
     <>
-      {/* GPU Promoted Tactile Physics */}
       <style>{`
-        .tactile-btn { transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.2s ease, opacity 0.2s ease; will-change: transform; }
-        @media (hover: hover) { .tactile-btn:hover { transform: translate3d(0, -2px, 0) scale3d(1.04, 1.04, 1); } }
-        .tactile-btn:active { transform: scale3d(0.92, 0.92, 1) translate3d(0, 0, 0) !important; transition: transform 0.08s cubic-bezier(0, 0, 0.2, 1) !important; }
+        .tactile-btn { transition: transform 0.15s ease-out; will-change: transform; }
+        @media (hover: hover) { .tactile-btn:hover { transform: translateY(-1px); } }
+        .tactile-btn:active { transform: scale(0.96) !important; }
       `}</style>
 
-      {/* Floating Archival Toast Notification */}
+      {/* Floating paper toast — mini panel with the single crimson spine */}
       <AnimatePresence>
         {toast && (
           <motion.div
-            initial={{ y: -100, opacity: 0, scale: 0.95 }}
-            animate={{ y: 0, opacity: 1, scale: 1 }}
-            exit={{ y: -100, opacity: 0, scale: 0.95 }}
-            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+            initial={{ y: -80, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -80, opacity: 0 }}
+            transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
             style={{
               position: 'fixed',
               top: 'max(16px, env(safe-area-inset-top))',
               left: '16px',
               right: '16px',
               zIndex: 1100,
-              backgroundColor: design.color.surface,
-              backgroundImage: `url("${design?.texture?.grain || ''}")`,
-              border: `1.5px solid ${design.color.borderDark}`,
-              borderRadius: design?.radius?.md || '12px',
-              boxShadow: `0 12px 32px ${design.color.shadowWarm}`,
-              padding: '16px',
+              backgroundColor: t.paper,
+              border: '1px solid rgba(212,197,169,0.7)',
+              borderRadius: 12,
+              boxShadow: `0 14px 34px ${t.shadowWarm}, 0 3px 8px rgba(88,63,30,0.08)`,
+              padding: '14px 16px 14px 20px',
               display: 'flex',
               alignItems: 'center',
-              gap: '12px',
+              gap: 12,
+              overflow: 'hidden',
               pointerEvents: 'none', // Prevents blocking touches to the header below
             }}
           >
-            <div style={{
-              width: '4px', height: '100%', position: 'absolute', left: 0, top: 0, bottom: 0,
-              backgroundColor: design.color.crimson, borderRadius: '12px 0 0 12px'
-            }} />
-            <Bell size={20} color={design.color.crimson} style={{ flexShrink: 0, marginLeft: '8px' }} />
+            {/* Grain film */}
+            <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none' }} />
+            {/* Crimson spine — clipped by overflow, no manual corner math */}
+            <div aria-hidden="true" style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, backgroundColor: t.crimson }} />
+            <Bell size={18} color={t.crimson} strokeWidth={2} style={{ flexShrink: 0, position: 'relative' }} />
             <p style={{
-              margin: 0, fontFamily: design.font.body, fontSize: '13px', fontWeight: 600,
-              color: design.color.ink, lineHeight: 1.4,
+              margin: 0, fontFamily: t.fontBody, fontSize: 13, fontWeight: 600,
+              color: t.ink, lineHeight: 1.5, position: 'relative',
             }}>
               {toast}
             </p>
@@ -1698,8 +1674,8 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
       </AnimatePresence>
 
       <header style={styles.header}>
-        {/* Subtle Paper Grain Overlay */}
-        <div aria-hidden="true" style={styles.paperGrain} />
+        {/* Grain film — same strength as every surface */}
+        <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 1 }} />
 
         <div style={{ position: 'relative', zIndex: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
           {isDiscover ? (
@@ -1719,18 +1695,18 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
                 aria-label="View notifications"
                 title="Letters Received"
               >
-                <Bell size={17} color={design.color.inkSoft || '#4a4a4a'} strokeWidth={2.5} />
+                <Bell size={18} color={t.inkSoft} strokeWidth={2} />
 
-                {/* Animated Crimson Wax-Seal Badge */}
+                {/* Crimson seal badge — pill, paper-bordered */}
                 <AnimatePresence>
                   {unreadCount > 0 && (
                     <motion.div
-                      initial={{ scale: 0, rotate: -20 }}
-                      animate={{ scale: [1, 1.1, 1], rotate: 0 }}
+                      initial={{ scale: 0 }}
+                      animate={{ scale: [1, 1.1, 1] }}
                       exit={{ scale: 0, opacity: 0 }}
                       transition={{
                         scale: { repeat: Infinity, duration: 3, ease: 'easeInOut' },
-                        default: { type: 'spring', damping: 12, stiffness: 300 }
+                        default: { type: 'spring', damping: 12, stiffness: 300 },
                       }}
                       style={styles.unreadBadge}
                     >
@@ -1745,9 +1721,6 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
           )}
         </div>
       </header>
-
-      {/* Archival Stitch Seam Divider */}
-      <div aria-hidden="true" style={styles.stitchSeam} />
 
       {/* Full-Screen Notification Drawer Overlay */}
       <AnimatePresence>
@@ -1774,24 +1747,16 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
 ================================================================== */
 const styles = {
   header: {
-    height: '45px',
+    height: '56px',
     boxSizing: 'border-box',
-    padding: '0 20px',
-    backgroundColor: design.color.paper,
+    padding: '0 16px',
+    backgroundColor: t.paper,
+    borderBottom: '1px solid rgba(212,197,169,0.7)',
     position: 'sticky',
     top: 0,
     zIndex: 500,
-    boxShadow: `0 4px 16px ${design.color.shadowWarm}`,
+    boxShadow: `0 4px 16px ${t.shadowWarm}`,
     contain: 'layout style', // Isolates layout rendering
-  },
-  paperGrain: {
-    position: 'absolute',
-    inset: 0,
-    backgroundImage: `url("${design?.texture?.grain || ''}")`,
-    mixBlendMode: 'multiply',
-    opacity: 0.85,
-    pointerEvents: 'none',
-    zIndex: 1,
   },
   logoContainer: {
     display: 'flex',
@@ -1803,20 +1768,20 @@ const styles = {
     margin: '-4px', // expands touch target
   },
   logoWordmark: {
-    fontFamily: design?.font?.display || "'Playfair Display', serif",
+    fontFamily: t.fontDisplay,
     fontSize: '20px',
     fontWeight: 900,
-    color: design.color.ink,
-    letterSpacing: '-0.03em',
+    color: t.ink,
+    letterSpacing: '-0.02em',
     margin: 0,
     lineHeight: 1,
     textTransform: 'lowercase', // Aligned with the Splash screen style
   },
   pageTitle: {
-    fontFamily: design?.font?.display || "'Playfair Display', serif",
+    fontFamily: t.fontDisplay,
     fontSize: '20px',
     fontWeight: 800,
-    color: design.color.ink,
+    color: t.ink,
     letterSpacing: '-0.02em',
     margin: 0,
   },
@@ -1827,48 +1792,42 @@ const styles = {
   },
   bellButton: {
     position: 'relative',
-    backgroundColor: design.color.surface,
-    border: `1.5px solid ${design.color.borderDark}`,
-    borderRadius: design?.radius?.sm || '8px',
-    width: '32px',
-    height: '32px',
+    backgroundColor: t.surfaceAlt,
+    border: '1px solid rgba(212,197,169,0.7)',
+    borderRadius: '12px',
+    width: '40px',
+    height: '40px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
-    boxShadow: `0 2px 8px ${design.color.shadowWarm}`,
+    boxShadow: '0 4px 12px rgba(88,63,30,0.12)',
   },
   unreadBadge: {
     position: 'absolute',
     top: '-5px',
     right: '-5px',
-    backgroundColor: design.color.crimson,
-    minWidth: '17px',
-    height: '17px',
-    borderRadius: '9px',
+    backgroundColor: t.crimson,
+    minWidth: '18px',
+    height: '18px',
+    borderRadius: '999px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: '0 3px',
-    border: `1.5px solid ${design.color.paper}`,
-    boxShadow: '0 2px 6px rgba(139, 26, 26, 0.4), inset 0 1px 2px rgba(255, 255, 255, 0.25)',
+    padding: '0 4px',
+    border: `1.5px solid ${t.paper}`,
+    boxShadow: '0 2px 6px rgba(139, 26, 26, 0.3)',
     willChange: 'transform',
     zIndex: 5,
   },
   badgeText: {
-    fontFamily: "'Inter', sans-serif",
+    fontFamily: t.fontBody,
     fontSize: '9px',
     fontWeight: 800,
     color: '#ffffff',
     letterSpacing: '0.3px',
     lineHeight: 1,
-  },
-  stitchSeam: {
-    position: 'relative',
-    zIndex: 499,
-    height: '1px',
-    backgroundImage: `repeating-linear-gradient(90deg, ${design.color.borderDark} 0px, ${design.color.borderDark} 6px, transparent 6px, transparent 12px)`,
-    opacity: 0.6,
+    fontVariantNumeric: 'tabular-nums',
   },
 };
 
@@ -1880,15 +1839,22 @@ export default Header;
 ```
 import React, { forwardRef, memo } from 'react';
 
-const Icon = forwardRef(({ 
-  path, 
-  size = 20, 
-  color = 'currentColor', 
-  strokeWidth = 1.8, 
+/* ============================================================
+   THE ONE ICON PRIMITIVE — Lucide path data only.
+   Locked scale: 10 / 12 / 14 / 16 / 18 (never arbitrary sizes).
+   Stroke: 2 standard, 1.75 for large display icons.
+   Color comes from the caller (ink scale / accent / crimson).
+============================================================ */
+
+const Icon = forwardRef(({
+  path,
+  size = 16,
+  color = 'currentColor',
+  strokeWidth = 2,
   fill = 'none',
   className = '',
   style = {},
-  ...props 
+  ...props
 }, ref) => (
   <svg
     ref={ref}
@@ -1902,10 +1868,10 @@ const Icon = forwardRef(({
     strokeLinejoin="round"
     aria-hidden="true" // Defers screen-reader announcements to parent buttons
     className={className}
-    style={{ 
-      display: 'block', 
+    style={{
+      display: 'block',
       flexShrink: 0, // Prevents SVG squishing in tight flex layouts
-      ...style 
+      ...style,
     }}
     {...props}
   >
@@ -1916,6 +1882,9 @@ const Icon = forwardRef(({
 // Display name required when using forwardRef + memo
 Icon.displayName = 'Icon';
 
+/* The legal size steps — import where icons are placed */
+Icon.SIZES = { xs: 10, sm: 12, md: 14, lg: 16, xl: 18 };
+
 export default memo(Icon);
 ```
 
@@ -1924,19 +1893,19 @@ export default memo(Icon);
 ```
 import React from 'react';
 import { motion } from 'framer-motion';
-import { X, Mail } from 'lucide-react';
+import { X, Mail, Info, LifeBuoy } from 'lucide-react';
 
-const theme = {
+/* Locked tokens — same family as ProfileCard */
+const t = {
   paper: '#fdfbf7',
-  surface: '#ffffff',
   surfaceAlt: '#f4f1ea',
-  border: '#e0d8c8',
-  borderDark: '#d4c5a9',
+  lineDark: '#d4c5a9',
   ink: '#1a1a1a',
-  inkMuted: '#8c8275',
   inkSoft: '#4a4a4a',
+  inkMuted: '#8c8275',
   accent: '#8b4513',
   crimson: '#8b1a1a',
+  grain: '', // set from design?.texture?.grain below
 };
 
 /**
@@ -1952,178 +1921,159 @@ const LearnMoreSheet = ({ onClose }) => {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
+      transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: 'rgba(20,15,10,0.7)',
-        backdropFilter: 'blur(4px)',
+        backgroundColor: 'rgba(28,19,10,0.6)',
         zIndex: 200,
         display: 'flex',
         alignItems: 'flex-end',
       }}
       onClick={onClose}
     >
+      <style>{`
+        .tactile-btn { transition: transform 0.15s ease-out; will-change: transform; }
+        .tactile-btn:active { transform: scale(0.96) !important; }
+      `}</style>
+
       <motion.div
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
-        transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+        transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
         style={{
           width: '100%',
           maxHeight: '70vh',
-          backgroundColor: theme.paper,
-          borderTopLeftRadius: '24px',
-          borderTopRightRadius: '24px',
-          boxShadow: '0 -20px 50px rgba(0,0,0,0.4)',
+          backgroundColor: t.paper,
+          borderTopLeftRadius: 18,
+          borderTopRightRadius: 18,
+          boxShadow: '0 -14px 44px rgba(88,63,30,0.3)',
           display: 'flex',
           flexDirection: 'column',
+          position: 'relative',
+          overflow: 'hidden',
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
+        {/* Grain film — same strength as every surface */}
+        <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 1 }} />
+
+        {/* Grabber */}
+        <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 10, position: 'relative', zIndex: 2 }}>
+          <span aria-hidden="true" style={{ width: 36, height: 4, borderRadius: 999, backgroundColor: 'rgba(212,197,169,0.7)' }} />
+        </div>
+
+        {/* Header — paper surface, Playfair title, standard close tile */}
         <div style={{
-          padding: '20px 24px',
-          borderBottom: `1px solid ${theme.borderDark}`,
+          padding: '14px 20px 16px',
+          borderBottom: '1px solid rgba(212,197,169,0.7)',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          backgroundColor: theme.surface,
-          borderTopLeftRadius: '24px',
-          borderTopRightRadius: '24px',
+          position: 'relative',
+          zIndex: 2,
         }}>
-          <span style={{
-            fontFamily: "'Playfair Display', serif",
-            fontSize: '20px',
-            fontWeight: 700,
-            color: theme.ink,
-          }}>
+          <span style={{ fontFamily: "'Playfair Display', Georgia, serif", fontSize: 19, fontWeight: 800, color: t.ink, letterSpacing: '-0.02em' }}>
             Account Review
           </span>
           <button
             onClick={onClose}
+            className="tactile-btn"
+            aria-label="Close"
             style={{
-              background: theme.surfaceAlt,
-              border: `1px solid ${theme.border}`,
-              borderRadius: '8px',
-              width: '32px',
-              height: '32px',
+              backgroundColor: t.surfaceAlt,
+              border: '1px solid rgba(212,197,169,0.7)',
+              borderRadius: 12,
+              width: 36,
+              height: 36,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               cursor: 'pointer',
-              color: theme.ink,
+              color: t.ink,
             }}
           >
-            <X size={18} />
+            <X size={16} strokeWidth={2} />
           </button>
         </div>
 
         {/* Content */}
-        <div style={{ padding: '24px', overflowY: 'auto', flex: 1 }}>
-          <p style={{
-            fontFamily: "'Playfair Display', serif",
-            fontSize: '15px',
-            color: theme.ink,
-            marginBottom: '20px',
-            lineHeight: 1.5,
-          }}>
+        <div style={{ padding: '20px 20px 24px', overflowY: 'auto', position: 'relative', zIndex: 2 }}>
+          <p style={{ fontFamily: "'Inter', -apple-system, sans-serif", fontSize: 14.5, fontWeight: 450, color: t.inkSoft, marginBottom: 18, lineHeight: 1.6 }}>
             Your account has been flagged for review by our moderation system.
           </p>
 
-          {/* What This Means */}
+          {/* What This Means — findings-box treatment + PanelHeader */}
           <div style={{
-            backgroundColor: theme.surfaceAlt,
-            border: `1px solid ${theme.border}`,
-            borderRadius: '12px',
-            padding: '16px 18px',
-            marginBottom: '20px',
+            backgroundColor: t.surfaceAlt,
+            border: '1px solid rgba(212,197,169,0.7)',
+            borderRadius: 6,
+            padding: '14px 16px',
+            marginBottom: 14,
           }}>
-            <p style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: '11px',
-              fontWeight: 700,
-              letterSpacing: '2px',
-              textTransform: 'uppercase',
-              color: theme.accent,
-              margin: '0 0 10px 0',
-            }}>
-              What This Means
-            </p>
-            <p style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: '13px',
-              color: theme.inkSoft,
-              lineHeight: 1.6,
-              margin: 0,
-            }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+              <Info size={12} color={t.accent} strokeWidth={2} />
+              <span style={{ fontFamily: "'Inter', -apple-system, sans-serif", fontSize: 9.5, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', color: t.inkMuted }}>
+                What This Means
+              </span>
+            </div>
+            <p style={{ fontFamily: "'Inter', -apple-system, sans-serif", fontSize: 13.5, fontWeight: 450, color: t.inkSoft, lineHeight: 1.6, margin: 0 }}>
               Our system periodically reviews accounts to ensure a safe and respectful community. During this time, certain features may be temporarily limited while our team looks into it.
             </p>
           </div>
 
           {/* What You Can Do */}
           <div style={{
-            backgroundColor: theme.surfaceAlt,
-            border: `1px solid ${theme.border}`,
-            borderRadius: '12px',
-            padding: '16px 18px',
-            marginBottom: '24px',
+            backgroundColor: t.surfaceAlt,
+            border: '1px solid rgba(212,197,169,0.7)',
+            borderRadius: 6,
+            padding: '14px 16px',
+            marginBottom: 22,
           }}>
-            <p style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: '11px',
-              fontWeight: 700,
-              letterSpacing: '2px',
-              textTransform: 'uppercase',
-              color: theme.accent,
-              margin: '0 0 10px 0',
-            }}>
-              What You Can Do
-            </p>
-            <p style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: '13px',
-              color: theme.inkSoft,
-              lineHeight: 1.6,
-              margin: 0,
-            }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+              <LifeBuoy size={12} color={t.accent} strokeWidth={2} />
+              <span style={{ fontFamily: "'Inter', -apple-system, sans-serif", fontSize: 9.5, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', color: t.inkMuted }}>
+                What You Can Do
+              </span>
+            </div>
+            <p style={{ fontFamily: "'Inter', -apple-system, sans-serif", fontSize: 13.5, fontWeight: 450, color: t.inkSoft, lineHeight: 1.6, margin: 0 }}>
               In most cases, reviews are resolved quickly and your account returns to normal. If you believe this is a mistake, you can reach out to our support team.
             </p>
           </div>
 
-          {/* Contact Support Button */}
+          {/* Contact Support — the sheet's one crimson moment */}
           <a
             href="mailto:support@matchalize.com?subject=Account%20Review%20Inquiry"
+            className="tactile-btn"
             style={{
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '10px',
+              gap: 8,
               width: '100%',
-              padding: '16px',
-              backgroundColor: theme.surface,
-              border: `1.5px solid ${theme.accent}`,
-              borderRadius: '12px',
-              fontFamily: "'Inter', sans-serif",
-              fontSize: '14px',
-              fontWeight: 700,
-              color: theme.accent,
+              padding: '15px 16px',
+              backgroundColor: t.crimson,
+              border: 'none',
+              borderRadius: 999,
+              fontFamily: "'Inter', -apple-system, sans-serif",
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: '1.8px',
+              textTransform: 'uppercase',
+              color: '#ffffff',
               textDecoration: 'none',
               cursor: 'pointer',
-              letterSpacing: '0.5px',
+              boxShadow: '0 6px 18px rgba(139,26,26,0.28)',
+              boxSizing: 'border-box',
             }}
           >
-            <Mail size={18} />
+            <Mail size={14} strokeWidth={2.5} />
             Contact Support
           </a>
 
-          <p style={{
-            fontFamily: "'Inter', sans-serif",
-            fontSize: '11px',
-            color: theme.inkMuted,
-            textAlign: 'center',
-            marginTop: '16px',
-            lineHeight: 1.4,
-          }}>
+          {/* Recorded note — typewriter */}
+          <p style={{ fontFamily: "'Special Elite', 'Courier New', monospace", fontSize: 11, color: t.inkMuted, textAlign: 'center', marginTop: 16, lineHeight: 1.6 }}>
             Please use your registered email when contacting us.
           </p>
         </div>
@@ -2144,33 +2094,28 @@ import { triggerHaptic } from '../utils/haptics';
 import { theme as design } from '../utils/theme';
 import { Compass, Heart, User } from 'lucide-react';
 
-/* ==================================================================
-   MUSEUM-GRADE ARCHIVAL CONSTANTS
-================================================================== */
-const theme = {
+/* Locked tokens — same family as ProfileCard */
+const t = {
   paper: '#fdfbf7',
-  surface: '#ffffff',
-  surfaceAlt: '#f4f1ea',
-  border: '#e0d8c8',
-  borderDark: '#d4c5a9',
+  lineDark: '#d4c5a9',
   ink: '#1a1a1a',
   inkMuted: '#8c8275',
-  accent: '#8b4513',
   crimson: '#8b1a1a',
-  shadowWarm: 'rgba(139, 69, 19, 0.12)',
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  grain: design?.texture?.grain || '',
 };
 
 const tabs = [
-  { key: 'discover', label: 'Discover', Icon: Compass, subtext: 'Archive' },
-  { key: 'matches', label: 'Matches', Icon: Heart, subtext: 'Synergy' },
-  { key: 'profile', label: 'Profile', Icon: User, subtext: 'Subject' },
+  { key: 'discover', label: 'Discover', Icon: Compass },
+  { key: 'matches', label: 'Matches', Icon: Heart },
+  { key: 'profile', label: 'Profile', Icon: User },
 ];
 
 /* ==================================================================
    MAIN NAVBAR COMPONENT
 ================================================================== */
 const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
-  
+
   const handleTabClick = (key) => {
     if (activeTab !== key) {
       triggerHaptic('light');
@@ -2180,12 +2125,8 @@ const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
 
   return (
     <div style={styles.navContainer}>
-      {/* Physical Archival Cotton-Rag Grain */}
-      <div aria-hidden="true" style={styles.paperGrain} />
-      
-      {/* Dual Archival Binding Seam (Top Border + Stitching) */}
-      <div aria-hidden="true" style={styles.topBorder} />
-      <div aria-hidden="true" style={styles.stitchSeam} />
+      {/* Grain film — same strength as every surface */}
+      <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 1 }} />
 
       <div style={styles.tabGrid}>
         {tabs.map((tab) => {
@@ -2196,52 +2137,46 @@ const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
             <motion.button
               key={tab.key}
               onClick={() => handleTabClick(tab.key)}
-              whileTap={{ scale: 0.92 }}
-              transition={{ type: 'spring', damping: 15, stiffness: 400 }}
+              whileTap={{ scale: 0.96 }}
+              transition={{ duration: 0.15, ease: 'easeOut' }}
               style={styles.tabButton}
               aria-label={tab.label}
               aria-current={isActive ? 'page' : undefined}
             >
-              {/* Sliding Archival Brass Bracket (Active Indicator) */}
+              {/* Active indicator — one sliding crimson bar */}
               {isActive && (
                 <motion.div
-                  layoutId="activeTabBracket"
+                  layoutId="navActiveIndicator"
                   transition={{ type: 'spring', damping: 28, stiffness: 350 }}
-                  style={styles.activeBracket}
-                >
-                  {/* Miniature Brass Rivets */}
-                  <span style={{ ...styles.rivet, left: '6px' }} />
-                  <span style={{ ...styles.rivet, right: '6px' }} />
-                  <div style={styles.bracketLine} />
-                </motion.div>
+                  style={styles.activeBar}
+                />
               )}
 
-              {/* Icon & Wax Seal Badge Container */}
+              {/* Icon & badge */}
               <div style={styles.iconContainer}>
                 <motion.div
                   initial={false}
                   animate={{
-                    scale: isActive ? 1.15 : 1,
-                    color: isActive ? theme.crimson : theme.inkMuted,
+                    scale: isActive ? 1.1 : 1,
+                    color: isActive ? t.crimson : t.inkMuted,
                   }}
-                  transition={{ duration: 0.2, ease: "easeOut" }}
+                  transition={{ duration: 0.2, ease: 'easeOut' }}
                   style={styles.icon}
                 >
-                  <tab.Icon size={24} color="currentColor" strokeWidth={2} />
+                  <tab.Icon size={18} color="currentColor" strokeWidth={isActive ? 2.5 : 2} />
                 </motion.div>
 
-                {/* Hot-Stamped Wax Seal Notification Badge */}
                 <AnimatePresence>
                   {showBadge && (
                     <motion.div
-                      initial={{ scale: 0, rotate: -20 }}
-                      animate={{ scale: [1, 1.08, 1], rotate: 0 }}
+                      initial={{ scale: 0 }}
+                      animate={{ scale: [1, 1.08, 1] }}
                       exit={{ scale: 0, opacity: 0 }}
                       transition={{
                         scale: { repeat: Infinity, duration: 3, ease: 'easeInOut' },
-                        default: { type: 'spring', damping: 12, stiffness: 300 }
+                        default: { type: 'spring', damping: 12, stiffness: 300 },
                       }}
-                      style={styles.waxSealBadge}
+                      style={styles.badge}
                     >
                       <span style={styles.badgeText}>
                         {matchBadge > 99 ? '99+' : matchBadge}
@@ -2251,27 +2186,15 @@ const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
                 </AnimatePresence>
               </div>
 
-              {/* Text Hierarchy */}
-              <div style={styles.textWrapper}>
-                <span
-                  style={{
-                    ...styles.label,
-                    color: isActive ? theme.crimson : theme.inkMuted,
-                    fontWeight: isActive ? 700 : 500,
-                  }}
-                >
-                  {tab.label}
-                </span>
-                <span
-                  style={{
-                    ...styles.subtext,
-                    opacity: isActive ? 0.8 : 0.4,
-                    color: isActive ? theme.accent : theme.inkMuted,
-                  }}
-                >
-                  {tab.subtext}
-                </span>
-              </div>
+              <span
+                style={{
+                  ...styles.label,
+                  color: isActive ? t.crimson : t.inkMuted,
+                  fontWeight: isActive ? 800 : 600,
+                }}
+              >
+                {tab.label}
+              </span>
             </motion.button>
           );
         })}
@@ -2281,53 +2204,26 @@ const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
 };
 
 /* ==================================================================
-   ARCHIVAL STYLING SYSTEM
+   STYLES
 ================================================================== */
 const styles = {
   navContainer: {
-    marginTop: 'auto', // Flexbox silver bullet: forces navbar to the bottom
+    marginTop: 'auto', // Flexbox: forces navbar to the bottom
     flexShrink: 0,
-    backgroundColor: theme.paper,
+    backgroundColor: t.paper,
+    borderTop: '1px solid rgba(212,197,169,0.7)',
     zIndex: 10,
-    boxShadow: `0 -8px 24px ${theme.shadowWarm}`,
-    paddingBottom: 'max(8px, env(safe-area-inset-bottom))',
+    boxShadow: '0 -4px 16px rgba(88,63,30,0.1)',
+    paddingBottom: 'max(6px, env(safe-area-inset-bottom))',
     userSelect: 'none',
     WebkitUserSelect: 'none',
     contain: 'layout style',
-  },
-  paperGrain: {
-    position: 'absolute',
-    inset: 0,
-    backgroundImage: `url("${design?.texture?.grain || ''}")`,
-    mixBlendMode: 'multiply',
-    opacity: 0.85,
-    pointerEvents: 'none',
-    zIndex: 1,
-  },
-  topBorder: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: '1px',
-    backgroundColor: theme.borderDark,
-    zIndex: 2,
-  },
-  stitchSeam: {
-    position: 'absolute',
-    top: '3px',
-    left: 0,
-    right: 0,
-    height: '1px',
-    backgroundImage: `repeating-linear-gradient(90deg, ${theme.borderDark} 0px, ${theme.borderDark} 6px, transparent 6px, transparent 12px)`,
-    opacity: 0.6,
-    zIndex: 2,
   },
   tabGrid: {
     display: 'flex',
     position: 'relative',
     zIndex: 3,
-    paddingTop: '6px',
+    paddingTop: '2px',
   },
   tabButton: {
     flex: 1,
@@ -2335,10 +2231,10 @@ const styles = {
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '3px',
+    gap: '2px',
     background: 'none',
     border: 'none',
-    padding: '8px 0 4px',
+    padding: '7px 0 3px',
     cursor: 'pointer',
     position: 'relative',
     outline: 'none',
@@ -2349,88 +2245,59 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    height: '24px',
+    height: '22px',
     width: '32px',
   },
   icon: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    willChange: 'transform, color', // GPU acceleration for the scale animation
+    willChange: 'transform, color',
   },
-  waxSealBadge: {
+  badge: {
     position: 'absolute',
     top: '-4px',
     right: '-4px',
     minWidth: '18px',
     height: '18px',
     padding: '0 4px',
-    borderRadius: '10px',
-    backgroundColor: theme.crimson,
-    border: `1.5px solid ${theme.paper}`,
-    boxShadow: '0 2px 6px rgba(139, 26, 26, 0.4), inset 0 1px 2px rgba(255, 255, 255, 0.25)',
+    borderRadius: '999px',
+    backgroundColor: t.crimson,
+    border: `1.5px solid ${t.paper}`,
+    boxShadow: '0 2px 6px rgba(139, 26, 26, 0.3)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 5,
     willChange: 'transform',
+    boxSizing: 'border-box',
   },
   badgeText: {
-    fontFamily: "'Inter', sans-serif",
+    fontFamily: t.fontBody,
     fontSize: '9px',
     fontWeight: 800,
     color: '#ffffff',
     letterSpacing: '0.3px',
     lineHeight: 1,
-  },
-  textWrapper: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '1px',
+    fontVariantNumeric: 'tabular-nums',
   },
   label: {
-    fontFamily: "'Inter', sans-serif",
+    fontFamily: t.fontBody,
     fontSize: '10px',
     letterSpacing: '1px',
     textTransform: 'uppercase',
     transition: 'color 0.2s ease',
   },
-  subtext: {
-    fontFamily: "'Playfair Display', serif",
-    fontSize: '8px',
-    fontStyle: 'italic',
-    letterSpacing: '0.5px',
-    transition: 'all 0.2s ease',
-  },
-  
-  // Active Bracket Indicator
-  activeBracket: {
+  activeBar: {
     position: 'absolute',
-    top: '-6px',
-    width: '48px',
-    height: '6px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    pointerEvents: 'none',
-    willChange: 'transform',
-  },
-  bracketLine: {
-    width: '100%',
+    top: 0,
+    left: '50%',
+    marginLeft: '-16px',
+    width: '32px',
     height: '2.5px',
-    backgroundColor: theme.crimson,
-    borderRadius: '2px',
-    boxShadow: '0 1px 4px rgba(139, 26, 26, 0.3)',
-  },
-  rivet: {
-    position: 'absolute',
-    top: '1px',
-    width: '3.5px',
-    height: '3.5px',
-    borderRadius: design?.radius?.sm || '2px',
-    backgroundColor: theme.accent,
-    border: '0.5px solid #d4c5a9',
+    backgroundColor: t.crimson,
+    borderRadius: '999px',
+    pointerEvents: 'none',
   },
 };
 
@@ -2447,27 +2314,23 @@ import { ArrowLeft, X, Mail, Send } from 'lucide-react';
 import { theme as design } from '../utils/theme';
 import { triggerHaptic } from '../utils/haptics';
 
-/* ==================================================================
-   ARCHIVAL THEME SYSTEM
-================================================================== */
-const theme = {
-  color: {
-    paper: '#fdfbf7',
-    surface: '#ffffff',
-    surfaceAlt: '#f4f1ea',
-    border: '#e0d8c8',
-    borderDark: '#d4c5a9',
-    ink: '#1a1a1a',
-    inkMuted: '#8c8275',
-    accent: '#8b4513',
-    crimson: '#8b1a1a',
-    telegramTint: 'rgba(212, 175, 55, 0.08)', 
-    shadowWarm: 'rgba(139, 69, 19, 0.08)',
-    shadowDark: 'rgba(26, 26, 26, 0.20)',
-  }
+/* Locked tokens — same family as ProfileCard */
+const t = {
+  paper: '#fdfbf7',
+  card: '#fffdf8',
+  surfaceAlt: '#f4f1ea',
+  lineDark: '#d4c5a9',
+  ink: '#1a1a1a',
+  inkSoft: '#4a4a4a',
+  inkMuted: '#8c8275',
+  accent: '#8b4513',
+  crimson: '#8b1a1a',
+  telegramTint: 'rgba(230, 177, 122, 0.10)',
+  fontDisplay: design?.font?.heading || design?.font?.display || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  fontType: "'Special Elite', 'Courier New', monospace",
+  grain: design?.texture?.grain || '',
 };
-
-const TORN_EDGE_CLIP = 'polygon(0% 100%, 1.56% 18%, 3.12% 4%, 4.69% 22%, 6.25% 8%, 7.81% 16%, 9.38% 2%, 10.94% 24%, 12.50% 6%, 14.06% 14%, 15.62% 10%, 17.19% 20%, 18.75% 0%, 20.31% 18%, 21.88% 4%, 23.44% 22%, 25.00% 8%, 26.56% 16%, 28.12% 2%, 29.69% 24%, 31.25% 6%, 32.81% 14%, 34.38% 10%, 35.94% 20%, 37.50% 0%, 39.06% 18%, 40.62% 4%, 42.19% 22%, 43.75% 8%, 45.31% 16%, 46.88% 2%, 48.44% 24%, 50.00% 6%, 51.56% 14%, 53.12% 10%, 54.69% 20%, 56.25% 0%, 57.81% 18%, 59.38% 4%, 60.94% 22%, 62.50% 8%, 64.06% 16%, 65.62% 2%, 67.19% 24%, 68.75% 6%, 70.31% 14%, 71.88% 10%, 73.44% 20%, 75.00% 0%, 76.56% 18%, 78.12% 4%, 79.69% 22%, 81.25% 8%, 82.81% 16%, 84.38% 2%, 85.94% 24%, 87.50% 6%, 89.06% 14%, 90.62% 10%, 92.19% 20%, 93.75% 0%, 95.31% 18%, 96.88% 4%, 98.44% 22%, 100.00% 100%)';
 
 /* ==================================================================
    MAIN COMPONENT
@@ -2476,7 +2339,7 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedProfile, setSelectedProfile] = useState(null);
-  const [decliningIds, setDecliningIds] = useState(new Set()); 
+  const [decliningIds, setDecliningIds] = useState(new Set());
 
   useEffect(() => {
     fetchNotifications();
@@ -2499,8 +2362,8 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
     try {
       const response = await api.post(`/notifications/${id}/accept`);
       setNotifications((prev) => prev.filter((n) => n._id !== id));
-      setSelectedProfile(null); 
-      
+      setSelectedProfile(null);
+
       if (onSelectMatch) {
         onClose?.();
         onSelectMatch({ _id: response.matchId, user: sender });
@@ -2515,9 +2378,9 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
   const handleDismiss = async (e, id) => {
     e.stopPropagation();
     triggerHaptic('light');
-    
+
     setDecliningIds(prev => new Set(prev).add(id));
-    
+
     setTimeout(() => {
       setNotifications((prev) => prev.filter((n) => n._id !== id));
       setDecliningIds(prev => {
@@ -2547,57 +2410,56 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
   const renderRow = (n) => {
     const isPriority = n.type === 'priority_seal';
     const sender = n.senderId || {};
-    const senderName = sender.name || 'Anonymous Subject';
+    const senderName = sender.name || 'Anonymous';
     const avatarUrl = sender.photos?.[0] || 'https://via.placeholder.com/100?text=?';
-    const noteText = n.interactionRef?.letterContent || (isPriority ? 'Sent a Priority Telegram.' : 'Left a flower on your profile.');
+    const noteText = n.interactionRef?.letterContent || (isPriority ? 'Sent a priority message.' : 'Left a note on your profile.');
     const isDeclining = decliningIds.has(n._id);
     const senderUnavailable = sender.suspended || sender.isDeleted;
 
     return (
-      <motion.div 
+      <motion.div
         layout
         key={n._id}
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ 
-          opacity: 1, 
-          scale: 1,
-          backgroundColor: isDeclining ? 'rgba(139, 26, 26, 0.15)' : 'transparent'
+        initial={{ opacity: 0, y: 10 }}
+        animate={{
+          opacity: senderUnavailable ? 0.5 : 1,
+          y: 0,
+          backgroundColor: isDeclining ? 'rgba(139, 26, 26, 0.08)' : 'transparent',
         }}
-        exit={{ opacity: 0, scale: 0.9, height: 0, marginBottom: 0 }}
-        transition={{ duration: 0.3, ease: [0.2, 0.8, 0.2, 1] }}
+        exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
         className="ig-row"
         style={{
           ...styles.row,
-          backgroundColor: isPriority ? theme.color.telegramTint : 'transparent',
-          borderLeft: isPriority ? `3px solid ${theme.color.accent}` : 'none',
+          backgroundColor: isPriority && !isDeclining ? t.telegramTint : undefined,
           opacity: senderUnavailable ? 0.5 : 1,
         }}
         onClick={() => openProfile(sender, n._id)}
       >
-        {/* Avatar Column */}
+        {/* Avatar */}
         <div style={styles.avatarContainer}>
           <img src={avatarUrl} alt={senderName} loading="lazy" decoding="async" style={styles.avatar} />
           {isPriority && (
-            <div style={styles.sealBadge} title="Priority Telegram">
-              <Send size={10} color="#fff" strokeWidth={3} />
+            <div style={styles.sealBadge} title="Priority">
+              <Send size={9} color="#fff" strokeWidth={3} />
             </div>
           )}
         </div>
 
-        {/* Text Column */}
+        {/* Text */}
         <div style={styles.textContainer}>
           <p style={styles.mainText}>
-            <span style={{ fontWeight: 800, color: theme.color.ink }}>{senderName}</span> {isPriority ? 'sent a Telegram.' : 'sent a letter.'}
+            <span style={{ fontWeight: 700, color: t.ink }}>{senderName}</span> {isPriority ? 'sent a priority message.' : 'sent a letter.'}
           </p>
           <p className="line-clamp-2" style={styles.snippetText}>
-            "{noteText}"
+            {noteText}
           </p>
         </div>
 
-        {/* Actions Column */}
+        {/* Actions */}
         <div style={styles.actionContainer}>
-          <button 
-            className="tactile-btn" 
+          <button
+            className="tactile-btn"
             onClick={(e) => handleAccept(e, n._id, sender)}
             style={{
               ...styles.acceptBtn,
@@ -2609,13 +2471,13 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
           >
             {senderUnavailable ? 'Unavailable' : 'Connect'}
           </button>
-          <button 
-            className="tactile-btn" 
+          <button
+            className="tactile-btn"
             onClick={(e) => handleDismiss(e, n._id)}
             style={styles.dismissBtn}
             aria-label="Dismiss"
           >
-            <X size={16} />
+            <X size={14} strokeWidth={2} />
           </button>
         </div>
       </motion.div>
@@ -2624,15 +2486,15 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
 
   return (
     <div style={styles.screenContainer}>
-      
+
       <style>{`
-        .tactile-btn { transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.2s ease, opacity 0.2s ease; will-change: transform; }
-        @media (hover: hover) { .tactile-btn:hover { transform: translate3d(0, -2px, 0) scale3d(1.04, 1.04, 1); } }
-        .tactile-btn:active { transform: scale3d(0.92, 0.92, 1) translate3d(0, 0, 0) !important; transition: transform 0.08s cubic-bezier(0, 0, 0.2, 1) !important; }
-        
+        .tactile-btn { transition: transform 0.15s ease-out; will-change: transform; }
+        @media (hover: hover) { .tactile-btn:hover { transform: translateY(-1px); } }
+        .tactile-btn:active { transform: scale(0.96) !important; }
+
         .ig-row { transition: background-color 0.2s ease; }
-        @media (hover: hover) { .ig-row:hover { background-color: ${theme.color.surfaceAlt}; } }
-        
+        @media (hover: hover) { .ig-row:hover { background-color: rgba(244, 241, 234, 0.7); } }
+
         .line-clamp-2 {
           display: -webkit-box;
           -webkit-line-clamp: 2;
@@ -2642,47 +2504,47 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
 
         .archival-scrollbar::-webkit-scrollbar { width: 4px; }
         .archival-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .archival-scrollbar::-webkit-scrollbar-thumb { background: ${theme.color.borderDark}; border-radius: 4px; }
+        .archival-scrollbar::-webkit-scrollbar-thumb { background: rgba(212,197,169,0.9); border-radius: 999px; }
       `}</style>
 
-      {/* Background Texture */}
-      <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${design?.texture?.grain || ''}")`, mixBlendMode: 'multiply', opacity: 0.6, pointerEvents: 'none', zIndex: 1 }} />
+      {/* Grain film */}
+      <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 1 }} />
 
-      {/* Sticky Header */}
+      {/* Header */}
       <div style={styles.topBar}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {onClose && (
             <button className="tactile-btn" onClick={onClose} style={styles.backBtn} aria-label="Go back">
-              <ArrowLeft size={20} color={theme.color.ink} />
+              <ArrowLeft size={18} color={t.ink} strokeWidth={2} />
             </button>
           )}
           <h2 style={styles.heading}>Letterbox</h2>
         </div>
         {!loading && notifications.length > 0 && (
-          <span style={styles.badge}>{notifications.length} Pending</span>
+          <span style={styles.badge}>{notifications.length} pending</span>
         )}
       </div>
 
-      {/* Main List Area */}
+      {/* List */}
       <div className="archival-scrollbar" style={styles.contentArea}>
         {loading ? (
           <div style={styles.emptyState}>
-            <p>Unsealing archival tray...</p>
+            <p style={styles.emptyText}>Fetching your letters...</p>
           </div>
         ) : notifications.length === 0 ? (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} style={styles.emptyState}>
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }} style={styles.emptyState}>
             <h3 style={styles.emptyTitle}>No pending letters.</h3>
-            <p style={{ margin: 0 }}>Return to the deck to discover new connections and leave your mark.</p>
+            <p style={styles.emptyText}>Return to the deck to discover new connections.</p>
           </motion.div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', paddingBottom: '40px' }}>
-            
-            {/* Tier 1: Priority Telegrams */}
+          <div style={{ display: 'flex', flexDirection: 'column', paddingBottom: 40 }}>
+
+            {/* Priority */}
             {telegrams.length > 0 && (
               <div style={styles.tierGroup}>
                 <div style={styles.tierHeader}>
-                  <Send size={12} color={theme.color.accent} />
-                  <span style={styles.tierHeaderText}>Priority Telegrams</span>
+                  <Send size={12} color={t.accent} strokeWidth={2} />
+                  <span style={styles.tierHeaderText}>Priority</span>
                 </div>
                 <AnimatePresence>
                   {telegrams.map(renderRow)}
@@ -2690,12 +2552,12 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
               </div>
             )}
 
-            {/* Tier 2: Recent Deliveries */}
+            {/* Letters */}
             {letters.length > 0 && (
               <div style={styles.tierGroup}>
                 <div style={styles.tierHeader}>
-                  <Mail size={12} color={theme.color.inkMuted} />
-                  <span style={styles.tierHeaderText}>Recent Deliveries</span>
+                  <Mail size={12} color={t.accent} strokeWidth={2} />
+                  <span style={styles.tierHeaderText}>Letters</span>
                 </div>
                 <AnimatePresence>
                   {letters.map(renderRow)}
@@ -2707,73 +2569,88 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
         )}
       </div>
 
-      {/* --- PROFILE PREVIEW MODAL --- */}
+      {/* --- PROFILE PREVIEW SHEET --- */}
       <AnimatePresence>
         {selectedProfile && (
           <>
             {/* Backdrop */}
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              style={styles.modalBackdrop} 
-              onClick={() => setSelectedProfile(null)} 
+              transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+              style={styles.modalBackdrop}
+              onClick={() => setSelectedProfile(null)}
             />
-            
-            {/* Modal Sheet */}
-            <motion.div 
-              initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} 
-              transition={{ type: 'spring', damping: 25, stiffness: 250 }}
+
+            {/* Sheet */}
+            <motion.div
+              initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
+              transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
               style={styles.modalWrapper}
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Paper Texture */}
-              <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${design?.texture?.grain || ''}")`, mixBlendMode: 'multiply', opacity: 0.6, pointerEvents: 'none', zIndex: 1 }} />
-              
+              {/* Grain */}
+              <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 1 }} />
+
+              {/* Grabber */}
+              <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 10, position: 'relative', zIndex: 2 }}>
+                <span aria-hidden="true" style={{ width: 36, height: 4, borderRadius: 999, backgroundColor: 'rgba(212,197,169,0.7)' }} />
+              </div>
+
               {/* Header */}
               <div style={styles.modalHeader}>
-                <span style={{ fontFamily: design?.font?.display || "'Playfair Display', serif", fontSize: '18px', fontWeight: 700, color: theme.color.ink }}>Dossier Inspection</span>
-                <button className="tactile-btn" onClick={() => setSelectedProfile(null)} style={styles.modalCloseBtn}><X size={20} /></button>
+                <span style={styles.modalTitle}>{selectedProfile.name || 'Profile'}</span>
+                <button className="tactile-btn" onClick={() => setSelectedProfile(null)} aria-label="Close" style={styles.modalCloseBtn}>
+                  <X size={16} strokeWidth={2} />
+                </button>
               </div>
 
               <div className="archival-scrollbar" style={styles.modalScrollArea}>
-                {/* Hero Photo with Torn Edge */}
-                <div style={{ position: 'relative', width: '100%', aspectRatio: '4/5', backgroundColor: theme.color.surfaceAlt, overflow: 'hidden' }}>
-                  <img src={selectedProfile.photos?.[0] || 'https://via.placeholder.com/500'} alt={selectedProfile.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  <div aria-hidden="true" style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(15,12,10,0.9) 0%, transparent 40%)' }} />
-                  <div style={{ position: 'absolute', bottom: '24px', left: '20px', right: '20px', zIndex: 2 }}>
-                    <h3 style={{ fontFamily: design?.font?.display || "'Playfair Display', serif", fontSize: '32px', color: '#fff', margin: 0, fontWeight: 700, letterSpacing: '-0.02em', textShadow: '0 2px 12px rgba(0,0,0,0.6)' }}>
+                {/* Hero photo — clean, no torn edge */}
+                <div style={{ position: 'relative', width: '100%', aspectRatio: '4/5', backgroundColor: t.surfaceAlt, overflow: 'hidden' }}>
+                  <img src={selectedProfile.photos?.[0] || 'https://via.placeholder.com/500'} alt={selectedProfile.name} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                  <div aria-hidden="true" style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(15,12,10,0.85) 0%, transparent 45%)' }} />
+                  <div style={{ position: 'absolute', bottom: 20, left: 20, right: 20, zIndex: 2 }}>
+                    <h3 style={{ fontFamily: t.fontDisplay, fontSize: 30, color: '#fff', margin: 0, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.05, textShadow: '0 2px 16px rgba(0,0,0,0.5)' }}>
                       {selectedProfile.name}, {selectedProfile.age}
                     </h3>
-                    <p style={{ fontFamily: design?.font?.body || "'Inter', sans-serif", fontSize: '12px', color: 'rgba(255,255,255,0.9)', margin: '4px 0 0 0', fontWeight: 600, letterSpacing: '1px', textTransform: 'uppercase' }}>
-                      {selectedProfile.branch} • {selectedProfile.year}
+                    <p style={{ fontFamily: t.fontType, fontSize: 10.5, color: 'rgba(255,255,255,0.9)', margin: '8px 0 0 0', letterSpacing: '1.5px', textTransform: 'uppercase' }}>
+                      {[selectedProfile.branch, selectedProfile.year].filter(Boolean).join(' · ')}
                     </p>
                   </div>
                 </div>
-                <div aria-hidden="true" style={{ width: '100%', height: '24px', backgroundColor: theme.color.paper, clipPath: TORN_EDGE_CLIP, marginTop: '-12px', position: 'relative', zIndex: 3, filter: 'drop-shadow(0 -3px 3px rgba(0,0,0,0.12))' }} />
 
-                <div style={{ padding: '16px 20px 120px' }}>
-                  {/* Bio */}
+                <div style={{ padding: '20px 20px 120px', display: 'flex', flexDirection: 'column', gap: 24 }}>
+                  {/* Bio — typewriter on a dotted field, recorded data */}
                   {selectedProfile.bio && (
-                    <div style={{ marginBottom: '24px' }}>
-                       <p style={{ fontFamily: design?.font?.body || "'Inter', sans-serif", fontSize: '10px', fontWeight: 700, letterSpacing: '2px', textTransform: 'uppercase', color: theme.color.accent, margin: '0 0 8px 0' }}>Foreword</p>
-                       <p style={{ fontFamily: "'Special Elite', 'Courier New', monospace", fontSize: '14px', color: theme.color.ink, lineHeight: 1.6, margin: 0, padding: '16px', backgroundColor: theme.color.surfaceAlt, border: `1px solid ${theme.color.borderDark}`, borderRadius: '8px' }}>
-                         "{selectedProfile.bio}"
-                       </p>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                        <span style={{ width: 5, height: 5, backgroundColor: t.crimson }} />
+                        <span style={styles.sectionLabel}>About</span>
+                      </div>
+                      <p style={{ fontFamily: t.fontType, fontSize: 13.5, color: t.ink, lineHeight: 1.65, margin: 0, paddingBottom: 6, borderBottom: '1.5px dotted rgba(139,69,19,0.45)' }}>
+                        {selectedProfile.bio}
+                      </p>
                     </div>
                   )}
 
-                  {/* Prompts */}
+                  {/* Prompts — hairline index rows */}
                   {selectedProfile.prompts && selectedProfile.prompts.map((p, idx) => (
                     p.question && (
-                      <div key={idx} style={{ backgroundColor: theme.color.surface, border: `1px solid ${theme.color.border}`, borderRadius: '12px', padding: '16px', marginBottom: '16px', boxShadow: `0 4px 12px ${theme.color.shadowWarm}` }}>
-                        <p style={{ fontFamily: design?.font?.body || "'Inter', sans-serif", fontSize: '10px', fontWeight: 700, color: theme.color.inkMuted, textTransform: 'uppercase', letterSpacing: '1px', margin: '0 0 8px 0' }}>Whisper #{idx + 1}</p>
-                        <p style={{ fontFamily: design?.font?.display || "'Playfair Display', serif", fontSize: '16px', fontWeight: 700, color: theme.color.ink, margin: '0 0 8px 0', lineHeight: 1.4 }}>"{p.question}"</p>
+                      <div key={idx} style={{ borderTop: '1px solid rgba(212,197,169,0.7)', paddingTop: 14 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                          <span style={{ width: 5, height: 5, backgroundColor: t.crimson }} />
+                          <span style={styles.sectionLabel}>Whisper</span>
+                        </div>
+                        <p style={{ fontFamily: t.fontDisplay, fontSize: 16.5, fontWeight: 600, color: t.ink, margin: 0, lineHeight: 1.45, wordBreak: 'break-word' }}>
+                          {p.question}
+                        </p>
                       </div>
                     )
                   ))}
                 </div>
               </div>
 
-              {/* Massive Footer Actions */}
+              {/* Footer actions — two pills, crimson on accept only */}
               <div style={styles.modalFooter}>
                 <button className="tactile-btn" style={styles.modalDismissBtn} onClick={(e) => handleDismiss(e, selectedProfile.notificationId)}>
                   Decline
@@ -2796,471 +2673,229 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
 ================================================================== */
 const styles = {
   screenContainer: {
-    position: 'fixed', inset: 0, backgroundColor: theme.color.paper, zIndex: 1000, 
+    position: 'fixed', inset: 0, backgroundColor: t.paper, zIndex: 1000,
     display: 'flex', flexDirection: 'column', overflow: 'hidden', contain: 'layout style paint'
   },
   topBar: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
-    padding: 'max(16px, env(safe-area-inset-top)) 24px 16px', backgroundColor: theme.color.surface, 
-    borderBottom: `1px solid ${theme.color.borderDark}`, position: 'relative', zIndex: 10,
-    boxShadow: `0 2px 12px ${theme.color.shadowWarm}`
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: 'max(12px, env(safe-area-inset-top)) 16px 12px',
+    backgroundColor: t.paper,
+    borderBottom: '1px solid rgba(212,197,169,0.7)', position: 'relative', zIndex: 10,
+    boxShadow: '0 4px 16px rgba(88,63,30,0.08)'
   },
   backBtn: {
-    background: 'none', border: 'none', padding: '4px', margin: '-4px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center'
+    backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 12,
+    width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+    flexShrink: 0,
   },
   heading: {
-    fontFamily: design?.font?.display || "'Playfair Display', serif", fontSize: '24px', 
-    fontWeight: 800, color: theme.color.ink, margin: 0, letterSpacing: '-0.02em',
+    fontFamily: t.fontDisplay, fontSize: 20,
+    fontWeight: 800, color: t.ink, margin: 0, letterSpacing: '-0.02em',
   },
   badge: {
-    backgroundColor: theme.color.crimson, color: '#fff', fontFamily: "'Inter', sans-serif",
-    fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '12px', letterSpacing: '0.5px'
+    backgroundColor: t.crimson, color: '#fff', fontFamily: t.fontBody,
+    fontSize: 10, fontWeight: 800, padding: '4px 10px', borderRadius: 999, letterSpacing: '1.5px', textTransform: 'uppercase',
+    fontVariantNumeric: 'tabular-nums',
   },
   contentArea: {
-    flex: 1, padding: '0', overflowY: 'auto', position: 'relative', zIndex: 2
+    flex: 1, padding: 0, overflowY: 'auto', position: 'relative', zIndex: 2
   },
   emptyState: {
-    padding: '80px 24px', textAlign: 'center', color: theme.color.inkMuted, fontFamily: "'Inter', sans-serif", fontSize: '14px'
+    padding: '80px 24px', textAlign: 'center',
   },
   emptyTitle: {
-    fontFamily: design?.font?.display || "'Playfair Display', serif", fontSize: '22px', fontWeight: 700, color: theme.color.ink, margin: '0 0 8px 0'
+    fontFamily: t.fontDisplay, fontSize: 22, fontWeight: 800, color: t.ink, margin: '0 0 8px 0', letterSpacing: '-0.02em'
   },
-  
-  // --- TIER STYLES ---
-  tierGroup: {
-    marginBottom: '8px'
+  emptyText: {
+    margin: 0, fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 450, color: t.inkMuted, lineHeight: 1.6
   },
+
+  // --- Tiers ---
+  tierGroup: { marginBottom: 8 },
   tierHeader: {
-    display: 'flex', alignItems: 'center', gap: '6px', padding: '20px 24px 12px',
-    borderBottom: `1px solid ${theme.color.border}`
+    display: 'flex', alignItems: 'center', gap: 6, padding: '20px 16px 10px',
+    borderBottom: '1px solid rgba(212,197,169,0.5)'
   },
   tierHeaderText: {
-    fontFamily: "'Inter', sans-serif", fontSize: '11px', fontWeight: 700, letterSpacing: '1.5px', textTransform: 'uppercase', color: theme.color.inkMuted
+    fontFamily: t.fontBody, fontSize: 9.5, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', color: t.inkMuted
+  },
+  sectionLabel: {
+    fontFamily: t.fontBody, fontSize: 9.5, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', color: t.inkMuted
   },
 
-  // --- ROW STYLES ---
+  // --- Rows ---
   row: {
-    display: 'flex', alignItems: 'center', gap: '16px', padding: '16px 24px', 
-    borderBottom: `1px solid ${theme.color.border}`, cursor: 'pointer'
+    display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px',
+    borderBottom: '1px solid rgba(212,197,169,0.5)', cursor: 'pointer'
   },
-  avatarContainer: {
-    position: 'relative', flexShrink: 0
-  },
+  avatarContainer: { position: 'relative', flexShrink: 0 },
   avatar: {
-    width: '48px', height: '48px', borderRadius: '50%', objectFit: 'cover', 
-    border: `1px solid ${theme.color.borderDark}`, backgroundColor: theme.color.surfaceAlt
+    width: 48, height: 48, borderRadius: '50%', objectFit: 'cover',
+    border: '1px solid rgba(212,197,169,0.9)', backgroundColor: t.surfaceAlt, display: 'block'
   },
   sealBadge: {
-    position: 'absolute', bottom: '-2px', right: '-2px', width: '18px', height: '18px', 
-    backgroundColor: theme.color.crimson, color: '#fff', borderRadius: '50%', 
-    display: 'flex', alignItems: 'center', justifyContent: 'center', 
-    border: `2px solid ${theme.color.paper}`, boxShadow: '0 2px 4px rgba(139,26,26,0.3)'
+    position: 'absolute', bottom: -2, right: -2, width: 18, height: 18,
+    backgroundColor: t.crimson, color: '#fff', borderRadius: '50%',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    border: `2px solid ${t.paper}`, boxShadow: '0 2px 6px rgba(139,26,26,0.3)', boxSizing: 'content-box',
   },
   textContainer: {
-    flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '2px'
+    flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3
   },
   mainText: {
-    fontFamily: "'Inter', sans-serif", fontSize: '14px', color: theme.color.inkSoft, margin: 0, lineHeight: 1.3
+    fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 450, color: t.inkSoft, margin: 0, lineHeight: 1.35
   },
   snippetText: {
-    fontFamily: "'Special Elite', 'Courier New', monospace", fontSize: '13px', color: theme.color.inkMuted, 
-    margin: 0, lineHeight: 1.4, fontStyle: 'italic'
+    fontFamily: t.fontType, fontSize: 12.5, color: t.inkMuted,
+    margin: 0, lineHeight: 1.45
   },
   actionContainer: {
-    display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0
+    display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0
   },
   acceptBtn: {
-    backgroundColor: theme.color.crimson, color: '#fff', border: 'none', borderRadius: '8px', 
-    padding: '8px 16px', fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 700, 
-    cursor: 'pointer', boxShadow: '0 2px 8px rgba(139,26,26,0.25)'
+    backgroundColor: t.crimson, color: '#fff', border: 'none', borderRadius: 999,
+    padding: '8px 14px', fontFamily: t.fontBody, fontSize: 10, fontWeight: 800,
+    letterSpacing: '1.5px', textTransform: 'uppercase',
+    cursor: 'pointer', boxShadow: '0 4px 12px rgba(139,26,26,0.25)', whiteSpace: 'nowrap',
   },
   dismissBtn: {
-    backgroundColor: theme.color.surfaceAlt, color: theme.color.inkMuted, border: `1px solid ${theme.color.borderDark}`, 
-    borderRadius: '8px', padding: '7px 8px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer'
+    backgroundColor: t.surfaceAlt, color: t.inkMuted, border: '1px solid rgba(212,197,169,0.7)',
+    borderRadius: 12, width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0,
   },
 
-  // --- MODAL STYLES ---
+  // --- Sheet ---
   modalBackdrop: {
-    position: 'fixed', inset: 0, backgroundColor: 'rgba(20,15,10,0.65)', backdropFilter: 'blur(4px)', zIndex: 1100,
+    position: 'fixed', inset: 0, backgroundColor: 'rgba(28,19,10,0.6)', zIndex: 1100,
   },
   modalWrapper: {
-    position: 'fixed', bottom: 0, left: 0, right: 0, height: '92dvh', backgroundColor: theme.color.paper, 
-    borderTopLeftRadius: '24px', borderTopRightRadius: '24px', zIndex: 1101, display: 'flex', flexDirection: 'column', 
-    boxShadow: '0 -20px 50px rgba(0,0,0,0.4)', overflow: 'hidden'
+    position: 'fixed', bottom: 0, left: 0, right: 0, height: '92dvh', backgroundColor: t.paper,
+    borderTopLeftRadius: 18, borderTopRightRadius: 18, zIndex: 1101, display: 'flex', flexDirection: 'column',
+    boxShadow: '0 -14px 44px rgba(88,63,30,0.3)', overflow: 'hidden'
   },
   modalHeader: {
-    padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
-    backgroundColor: theme.color.surface, borderBottom: `1px solid ${theme.color.borderDark}`, zIndex: 10
+    padding: '12px 16px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    borderBottom: '1px solid rgba(212,197,169,0.7)', zIndex: 10, position: 'relative',
+  },
+  modalTitle: {
+    fontFamily: t.fontDisplay, fontSize: 19, fontWeight: 800, color: t.ink, letterSpacing: '-0.02em',
   },
   modalCloseBtn: {
-    background: theme.color.surfaceAlt, border: `1px solid ${theme.color.border}`, borderRadius: '8px', 
-    width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', 
-    cursor: 'pointer', color: theme.color.ink
+    backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 12,
+    width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    cursor: 'pointer', color: t.ink, flexShrink: 0,
   },
   modalScrollArea: {
     flex: 1, overflowY: 'auto', position: 'relative', zIndex: 2
   },
   modalFooter: {
-    padding: '20px 24px', paddingBottom: 'max(20px, env(safe-area-inset-bottom))', display: 'flex', gap: '16px', 
-    backgroundColor: theme.color.surface, borderTop: `1px solid ${theme.color.borderDark}`, zIndex: 10
+    padding: '14px 16px', paddingBottom: 'max(14px, env(safe-area-inset-bottom))', display: 'flex', gap: 10,
+    backgroundColor: t.paper, borderTop: '1px solid rgba(212,197,169,0.7)', zIndex: 10, position: 'relative',
   },
   modalDismissBtn: {
-    flex: 0.4, padding: '18px', backgroundColor: theme.color.surfaceAlt, border: `1px solid ${theme.color.borderDark}`, 
-    color: theme.color.ink, fontFamily: "'Inter', sans-serif", fontSize: '14px', fontWeight: 700, textTransform: 'uppercase', 
-    borderRadius: '12px', cursor: 'pointer'
+    flex: 0.4, padding: '15px 8px', backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)',
+    color: t.ink, fontFamily: t.fontBody, fontSize: 11, fontWeight: 800, textTransform: 'uppercase',
+    letterSpacing: '1.5px', borderRadius: 999, cursor: 'pointer',
   },
   modalAcceptBtn: {
-    flex: 1, padding: '18px', backgroundColor: theme.color.crimson, border: 'none', color: '#fff', 
-    fontFamily: "'Inter', sans-serif", fontSize: '14px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '1px', 
-    borderRadius: '12px', cursor: 'pointer', boxShadow: '0 4px 16px rgba(139,26,26,0.3)'
-  }
+    flex: 1, padding: '15px 8px', backgroundColor: t.crimson, border: 'none', color: '#fff',
+    fontFamily: t.fontBody, fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '1.8px',
+    borderRadius: 999, cursor: 'pointer', boxShadow: '0 6px 18px rgba(139,26,26,0.28)',
+  },
 };
 
 export default NotificationDrawer;
-
 ```
 
 ### ./client/src/components/PolaroidCard.jsx
 
 ```
-import React, { useState, useEffect, useRef } from 'react';
-import { motion, useScroll, useTransform } from 'framer-motion';
-import PopoutItem from './PopoutItem';
-import { useAppConfig } from '../utils/AppConfigContext';
+import React, { useState, memo } from 'react';
+import { motion } from 'framer-motion';
 import { theme as design } from '../utils/theme';
-import { Sparkle, MapPin, MoreVertical, Award, Calendar } from 'lucide-react';
 
-/* ==================================================================
-   MUSEUM-GRADE ARCHIVAL SYSTEM
-================================================================== */
-const theme = {
-  color: {
-    paper: '#fdfbf7',
-    surface: '#ffffff',
-    surfaceAlt: '#f4f1ea',
-    border: '#e0d8c8',
-    ink: '#1a1a1a',
-    inkSoft: '#4a4a4a',
-    accent: '#8b4513',
-    crimson: '#8b1a1a',
-    shadowWarm: 'rgba(139, 69, 19, 0.12)',
-  },
-  font: {
-    display: "'Playfair Display', Georgia, serif",
-    body: "'Inter', -apple-system, sans-serif",
-    typewriter: "'Special Elite', 'Courier New', monospace",
-  },
-};
+/**
+ * PolaroidCard — chat image bubble.
+ * Props: src, caption, tilt, onExpand
+ */
+const PolaroidCard = ({ src, caption, tilt = '0deg', onExpand }) => {
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
 
-// Static, optimized deckle edge
-const TORN_EDGE_CLIP = 'polygon(0% 100%, 2% 80%, 4% 95%, 6% 85%, 8% 100%, 10% 80%, 12% 95%, 14% 85%, 16% 100%, 18% 80%, 20% 95%, 22% 85%, 24% 100%, 26% 80%, 28% 95%, 30% 85%, 32% 100%, 34% 80%, 36% 95%, 38% 85%, 40% 100%, 42% 80%, 44% 95%, 46% 85%, 48% 100%, 50% 80%, 52% 95%, 54% 85%, 56% 100%, 58% 80%, 60% 95%, 62% 85%, 64% 100%, 66% 80%, 68% 95%, 70% 85%, 72% 100%, 74% 80%, 76% 95%, 78% 85%, 80% 100%, 82% 80%, 84% 95%, 86% 85%, 88% 100%, 90% 80%, 92% 95%, 94% 85%, 96% 100%, 98% 80%, 100% 100%)';
-
-function matchStatus(score) {
-  if (score >= 85) return 'Exceptional Match';
-  if (score >= 65) return 'High Compatibility';
-  if (score >= 40) return 'Potential Resonance';
-  return 'Exploratory';
-}
-
-const TILT = { prompt_0: '1.4deg', photo_1: '-2.2deg', photo_2: '1.8deg', prompt_1: '-1.1deg', prompt_2: '0.5deg', photo_3: '-0.7deg' };
-
-/* ==================================================================
-   MAIN COMPONENT
-================================================================== */
-const ProfileCard = ({ profile = {}, scrollRef, onAction }) => {
-  const config = useAppConfig();
-  const heroImgRef = useRef(null);
-  const targetScore = Math.min(100, Math.max(0, profile.compatScore || 0));
-  
-  const [displayScore, setDisplayScore] = useState(0);
-  const [sweeping, setSweeping] = useState(false);
-  const [showProfileMenu, setShowProfileMenu] = useState(false);
-  const [heroLoaded, setHeroLoaded] = useState(false);
-
-  // Hardware-Accelerated Scroll Engine (Zero-Lag Paper Tear)
-  const { scrollY } = useScroll({ container: scrollRef });
-  const tearOpacity = useTransform(scrollY, [0, 60], [0, 1]);
-  const tearY = useTransform(scrollY, [0, 60], [-15, 0]);
-
-  useEffect(() => {
-    if (heroImgRef.current?.complete) setHeroLoaded(true);
-  }, [profile.photos]);
-
-  // Compatibility Radar Animation
-  useEffect(() => {
-    let startTimestamp = null;
-    let animationFrameId = null;
-    const duration = 1600; 
-    const startScore = displayScore;
-
-    const step = (timestamp) => {
-      if (!startTimestamp) startTimestamp = timestamp;
-      const progress = Math.min((timestamp - startTimestamp) / duration, 1);
-      const easeProgress = 1 - Math.pow(1 - progress, 4); 
-      const current = Math.round(startScore + (targetScore - startScore) * easeProgress);
-      setDisplayScore(current);
-      if (progress < 1) animationFrameId = window.requestAnimationFrame(step);
-    };
-
-    const timer = setTimeout(() => {
-      setSweeping(true);
-      animationFrameId = window.requestAnimationFrame(step);
-    }, 300);
-
-    return () => {
-      clearTimeout(timer);
-      if (animationFrameId) window.cancelAnimationFrame(animationFrameId);
-    };
-  }, [targetScore]);
-
-  // Dynamic Icon Engine
-  const getIconForInterest = (interest) => {
-    const key = Object.keys(config.interestIcons || {}).find(k => interest.toLowerCase().includes(k));
-    if (key) return config.interestIcons[key];
-    const fallbacks = config.interestIconFallbacks || ['star'];
-    let hash = 0;
-    for (let i = 0; i < interest.length; i++) hash = ((hash << 5) - hash) + interest.charCodeAt(i);
-    return fallbacks[Math.abs(hash) % fallbacks.length];
-  };
+  const resolvedSrc = failed ? design.placeholder.image : src;
 
   return (
-    <div
+    <motion.figure
+      initial={{ opacity: 0, y: 8, rotate: 0 }}
+      animate={{ opacity: 1, y: 0, rotate: tilt }}
+      transition={{ type: 'spring', damping: 24, stiffness: 320 }}
+      onClick={onExpand}
       style={{
-        width: '100%', 
-        height: '100%', 
-        backgroundColor: theme.color.paper,
-        display: 'flex', 
-        flexDirection: 'column', 
-        position: 'relative',
-        borderRadius: '0 24px 24px 0', // The Book Spine Geometry
-        overflow: 'hidden',
-        boxShadow: `inset 12px 0 20px -8px rgba(0,0,0,0.15), 4px 0 16px ${theme.color.shadowWarm}`,
-        border: `1px solid ${theme.color.border}`,
-        borderLeft: 'none',
+        margin: 0,
+        padding: caption ? '7px 7px 0 7px' : '7px 7px 20px 7px',
+        width: '240px',
+        backgroundColor: '#ffffff',
+        border: '1px solid rgba(0,0,0,0.06)',
+        borderRadius: 3,
+        boxShadow: '0 10px 24px rgba(88,63,30,0.2)',
+        cursor: onExpand ? 'zoom-in' : 'default',
+        transformOrigin: 'center center',
+        willChange: 'transform',
+        boxSizing: 'border-box',
+        contain: 'layout paint',
       }}
     >
-      {/* Cinematic Texture */}
-      <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${design.texture.grain}")`, mixBlendMode: 'multiply', pointerEvents: 'none', zIndex: 15 }} />
-
-      {/* Global Hardware Accelerated Styles */}
-      <style>{`
-        .hide-scroll::-webkit-scrollbar { display: none; }
-        .hide-scroll { -ms-overflow-style: none; scrollbar-width: none; }
-        .tactile-btn { transition: transform 0.15s ease-out; will-change: transform; }
-        .tactile-btn:active { transform: scale(0.96) !important; }
-        .bento-box { background: ${theme.color.surfaceAlt}; border: 1px solid ${theme.color.border}; border-radius: 16px; padding: 20px; box-shadow: inset 0 2px 8px rgba(0,0,0,0.02); }
-      `}</style>
-
-      {/* LAG-FREE SCROLL AREA */}
-      <div 
-        ref={scrollRef} 
-        className="hide-scroll"
-        style={{ 
-          flex: 1, 
-          overflowY: 'auto', 
-          WebkitOverflowScrolling: 'touch',
-          paddingBottom: '32px', // FIXED: Reduced extreme padding
-          position: 'relative', 
-          zIndex: 1,
-          willChange: 'scroll-position'
+      <div
+        style={{
+          position: 'relative',
+          width: '100%',
+          aspectRatio: '1 / 1',
+          overflow: 'hidden',
+          backgroundColor: '#f4f1ea',
+          borderRadius: 2,
         }}
       >
-        
-        {/* 1. UPSCALED HERO PHOTO */}
-        <div style={{ width: '100%', flexShrink: 0, position: 'relative' }}>
-          <div style={{ width: '100%', aspectRatio: '3/4', position: 'relative', backgroundColor: theme.color.surfaceAlt, overflow: 'hidden' }}>
-            
-            <div style={{ opacity: heroLoaded ? 1 : 0, transition: 'opacity 0.4s ease-out', width: '100%', height: '100%' }}>
-              <img 
-                ref={heroImgRef} 
-                src={profile.photos?.[0] || 'https://via.placeholder.com/600x800'} 
-                alt={profile.name} 
-                onLoad={() => setHeroLoaded(true)} 
-                decoding="async" 
-                style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} 
-              />
-              
-              <div aria-hidden="true" style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(15,12,10,0.95) 0%, rgba(15,12,10,0.4) 40%, transparent 100%)', pointerEvents: 'none' }} />
-              
-              <div style={{ position: 'absolute', bottom: '48px', left: '24px', right: '24px', zIndex: 2 }}>
-                <h2 style={{ fontFamily: theme.font.display, fontSize: '42px', color: '#fff', margin: 0, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.1 }}>
-                  {profile.name || 'Anonymous'}<span style={{ fontWeight: 400, opacity: 0.85 }}>, {profile.age || '—'}</span>
-                </h2>
-                <p style={{ fontFamily: theme.font.body, fontSize: '14px', color: 'rgba(255,255,255,0.92)', margin: '10px 0 0 0', letterSpacing: '1.5px', textTransform: 'uppercase', fontWeight: 700, display: 'flex', alignItems: 'center' }}>
-                  {profile.branch || 'General'} <Sparkle size={14} color="#e6b17a" style={{ margin: '0 8px' }} /> Era {profile.year || '20XX'}
-                </p>
-              </div>
-            </div>
-
-            <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 10 }}>
-              <button onClick={() => setShowProfileMenu(!showProfileMenu)} className="tactile-btn" style={{ width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.45)', border: '1px solid rgba(255,255,255,0.25)', borderRadius: '12px', cursor: 'pointer', backdropFilter: 'blur(4px)' }}>
-                <MoreVertical size={24} color="#fff" />
-              </button>
-              {showProfileMenu && (
-                <div style={{ position: 'absolute', top: 56, right: 0, backgroundColor: theme.color.paper, border: `1px solid ${theme.color.border}`, borderRadius: '12px', boxShadow: '0 12px 32px rgba(0,0,0,0.25)', zIndex: 20, minWidth: 160 }}>
-                  <button onClick={() => setShowProfileMenu(false)} style={{ display: 'block', width: '100%', padding: '16px', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: theme.font.body, fontSize: '15px', color: theme.color.crimson, fontWeight: 700 }}>Report Profile</button>
-                </div>
-              )}
-            </div>
-          </div>
-          {/* HARDWARE ACCELERATED ZERO-LAG PAPER TEAR */}
-          <motion.div aria-hidden="true" style={{ width: '100%', height: '24px', backgroundColor: theme.color.paper, clipPath: TORN_EDGE_CLIP, marginTop: '-12px', position: 'relative', zIndex: 3, filter: 'drop-shadow(0 -3px 3px rgba(0,0,0,0.15))', opacity: tearOpacity, y: tearY, pointerEvents: 'none' }} />
-        </div>
-
-        <div style={{ padding: '20px 24px 0 24px' }}>
-          
-          {/* 2. THE EDITORIAL GRID: Vitals & Bio */}
-          <div className="bento-box" style={{ marginBottom: '28px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-              <div style={vitalGridItem}><MapPin size={18} color={theme.color.accent} /> <span style={vitalText}>{profile.hostel || 'Campus'}</span></div>
-              <div style={vitalGridItem}><Calendar size={18} color={theme.color.accent} /> <span style={vitalText}>{profile.year || 'Era'}</span></div>
-              <div style={vitalGridItem}><Award size={18} color={theme.color.accent} /> <span style={vitalText}>{profile.branch || 'Discipline'}</span></div>
-              <div style={vitalGridItem}><Sparkle size={18} color={theme.color.accent} /> <span style={vitalText}>{profile.pronouns || 'Identity'}</span></div>
-            </div>
-            
-            {profile.bio && (
-              <div style={{ borderTop: `1px solid ${theme.color.borderDark}`, paddingTop: '20px' }}>
-                <SectionLabel>Foreword</SectionLabel>
-                <p style={{ fontFamily: theme.font.typewriter, fontSize: '17px', color: theme.color.ink, lineHeight: 1.6, margin: 0, fontWeight: 600 }}>"{profile.bio}"</p>
-              </div>
-            )}
-          </div>
-
-          {/* 3. COMPATIBILITY SCAN */}
-          <PopoutItem targetId="compatibility" onAction={onAction} type="compatibility">
-            <div style={{ backgroundColor: theme.color.surface, border: `1px solid ${theme.color.borderDark}`, borderRadius: '20px', padding: '24px', marginBottom: '28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', position: 'relative', overflow: 'hidden' }}>
-              <div aria-hidden="true" style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 50% 50%, rgba(139,69,19,0.06) 0%, transparent 60%)' }} />
-              <div style={{ display: 'flex', flexDirection: 'column', zIndex: 2 }}>
-                <h3 style={{ fontFamily: theme.font.display, fontSize: '28px', color: theme.color.ink, margin: '0 0 10px 0', fontWeight: 800 }}>Compatibility</h3>
-                <span style={{ display: 'inline-block', padding: '8px 14px', border: `1.5px solid ${theme.color.accent}`, borderRadius: '8px', color: theme.color.accent, fontFamily: theme.font.body, fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', backgroundColor: theme.color.paper }}>{matchStatus(displayScore)}</span>
-              </div>
-              <div style={{ position: 'relative', width: 90, height: 90, flexShrink: 0, zIndex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', border: `4px solid ${theme.color.surfaceAlt}` }}>
-                 <p style={{ fontFamily: theme.font.display, fontSize: '28px', margin: 0, fontWeight: 800, color: theme.color.accent }}>{displayScore}<span style={{ fontSize: '16px' }}>%</span></p>
-              </div>
-              <div style={{ position: 'absolute', top: '14px', right: '14px', zIndex: 3 }}><HoldHint /></div>
-            </div>
-          </PopoutItem>
-
-          {/* 4. SEEKING INTENT & CURIOSITIES */}
-          <div className="bento-box" style={{ marginBottom: '36px' }}>
-             <SectionLabel>Archival Parameters</SectionLabel>
-             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                  {(profile.intent && profile.intent.length > 0 ? profile.intent : ['Connection']).map((item, i) => (
-                    <span key={i} style={{ padding: '10px 16px', border: `1.5px solid ${theme.color.crimson}`, borderRadius: '10px', backgroundColor: 'rgba(139,26,26,0.05)', color: theme.color.crimson, fontFamily: theme.font.body, fontSize: '13px', fontWeight: 800, textTransform: 'uppercase' }}>{item}</span>
-                  ))}
-                </div>
-                {profile.interests && profile.interests.length > 0 && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', borderTop: `1px dashed ${theme.color.borderDark}`, paddingTop: '20px' }}>
-                    {profile.interests.map((interest, i) => (
-                      <span key={i} style={{ padding: '10px 14px', border: `1px solid ${theme.color.border}`, borderRadius: '10px', backgroundColor: theme.color.surface, color: theme.color.inkSoft, fontFamily: theme.font.typewriter, fontSize: '15px', fontWeight: 600, display: 'flex', alignItems: 'center' }}>
-                        <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '8px', color: theme.color.inkMuted }}>{getIconForInterest(interest)}</span>
-                        {interest}
-                      </span>
-                    ))}
-                  </div>
-                )}
-             </div>
-          </div>
-
-          {/* 5. BENTO GRID (Photos & Whispers via PopoutItem for Letter/Flower Sending) */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px 16px', marginBottom: '24px', paddingTop: '8px', alignItems: 'center' }}>
-            
-            <PopoutItem targetId="prompt_0" onAction={onAction} style={{ height: 'auto' }}>
-              <IndexCard tilt={TILT.prompt_0} tape="top-right">{profile.prompts?.[0]?.question || "A shower thought I recently had..."}</IndexCard>
-            </PopoutItem>
-
-            {profile.photos?.[1] ? (
-              <PopoutItem targetId="photo_1" onAction={onAction}>
-                <MountedPhoto src={profile.photos[1]} alt={`${profile.name}, artifact 2`} tilt={TILT.photo_1} aspect="4 / 5" />
-              </PopoutItem>
-            ) : <div />}
-
-            {profile.photos?.[2] ? (
-              <PopoutItem targetId="photo_2" onAction={onAction}>
-                <MountedPhoto src={profile.photos[2]} alt={`${profile.name}, artifact 3`} tilt={TILT.photo_2} aspect="4 / 5" />
-              </PopoutItem>
-            ) : <div />}
-
-            <PopoutItem targetId="prompt_1" onAction={onAction} style={{ height: 'auto' }}>
-              <IndexCard tilt={TILT.prompt_1} tape="top-left">{profile.prompts?.[1]?.question || "My ideal weekend looks like..."}</IndexCard>
-            </PopoutItem>
-
-            {profile.prompts?.[2] && (
-              <PopoutItem targetId="prompt_2" onAction={onAction} style={{ gridColumn: 'span 2' }}>
-                <IndexCard tilt={TILT.prompt_2} tape="center">{profile.prompts[2].question}</IndexCard>
-              </PopoutItem>
-            )}
-
-            {profile.photos?.[3] && (
-              <PopoutItem targetId="photo_3" onAction={onAction} style={{ gridColumn: 'span 2' }}>
-                <MountedPhoto src={profile.photos[3]} alt={`${profile.name}, artifact 4`} tilt={TILT.photo_3} aspect="16 / 9" />
-              </PopoutItem>
-            )}
-
-          </div>
-        </div>
+        <img
+          src={resolvedSrc}
+          alt={caption || 'Shared photograph'}
+          loading="lazy"
+          decoding="async"
+          onLoad={() => setLoaded(true)}
+          onError={() => {
+            setFailed(true);
+            setLoaded(true);
+          }}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            display: 'block',
+            opacity: loaded ? 1 : 0,
+            transition: 'opacity 0.4s ease-out',
+          }}
+        />
       </div>
-    </div>
+
+      {caption ? (
+        <figcaption
+          style={{
+            padding: '8px 2px 14px',
+            fontFamily: "'Special Elite', 'Courier New', monospace",
+            fontSize: '12.5px',
+            lineHeight: 1.5,
+            color: '#4a4a4a',
+            textAlign: 'center',
+            wordBreak: 'break-word',
+            whiteSpace: 'pre-wrap',
+          }}
+        >
+          {caption}
+        </figcaption>
+      ) : null}
+    </motion.figure>
   );
 };
 
-/* ==================================================================
-   SUB-COMPONENTS & ARCHIVAL MICRO-UI
-================================================================== */
-const vitalGridItem = { display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', backgroundColor: theme.color.surface, borderRadius: '10px', border: `1px solid ${theme.color.border}` };
-const vitalText = { fontFamily: theme.font.body, fontSize: '15px', fontWeight: 600, color: theme.color.ink };
-
-const HoldHint = React.memo(({ light }) => (
-  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '14px', backgroundColor: light ? 'rgba(0,0,0,0.6)' : 'rgba(253,251,247,0.95)', border: `1px solid ${light ? 'rgba(255,255,255,0.25)' : 'rgba(139,69,19,0.2)'}`, pointerEvents: 'none' }}>
-    <Sparkle size={12} color={light ? '#e6b17a' : theme.color.accent} />
-    <span style={{ fontFamily: theme.font.body, fontSize: '10px', fontWeight: 800, letterSpacing: '1px', textTransform: 'uppercase', color: light ? '#ffffff' : theme.color.accent }}>Press & Hold</span>
-  </div>
-));
-
-const SectionLabel = React.memo(({ children }) => (
-  <p style={{ fontFamily: theme.font.body, fontSize: '13px', fontWeight: 800, letterSpacing: '2px', textTransform: 'uppercase', color: theme.color.accent, margin: '0 0 14px 0', display: 'flex', alignItems: 'center' }}>
-    <span aria-hidden="true" style={{ display: 'inline-block', width: '20px', height: '2px', backgroundColor: theme.color.accent, marginRight: '10px', borderRadius: '2px' }} />
-    {children}
-  </p>
-));
-
-const PhotoCorners = React.memo(() => (
-  <>
-    <span aria-hidden="true" style={{ position: 'absolute', top: 0, left: 0, width: 28, height: 28, background: theme.color.surface, clipPath: 'polygon(0 0, 100% 0, 0 100%)', zIndex: 3 }} />
-    <span aria-hidden="true" style={{ position: 'absolute', bottom: 0, right: 0, width: 28, height: 28, background: theme.color.surface, clipPath: 'polygon(100% 100%, 0 100%, 100% 0)', zIndex: 3 }} />
-  </>
-));
-
-const MountedPhoto = React.memo(({ src, alt, tilt, aspect }) => {
-  return (
-    <div style={{ '--tilt': tilt, transform: 'rotate(var(--tilt, 0deg))', position: 'relative', width: '100%', aspectRatio: aspect || '4 / 5', borderRadius: '8px', border: `8px solid ${theme.color.surface}`, backgroundColor: theme.color.surfaceAlt, overflow: 'hidden', cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
-      <img src={src} alt={alt} loading="lazy" decoding="async" onLoad={(e) => { e.currentTarget.style.opacity = 1; }} onError={(e) => { e.currentTarget.src = 'https://via.placeholder.com/400x500'; e.currentTarget.style.opacity = 1; }} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: 0, transition: 'opacity 0.4s ease-out' }} />
-      <PhotoCorners />
-      <div style={{ position: 'absolute', bottom: '10px', right: '10px', zIndex: 5 }}><HoldHint light /></div>
-    </div>
-  );
-});
-
-const IndexCard = ({ children, tilt, tape = 'center' }) => {
-  const getTapeConfig = () => {
-    const base = { position: 'absolute', top: '-12px', width: '48px', height: '20px', backgroundColor: 'rgba(224, 216, 200, 0.95)', border: '1px solid rgba(139,69,19,0.2)', zIndex: 5 };
-    if (tape === 'top-right') return { ...base, right: '20px', transform: 'rotate(4deg)' };
-    if (tape === 'top-left') return { ...base, left: '20px', transform: 'rotate(-4deg)' };
-    return { ...base, left: '50%', transform: 'translateX(-50%) rotate(-1deg)' };
-  };
-
-  return (
-    <div style={{ '--tilt': tilt, transform: 'rotate(var(--tilt, 0deg))', backgroundColor: theme.color.surface, backgroundImage: `linear-gradient(${theme.color.accentFaint} 1px, transparent 1px)`, backgroundSize: '100% 32px', border: `1px solid ${theme.color.border}`, borderRadius: '16px', padding: '28px 24px 24px', minHeight: '170px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative', cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
-      <span aria-hidden="true" style={getTapeConfig()} />
-      <div style={{ position: 'absolute', bottom: '10px', right: '10px', zIndex: 4 }}><HoldHint /></div>
-      <span aria-hidden="true" style={{ fontFamily: theme.font.display, fontSize: '40px', lineHeight: 0.5, opacity: 0.4, marginBottom: '12px', display: 'block', color: theme.color.accent }}>“</span>
-      <p style={{ fontFamily: theme.font.display, fontSize: '18px', fontStyle: 'italic', color: theme.color.ink, margin: '0 0 4px 0', lineHeight: 1.5, textAlign: 'center', fontWeight: 600 }}>{children}</p>
-    </div>
-  );
-};
-
-export default ProfileCard;
+export default memo(PolaroidCard);
 ```
 
 ### ./client/src/components/PopoutItem.jsx
@@ -3270,22 +2905,29 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { triggerHaptic } from '../utils/haptics';
-import { Flower, Mail, ArrowUp } from 'lucide-react';
+import { theme as design } from '../utils/theme';
+import { Flower, Mail, ChevronDown, Send } from 'lucide-react';
 
-const theme = {
+/* Locked tokens — same family as ProfileCard */
+const t = {
   paper: '#fdfbf7',
-  surface: '#ffffff',
   surfaceAlt: '#f4f1ea',
-  border: '#e0d8c8',
-  borderDark: '#d4c5a9',
+  lineDark: '#d4c5a9',
   ink: '#1a1a1a',
   inkMuted: '#8c8275',
   accent: '#8b4513',
   crimson: '#8b1a1a',
-  shadowWarm: 'rgba(139, 69, 19, 0.15)',
+  dark: '#211709',        // warm ink-dark panel (letter writing)
+  darkRaised: '#2a1f13',
+  fontDisplay: design?.font?.heading || design?.font?.display || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  fontType: "'Special Elite', 'Courier New', monospace",
+  grain: design?.texture?.grain || '',
 };
 
 const GRAIN_SVG = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E`;
+
+const GRAIN = t.grain || GRAIN_SVG;
 
 const PopoutItem = ({ children, targetId, onAction, type, style, compatScore }) => {
   const [isPopped, setIsPopped] = useState(false);
@@ -3293,8 +2935,8 @@ const PopoutItem = ({ children, targetId, onAction, type, style, compatScore }) 
   const [noteText, setNoteText] = useState('');
   const [actionSent, setActionSent] = useState(false);
   const [showSeal, setShowSeal] = useState(false);
+  const [sealKind, setSealKind] = useState('flower');
   const [showInput, setShowInput] = useState(false);
-  
   const [isCardExpanded, setIsCardExpanded] = useState(false);
   const pressTimer = useRef(null);
   const itemRef = useRef(null);
@@ -3332,14 +2974,24 @@ const PopoutItem = ({ children, targetId, onAction, type, style, compatScore }) 
       setShowInput(false);
       setIsCardExpanded(false);
       if (callback) callback();
-    }, 200); 
+    }, 200);
   };
 
   const handleLike = () => {
     if (actionSent) return;
     setActionSent(true);
+    setSealKind('flower');
     triggerHaptic('light');
     triggerSealAnimation(() => onAction('like', { target: targetId }));
+  };
+
+  // Super Like / Telegram Handler
+  const handleSuperlike = () => {
+    if (actionSent) return;
+    setActionSent(true);
+    setSealKind('telegram');
+    triggerHaptic('heavy');
+    triggerSealAnimation(() => onAction('superlike', { target: targetId }));
   };
 
   const handleNoteSubmit = () => {
@@ -3362,15 +3014,15 @@ const PopoutItem = ({ children, targetId, onAction, type, style, compatScore }) 
   if (type === 'compatibility') {
     return (
       <div style={{ position: 'relative', width: '100%', contain: 'layout' }}>
-        <div 
-          ref={itemRef} 
-          onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} 
+        <div
+          ref={itemRef}
+          onTouchStart={handleTouchStart} onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd} onTouchCancel={handleTouchCancel}
           onContextMenu={(e) => e.preventDefault()}
           style={{ WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' }}
         >
-          <motion.div 
-            animate={{ scale: isPopped ? 1.04 : 1, zIndex: isPopped ? 100 : 1, boxShadow: isPopped ? `0 20px 40px ${theme.shadowWarm}` : '0 0px 0px transparent' }}
+          <motion.div
+            animate={{ scale: isPopped ? 1.04 : 1, zIndex: isPopped ? 100 : 1, boxShadow: isPopped ? '0 20px 44px rgba(88,63,30,0.3)' : '0 0px 0px transparent' }}
             transition={{ type: 'spring', damping: 20, stiffness: 300 }}
             style={{ transform: 'translateZ(0)', willChange: 'transform' }}
           >
@@ -3379,23 +3031,31 @@ const PopoutItem = ({ children, targetId, onAction, type, style, compatScore }) 
         </div>
         <AnimatePresence>
           {isPopped && createPortal(
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={closePopout} className="progressive-overlay" style={{ position: 'fixed', inset: 0, zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', contain: 'strict' }}>
-              <motion.div initial={{ scale: 0.85, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.88, opacity: 0, y: 20 }} transition={{ type: 'spring', damping: 25, stiffness: 350 }} onClick={(e) => e.stopPropagation()} style={{ backgroundColor: theme.paper, border: `2px solid ${theme.borderDark}`, borderRadius: '24px', padding: '36px 28px 28px', width: '340px', maxWidth: '90vw', textAlign: 'center', position: 'relative', boxShadow: '0 40px 80px rgba(0,0,0,0.5)', overflow: 'hidden', transform: 'translateZ(0)' }}>
-                <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${GRAIN_SVG}")`, mixBlendMode: 'multiply', opacity: 0.6, pointerEvents: 'none', zIndex: 1 }} />
-                <h4 style={{ fontFamily: "'Playfair Display', serif", fontSize: '26px', color: theme.ink, margin: '0 0 8px 0', fontWeight: 800, letterSpacing: '-0.03em' }}>Compatibility Scan</h4>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }} onClick={closePopout} className="progressive-overlay" style={{ position: 'fixed', inset: 0, zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', contain: 'strict', backgroundColor: 'rgba(28,19,10,0.72)' }}>
+              <motion.div initial={{ scale: 0.92, opacity: 0, y: 16 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.94, opacity: 0, y: 16 }} transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }} onClick={(e) => e.stopPropagation()} style={{ backgroundColor: t.paper, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 18, padding: '30px 26px 26px', width: '340px', maxWidth: '90vw', textAlign: 'center', position: 'relative', boxShadow: '0 24px 64px rgba(12,7,2,0.45)', overflow: 'hidden', transform: 'translateZ(0)' }}>
+                <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${GRAIN}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 1 }} />
+
+                <h4 style={{ position: 'relative', zIndex: 2, fontFamily: t.fontDisplay, fontSize: 22, color: t.ink, margin: '0 0 8px 0', fontWeight: 800, letterSpacing: '-0.02em' }}>Compatibility Scan</h4>
+
                 {compatScore !== undefined && compatScore !== null && (
-                  <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: theme.inkMuted, margin: '0 0 24px 0', lineHeight: 1.5 }}>
-                    You scored <strong style={{ color: theme.crimson, fontSize: '16px' }}>{compatScore}%</strong> on the compatibility matrix.
+                  <p style={{ position: 'relative', zIndex: 2, fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 450, color: t.inkMuted, margin: '0 0 24px 0', lineHeight: 1.5 }}>
+                    You scored <strong style={{ color: t.crimson, fontSize: 15 }}>%</strong>
                   </p>
                 )}
-                <div style={{ position: 'relative', width: '140px', height: '140px', margin: '0 auto 32px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <motion.div animate={{ rotate: 360 }} transition={{ duration: 20, repeat: Infinity, ease: "linear" }} style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: `2.5px dashed ${theme.accent}`, opacity: 0.5 }} />
-                  <motion.div animate={{ rotate: -360 }} transition={{ duration: 15, repeat: Infinity, ease: "linear" }} style={{ position: 'absolute', inset: '16px', borderRadius: '50%', border: `1.5px dotted ${theme.crimson}`, opacity: 0.4 }} />
-                  <motion.div initial={{ scale: 1.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ delay: 0.2, type: 'spring', damping: 12 }} style={{ width: '80px', height: '80px', borderRadius: '50%', backgroundColor: theme.crimson, border: '4px solid #b82e2e', boxShadow: '0 8px 24px rgba(139,26,26,0.5), inset 0 2px 8px rgba(255,255,255,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2 }}>
-                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '12px', fontWeight: 900, color: '#ffffff', letterSpacing: '2.5px' }}>ALIGNED</span>
+
+                {/* The stamp — same language as the card's ScoreStamp, with one slow scan ring */}
+                <div style={{ position: 'relative', zIndex: 2, width: 150, height: 150, margin: '0 auto 28px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <motion.div animate={{ rotate: 360 }} transition={{ duration: 24, repeat: Infinity, ease: 'linear' }} style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: `1.5px dashed ${t.accent}`, opacity: 0.35 }} />
+                  <motion.div initial={{ scale: 1.8, opacity: 0, rotate: -18 }} animate={{ scale: 1, opacity: 1, rotate: -6 }} transition={{ delay: 0.15, type: 'spring', damping: 16, stiffness: 260 }} style={{ width: 110, height: 110, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <svg viewBox="0 0 110 110" width="110" height="110">
+                      <circle cx="55" cy="55" r="51" fill="none" stroke={t.crimson} strokeWidth="3" />
+                      <text x="55" y="63" textAnchor="middle" fill={t.crimson} style={{ fontFamily: t.fontDisplay, fontSize: '36px', fontWeight: 900 }}>{compatScore}</text>
+                      <text x="55" y="78" textAnchor="middle" fill={t.crimson} style={{ fontFamily: t.fontBody, fontSize: '9px', fontWeight: 800, letterSpacing: '2px' }}>%</text>
+                    </svg>
                   </motion.div>
                 </div>
-                <button onClick={closePopout} style={{ width: '100%', background: theme.surfaceAlt, border: `1px solid ${theme.borderDark}`, padding: '16px', borderRadius: '12px', fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 700, letterSpacing: '1.5px', textTransform: 'uppercase', color: theme.ink, cursor: 'pointer', boxShadow: `0 4px 12px ${theme.shadowWarm}` }}>Close Archive</button>
+
+                <button onClick={closePopout} style={{ position: 'relative', zIndex: 2, width: '100%', backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', padding: '15px', borderRadius: 999, fontFamily: t.fontBody, fontSize: 11, fontWeight: 800, letterSpacing: '1.8px', textTransform: 'uppercase', color: t.ink, cursor: 'pointer', boxShadow: '0 4px 12px rgba(88,63,30,0.12)' }}>Close</button>
               </motion.div>
             </motion.div>,
             document.body
@@ -3408,16 +3068,16 @@ const PopoutItem = ({ children, targetId, onAction, type, style, compatScore }) 
   const completionPercentage = Math.min((noteText.length / 50) * 100, 100);
 
   return (
-    <div 
+    <div
       ref={itemRef}
-      onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd} 
+      onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
       onContextMenu={(e) => e.preventDefault()}
       style={{ position: 'relative', width: '100%', height: '100%', WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none', ...style }}
     >
-      <motion.div 
-        animate={{ scale: isPopped ? 1.04 : 1, zIndex: isPopped ? 100 : 1, boxShadow: isPopped ? `0 24px 48px rgba(0,0,0,0.25), 0 0 0 2px ${theme.accent}` : '0 0px 0px transparent' }}
+      <motion.div
+        animate={{ scale: isPopped ? 1.04 : 1, zIndex: isPopped ? 100 : 1, boxShadow: isPopped ? '0 24px 48px rgba(28,19,10,0.35)' : '0 0px 0px transparent' }}
         transition={{ type: 'spring', damping: 22, stiffness: 300 }}
-        style={{ height: '100%', transformOrigin: 'center', borderRadius: '8px', willChange: 'transform, box-shadow' }}
+        style={{ height: '100%', transformOrigin: 'center', borderRadius: 6, willChange: 'transform, box-shadow' }}
       >
         {children}
       </motion.div>
@@ -3425,9 +3085,10 @@ const PopoutItem = ({ children, targetId, onAction, type, style, compatScore }) 
       <AnimatePresence>
         {showSeal && rect && createPortal(
           <motion.div initial={{ opacity: 0, scale: 2.5, rotate: -20 }} animate={{ opacity: 1, scale: 1, rotate: 0 }} exit={{ opacity: 0, scale: 0.8 }} transition={{ type: 'spring', damping: 14, stiffness: 200 }} style={{ position: 'fixed', top: rect.top + (rect.height / 2) - 40, left: rect.left + (rect.width / 2) - 40, width: '80px', height: '80px', zIndex: 10000, pointerEvents: 'none' }}>
-            <div style={{ width: '100%', height: '100%', borderRadius: '50%', backgroundColor: theme.crimson, border: '3px solid #a82020', boxShadow: '0 10px 25px rgba(139,26,26,0.5), inset 0 0 15px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ fontSize: '28px', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}>🌸</span>
-              <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '8px', fontWeight: 800, color: '#ffffff', letterSpacing: '2px', marginTop: '2px' }}>AFFIXED</span>
+            <div style={{ width: '100%', height: '100%', borderRadius: '50%', backgroundColor: sealKind === 'telegram' ? t.accent : t.crimson, boxShadow: '0 10px 25px rgba(28,19,10,0.4)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+              <span aria-hidden="true" style={{ position: 'absolute', inset: 7, borderRadius: '50%', border: '1px dashed rgba(253,251,247,0.4)' }} />
+              {sealKind === 'telegram' ? <Send size={20} color="#fff" strokeWidth={2.5} /> : <Flower size={20} color="#fff" strokeWidth={2.5} />}
+              <span style={{ fontFamily: t.fontBody, fontSize: 7, fontWeight: 800, color: '#ffffff', letterSpacing: '1.8px', marginTop: 4 }}>{sealKind === 'telegram' ? 'TELEGRAM' : 'AFFIXED'}</span>
             </div>
           </motion.div>,
           document.body
@@ -3436,16 +3097,17 @@ const PopoutItem = ({ children, targetId, onAction, type, style, compatScore }) 
 
       {isPopped && createPortal(
         <AnimatePresence>
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
             className="progressive-overlay"
-            style={{ position: 'fixed', inset: 0, zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 16px', transform: 'translateZ(0)' }}
+            style={{ position: 'fixed', inset: 0, zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 16px', transform: 'translateZ(0)', backgroundColor: 'rgba(28,19,10,0.72)' }}
           >
             <div className="scrollable-safe-area" onClick={closePopout}>
-              <motion.div 
-                initial={{ scale: 0.75, opacity: 0, y: 40, rotate: -3 }} 
-                animate={{ scale: 1, opacity: 1, y: 0, rotate: 0 }} 
-                exit={{ scale: 0.65, opacity: 0, y: 80, rotate: 5 }}
+              <motion.div
+                initial={{ scale: 0.85, opacity: 0, y: 40, rotate: -3 }}
+                animate={{ scale: 1, opacity: 1, y: 0, rotate: 0 }}
+                exit={{ scale: 0.7, opacity: 0, y: 80, rotate: 5 }}
                 transition={{ type: 'spring', damping: 24, stiffness: 320 }}
                 className={`sandwich-container ${isCardExpanded ? 'expanded' : ''}`}
                 drag={!showInput}
@@ -3457,11 +3119,14 @@ const PopoutItem = ({ children, targetId, onAction, type, style, compatScore }) 
                 onClick={(e) => e.stopPropagation()}
                 style={{ willChange: 'transform', transform: 'translateZ(0)', touchAction: 'none' }}
               >
-                
+                {/* Top panel: Flower & Telegram */}
                 <div className="panel-wrapper panel-top">
-                  <div className="panel-inner premium-panel-light">
-                    <button onClick={handleLike} disabled={actionSent} className="action-btn flower-btn">
-                      <Flower size={26} strokeWidth={2.5} /> Send a Flower
+                  <div className="panel-inner panel-light" style={{ display: 'flex', flexDirection: 'row', height: '72px', padding: 0 }}>
+                    <button onClick={handleLike} disabled={actionSent} className="action-btn flower-btn" style={{ flex: 1, height: '100%', borderRight: `1px solid ${t.lineDark}`, margin: 0, borderRadius: '12px 0 0 0' }}>
+                      <Flower size={18} strokeWidth={2.5} /> Flower
+                    </button>
+                    <button onClick={handleSuperlike} disabled={actionSent} className="action-btn" style={{ flex: 1, height: '100%', color: t.accent, margin: 0, borderRadius: '0 12px 0 0' }}>
+                      <Send size={18} strokeWidth={2.5} /> Telegram
                     </button>
                   </div>
                 </div>
@@ -3473,29 +3138,27 @@ const PopoutItem = ({ children, targetId, onAction, type, style, compatScore }) 
                 </div>
 
                 <div className="panel-wrapper panel-bottom">
-                  <div className="panel-inner premium-panel-dark">
+                  <div className="panel-inner panel-dark">
                     <div className={`letter-accordion ${showInput ? 'input-active' : ''}`}>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); triggerHaptic('light'); setShowInput(true); }} 
+                      <button
+                        onClick={(e) => { e.stopPropagation(); triggerHaptic('light'); setShowInput(true); }}
                         disabled={actionSent || showInput}
                         className={`action-btn letter-btn ${showInput ? 'hide-trigger' : ''}`}
                       >
-                        <Mail size={26} strokeWidth={2.5} /> Send a Letter
+                        <Mail size={18} strokeWidth={2.5} /> Send a Letter
                       </button>
-                      
                       <div className="input-area">
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 4px', marginBottom: '8px' }}>
-                          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '1.5px' }}>Draft Correspondence</span>
-                          <button onClick={(e) => { e.stopPropagation(); setShowInput(false); }} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
-                            <ArrowUp size={16} />
+                          <span style={{ fontFamily: t.fontBody, fontSize: 9.5, fontWeight: 800, color: 'rgba(253,251,247,0.4)', textTransform: 'uppercase', letterSpacing: '1.5px' }}>Draft Correspondence</span>
+                          <button onClick={(e) => { e.stopPropagation(); setShowInput(false); }} aria-label="Collapse" style={{ background: 'none', border: 'none', color: 'rgba(253,251,247,0.4)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+                            <ChevronDown size={16} strokeWidth={2} />
                           </button>
                         </div>
-                        
                         <div className="premium-input-container">
-                          <textarea 
+                          <textarea
                             className="premium-input"
                             placeholder="I noticed that you also..."
-                            required 
+                            required
                             value={noteText}
                             onChange={(e) => setNoteText(e.target.value)}
                             autoFocus={showInput}
@@ -3504,9 +3167,8 @@ const PopoutItem = ({ children, targetId, onAction, type, style, compatScore }) 
                             <div className="completion-bar-fill" style={{ width: `${completionPercentage}%` }} />
                           </div>
                         </div>
-
-                        <button 
-                          className={`premium-send-btn ${noteText.trim() ? 'ready-to-send' : ''}`} 
+                        <button
+                          className={`premium-send-btn ${noteText.trim() ? 'ready-to-send' : ''}`}
                           onClick={handleNoteSubmit}
                           disabled={!noteText.trim()}
                         >
@@ -3516,60 +3178,41 @@ const PopoutItem = ({ children, targetId, onAction, type, style, compatScore }) 
                     </div>
                   </div>
                 </div>
-
               </motion.div>
             </div>
-
             <style>{`
-              .progressive-overlay { background: linear-gradient(180deg, rgba(15, 10, 8, 0.5) 0%, rgba(5, 3, 2, 0.95) 100%); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
               .scrollable-safe-area { width: 100%; height: 100%; position: absolute; inset: 0; overflow-y: auto; display: flex; justify-content: center; align-items: center; padding: 24px 0; -webkit-overflow-scrolling: touch; contain: strict; }
               .scrollable-safe-area::-webkit-scrollbar { display: none; }
-              
               .sandwich-container { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 328px; position: relative; }
-              
-              /* Removed all backgrounds, borders, and grain from the sandwich center */
-              .sandwich-center { position: relative; z-index: 5; width: 100%; transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); backface-visibility: hidden; }
+              .sandwich-center { position: relative; z-index: 5; width: 100%; transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1); backface-visibility: hidden; }
               .sandwich-container.expanded .sandwich-center { transform: scale(1.03); }
-              
-              /* Inner content formatting */
               .card-content-inner { width: 100%; position: relative; z-index: 2; display: flex; justify-content: center; align-items: center; }
-              
-              /* Force the inner component to sit perfectly straight */
               .card-content-inner * { transform: rotate(0deg) !important; }
-              
-              /* Hide Hold Hints in the popout */
               .card-content-inner div[style*="pointer-events: none"] { display: none !important; }
-              
-              /* Deep shadow on the photo/card itself so it pops */
-              .card-content-inner > div { box-shadow: 0 30px 60px rgba(0,0,0,0.6) !important; }
-
-              /* Panel alignment - width 100% to attach seamlessly to the photo */
-              .panel-wrapper { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); width: 100%; z-index: 1; will-change: grid-template-rows; }
+              .card-content-inner > div { box-shadow: 0 30px 60px rgba(12,7,2,0.55) !important; }
+              .panel-wrapper { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.4s cubic-bezier(0.22, 1, 0.36, 1); width: 100%; z-index: 1; will-change: grid-template-rows; }
               .sandwich-container.expanded .panel-wrapper { grid-template-rows: 1fr; }
               .panel-inner { overflow: hidden; display: flex; flex-direction: column; transform: translateZ(0); }
-              
-              .premium-panel-light { background: linear-gradient(180deg, #ffffff 0%, #f4f1ea 100%); border: 1px solid ${theme.borderDark}; border-top-left-radius: 12px; border-top-right-radius: 12px; border-bottom: none; padding-bottom: 16px; box-shadow: inset 0 2px 10px rgba(255,255,255,1); }
-              .premium-panel-dark { background: linear-gradient(180deg, #242424 0%, #121212 100%); border: 1px solid #000; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; border-top: none; padding-top: 16px; box-shadow: inset 0 -4px 20px rgba(0,0,0,0.6); }
-              
-              .action-btn { display: flex; align-items: center; justify-content: center; gap: 12px; width: 100%; height: 72px; background: transparent; border: none; font-family: 'Playfair Display', serif; font-size: 20px; font-weight: 700; cursor: pointer; letter-spacing: -0.02em; line-height: 1.15; transition: transform 0.1s cubic-bezier(0.2, 0.8, 0.2, 1); }
-              .action-btn:active { transform: scale(0.97); }
-              .flower-btn { color: ${theme.crimson}; text-shadow: 0 1px 2px rgba(139,26,26,0.1); }
-              .letter-btn { color: ${theme.paper}; text-shadow: 0 2px 4px rgba(0,0,0,0.8); transition: opacity 0.2s; }
+              .panel-light { background: ${t.surfaceAlt}; border: 1px solid ${t.lineDark}; border-top-left-radius: 12px; border-top-right-radius: 12px; border-bottom: none; }
+              .panel-dark { background: ${t.dark}; border: 1px solid rgba(0,0,0,0.35); border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; border-top: none; padding-top: 16px; }
+              .action-btn { display: flex; align-items: center; justify-content: center; gap: 12px; width: 100%; height: 72px; background: transparent; border: none; font-family: 'Playfair Display', Georgia, serif; font-size: 19px; font-weight: 700; cursor: pointer; letter-spacing: -0.02em; line-height: 1.15; transition: transform 0.1s ease-out; }
+              .action-btn:active { transform: scale(0.96); }
+              .flower-btn { color: ${t.crimson}; }
+              .letter-btn { color: ${t.paper}; transition: opacity 0.2s; }
               .letter-btn.hide-trigger { opacity: 0; pointer-events: none; position: absolute; }
-              
-              .letter-accordion { display: flex; flex-direction: column; overflow: hidden; height: 72px; transition: height 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); will-change: height; position: relative; }
+              .letter-accordion { display: flex; flex-direction: column; overflow: hidden; height: 72px; transition: height 0.4s cubic-bezier(0.22, 1, 0.36, 1); will-change: height; position: relative; }
               .letter-accordion.input-active { height: 264px; }
               .input-area { display: flex; flex-direction: column; padding: 0 16px 20px; gap: 16px; opacity: 0; transition: opacity 0.3s ease; will-change: opacity; position: absolute; top: 0; left: 0; right: 0; pointer-events: none; }
               .letter-accordion.input-active .input-area { opacity: 1; transition-delay: 0.15s; pointer-events: auto; }
-              .premium-input-container { position: relative; width: 100%; border-radius: 12px; overflow: hidden; box-shadow: inset 0 4px 12px rgba(0,0,0,0.2); }
-              .premium-input { width: 100%; height: 110px; resize: none; border: none; padding: 16px; font-family: 'Special Elite', cursive; font-size: 15px; color: ${theme.paper}; background: #333333; outline: none; line-height: 1.5; transition: background 0.2s; }
-              .premium-input:focus { background: #3d3d3d; }
-              .premium-input::placeholder { color: rgba(253,251,247,0.4); opacity: 1; }
-              .completion-bar-bg { width: 100%; height: 3px; background: #1a1a1a; position: absolute; bottom: 0; left: 0; }
-              .completion-bar-fill { height: 100%; background: ${theme.crimson}; transition: width 0.3s ease-out; box-shadow: 0 0 8px ${theme.crimson}; }
-              .premium-send-btn { height: 56px; width: 100%; border-radius: 12px; background: #4a4a4a; color: rgba(255,255,255,0.4); border: none; cursor: not-allowed; font-weight: 800; font-family: 'Inter', sans-serif; font-size: 14px; letter-spacing: 1.5px; text-transform: uppercase; transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1); box-shadow: inset 0 2px 4px rgba(255,255,255,0.02); }
-              .premium-send-btn.ready-to-send { background: ${theme.crimson}; color: #ffffff; cursor: pointer; box-shadow: inset 0 2px 4px rgba(255,255,255,0.2), 0 8px 24px rgba(139, 26, 26, 0.4); }
-              .premium-send-btn.ready-to-send:active { transform: scale(0.97); box-shadow: inset 0 1px 2px rgba(255,255,255,0.1), 0 2px 8px rgba(139, 26, 26, 0.5); }
+              .premium-input-container { position: relative; width: 100%; border-radius: 6px; overflow: hidden; }
+              .premium-input { width: 100%; height: 110px; resize: none; border: none; padding: 16px; font-family: 'Special Elite', 'Courier New', monospace; font-size: 14.5px; color: ${t.paper}; background: ${t.darkRaised}; outline: none; line-height: 1.55; transition: background 0.2s; }
+              .premium-input:focus { background: #332718; }
+              .premium-input::placeholder { color: rgba(253,251,247,0.35); opacity: 1; }
+              .completion-bar-bg { width: 100%; height: 3px; background: rgba(253,251,247,0.1); position: absolute; bottom: 0; left: 0; }
+              .completion-bar-fill { height: 100%; background: ${t.crimson}; transition: width 0.3s ease-out; }
+              .premium-send-btn { height: 52px; width: 100%; border-radius: 999px; background: rgba(253,251,247,0.08); color: rgba(253,251,247,0.35); border: none; cursor: not-allowed; font-weight: 800; font-family: 'Inter', -apple-system, sans-serif; font-size: 11px; letter-spacing: 1.8px; text-transform: uppercase; transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+              .premium-send-btn.ready-to-send { background: ${t.crimson}; color: #ffffff; cursor: pointer; box-shadow: 0 8px 24px rgba(139, 26, 26, 0.4); }
+              .premium-send-btn.ready-to-send:active { transform: scale(0.96); box-shadow: 0 2px 8px rgba(139, 26, 26, 0.5); }
             `}</style>
           </motion.div>
         </AnimatePresence>,
@@ -3592,27 +3235,32 @@ import ReportModal from './chat/ReportModal';
 import { theme as design } from '../utils/theme';
 import { triggerHaptic } from '../utils/haptics';
 import { toast } from '../utils/toast';
-import { Sparkle, MapPin, MoreVertical, Award, Calendar, Flag } from 'lucide-react';
+import { Sparkle, MapPin, MoreVertical, Award, Calendar, Flag, Paperclip, Sliders, Star, X, ArrowDown } from 'lucide-react';
 
 const theme = {
   color: {
     paper: '#fdfbf7',
-    surface: '#ffffff',
-    surfaceAlt: '#f4f1ea', 
+    card: '#fffdf8',
+    surfaceAlt: '#f4f1ea',
+    lineDark: '#d4c5a9',
     ink: '#1a1a1a',
     inkSoft: '#4a4a4a',
     inkMuted: '#8c8275',
     accent: '#8b4513',
     crimson: '#8b1a1a',
+    gold: '#e6b17a',
   },
   font: {
-    display: "'Playfair Display', Georgia, serif",
-    body: "'Inter', -apple-system, sans-serif",
+    display: design?.font?.heading || "'Playfair Display', Georgia, serif",
+    body: design?.font?.body || "'Inter', -apple-system, sans-serif",
     typewriter: "'Special Elite', 'Courier New', monospace",
   },
 };
 
 const OVERSCROLL_THRESHOLD = 110;
+
+/* One deliberate alternating system, capped at 1.2°. Wide items stay straight. */
+const TILTS = { prompt_0: '0.8deg', photo_1: '-1.2deg', photo_2: '1.2deg', prompt_1: '-0.8deg', prompt_2: '0deg', photo_3: '0deg' };
 
 function matchStatus(score) {
   if (score >= 85) return 'Exceptional Match';
@@ -3621,43 +3269,210 @@ function matchStatus(score) {
   return 'Exploratory';
 }
 
-const InkPullIndicator = ({ dragY, profileId }) => {
-  const filterId = `rough-ink-${profileId || 'default'}`;
+/* ============================================================
+   PULL INDICATOR — capsule that stretches with drag.
+   Cross = dismiss to NEXT profile. Arrow = go to PREVIOUS.
+   Icon rides a physical token inside the track.
+============================================================ */
+const TRACK_W = 40;
+const TOKEN = 26;
+
+const InkPullIndicator = ({ dragY }) => {
   const progressRaw = useTransform(dragY, [-OVERSCROLL_THRESHOLD, 0, OVERSCROLL_THRESHOLD], [1, 0, 1]);
   const progress = useTransform(progressRaw, (val) => Math.min(Math.max(val, 0), 1));
   const isTopPull = useTransform(dragY, (y) => y > 0);
-  const opacity = useTransform(progressRaw, [0.1, 0.4], [0, 1]);
-  const rotation = useTransform(isTopPull, (isTop) => isTop ? 180 : 0);
-  const yOffset = useTransform(dragY, (y) => {
-    if (y > 0) return Math.min(y * 0.4, 40); 
-    if (y < 0) return Math.max(y * 0.4, -40); 
-    return 0;
+  const zoneOpacity = useTransform(progressRaw, [0.08, 0.3], [0, 1]);
+  const topVariantOpacity = useTransform(isTopPull, (t) => (t ? 1 : 0));
+  const bottomVariantOpacity = useTransform(isTopPull, (t) => (t ? 0 : 1));
+
+  const stretch = useTransform(dragY, (y) => 56 + Math.min(Math.abs(y), 150) * 0.6);
+  const borderColor = useTransform(progress, [0, 0.88, 1], ['rgba(212,197,169,0.9)', 'rgba(212,197,169,0.9)', theme.color.crimson]);
+
+  const travelNext = useTransform(dragY, (y) => {
+    const a = Math.max(0, -y);
+    const p = Math.min(a / OVERSCROLL_THRESHOLD, 1);
+    const h = 56 + Math.min(a, 150) * 0.6;
+    return (h - TOKEN - 12) * (1 - p);
+  });
+  const travelPrev = useTransform(dragY, (y) => {
+    const a = Math.max(0, y);
+    const p = Math.min(a / OVERSCROLL_THRESHOLD, 1);
+    const h = 56 + Math.min(a, 150) * 0.6;
+    return 6 + (h - TOKEN - 12) * p;
   });
 
-  const topAnchor = useTransform(dragY, (y) => (y > 0 ? 0 : 'auto'));
-  const bottomAnchor = useTransform(dragY, (y) => (y > 0 ? 'auto' : 0));
+  const thumbScale = useTransform(progress, [0.85, 1], [1, 1.18]);
+  const armedOpacity = useTransform(progress, [0.9, 1], [0, 1]);
+  const defaultLabelOpacity = useTransform(progress, [0.88, 1], [1, 0]);
+
+  const labelPill = {
+    display: 'inline-flex', alignItems: 'center', padding: '6px 13px', borderRadius: 999,
+    backgroundColor: 'rgba(253,251,247,0.94)', border: '1px solid rgba(212,197,169,0.9)',
+    boxShadow: '0 4px 12px rgba(88,63,30,0.18)',
+    fontFamily: theme.font.body, fontSize: 8.5, fontWeight: 900, letterSpacing: '1.8px', textTransform: 'uppercase', whiteSpace: 'nowrap',
+  };
+
+  const tokenStyle = {
+    width: TOKEN, height: TOKEN, borderRadius: TOKEN / 2,
+    backgroundColor: theme.color.surfaceAlt,
+    border: '1px solid rgba(212,197,169,0.9)',
+    boxShadow: '0 2px 6px rgba(88,63,30,0.2)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  };
 
   return (
-    <motion.div style={{ position: 'absolute', left: 0, right: 0, top: topAnchor, bottom: bottomAnchor, height: '120px', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', zIndex: 50, opacity, y: yOffset }}>
-      <div className="neu-pill" style={{ position: 'relative', width: 64, height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%' }}>
-        <svg width="64" height="64" viewBox="0 0 64 64" style={{ position: 'absolute', inset: 0, transform: 'rotate(-90deg)' }}>
-          <motion.circle cx="32" cy="32" r="28" fill="none" stroke={theme.color.crimson} strokeWidth="3.5" strokeLinecap="round" pathLength={progress} />
-        </svg>
-        <motion.div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', rotate: rotation }}>
-          <motion.svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={theme.color.crimson} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: useTransform(progress, [0, 0.5], [0.3, 1]), scale: useTransform(progress, [0, 1], [0.8, 1]) }}>
-            <path d="M12 19V5M5 12l7-7 7 7" />
-          </motion.svg>
+    <motion.div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', zIndex: 60, opacity: zoneOpacity }}>
+
+      {/* BOTTOM — cross = dismiss this profile, move to the next */}
+      <motion.div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 200, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 'max(16px, env(safe-area-inset-bottom))', opacity: bottomVariantOpacity }}>
+        <motion.div style={{ width: TRACK_W, height: stretch, borderRadius: TRACK_W / 2, backgroundColor: theme.color.paper, border: '1.5px solid', borderColor, boxShadow: '0 10px 26px rgba(88,63,30,0.3)', position: 'relative', display: 'flex', justifyContent: 'center', overflow: 'hidden' }}>
+          <motion.div style={{ position: 'absolute', top: travelNext, scale: thumbScale }}>
+            <div style={tokenStyle}>
+              <X size={13} strokeWidth={3} color={theme.color.crimson} />
+            </div>
+          </motion.div>
         </motion.div>
-      </div>
+        <div style={{ position: 'relative', marginTop: 12, height: 28, display: 'flex', justifyContent: 'center' }}>
+          <motion.span style={{ position: 'absolute', opacity: defaultLabelOpacity }}>
+            <span style={{ ...labelPill, color: theme.color.inkMuted }}>Pull up · next profile</span>
+          </motion.span>
+          <motion.span style={{ position: 'absolute', opacity: armedOpacity }}>
+            <span style={{ ...labelPill, color: theme.color.crimson, borderColor: theme.color.crimson }}>Release</span>
+          </motion.span>
+        </div>
+      </motion.div>
+
+      {/* TOP — arrow = go back to the previous profile */}
+      <motion.div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 200, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', paddingTop: 'max(16px, env(safe-area-inset-top))', opacity: topVariantOpacity }}>
+        <div style={{ position: 'relative', marginBottom: 12, height: 28, display: 'flex', justifyContent: 'center' }}>
+          <motion.span style={{ position: 'absolute', opacity: defaultLabelOpacity }}>
+            <span style={{ ...labelPill, color: theme.color.inkMuted }}>Pull down · previous profile</span>
+          </motion.span>
+          <motion.span style={{ position: 'absolute', opacity: armedOpacity }}>
+            <span style={{ ...labelPill, color: theme.color.crimson, borderColor: theme.color.crimson }}>Release</span>
+          </motion.span>
+        </div>
+        <motion.div style={{ width: TRACK_W, height: stretch, borderRadius: TRACK_W / 2, backgroundColor: theme.color.paper, border: '1.5px solid', borderColor, boxShadow: '0 10px 26px rgba(88,63,30,0.3)', position: 'relative', display: 'flex', justifyContent: 'center', overflow: 'hidden' }}>
+          <motion.div style={{ position: 'absolute', top: travelPrev, scale: thumbScale }}>
+            <div style={tokenStyle}>
+              <ArrowDown size={14} strokeWidth={3} color={theme.color.crimson} />
+            </div>
+          </motion.div>
+        </motion.div>
+      </motion.div>
     </motion.div>
   );
 };
 
+/* ---------------- Floating paper panel ---------------- */
+const Panel = ({ children, style }) => (
+  <motion.div
+    initial={{ opacity: 0, y: 16 }}
+    whileInView={{ opacity: 1, y: 0 }}
+    viewport={{ once: true, amount: 0.15 }}
+    transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+    style={{
+      backgroundColor: theme.color.paper,
+      border: '1px solid rgba(212,197,169,0.7)',
+      borderRadius: 18,
+      boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)',
+      position: 'relative',
+      ...style,
+    }}
+  >
+    {children}
+  </motion.div>
+);
+
+const Reveal = ({ children, style }) => (
+  <motion.div
+    initial={{ opacity: 0, y: 16 }}
+    whileInView={{ opacity: 1, y: 0 }}
+    viewport={{ once: true, amount: 0.15 }}
+    transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+    style={style}
+  >
+    {children}
+  </motion.div>
+);
+
+/* ---------------- Small shared pieces ---------------- */
+/* Panel headings — same treatment as the vitals field labels. One system. */
+const PanelHeader = ({ icon: Icon, children }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+    <Icon size={12} color={theme.color.accent} />
+    <span style={{ fontFamily: theme.font.body, fontSize: 9.5, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', color: theme.color.inkMuted }}>{children}</span>
+  </div>
+);
+
+const Tape = ({ style }) => (
+  <span aria-hidden="true" style={{ position: 'absolute', top: -9, width: 42, height: 15, backgroundColor: 'rgba(224,216,200,0.9)', border: '1px solid rgba(139,69,19,0.18)', zIndex: 5, boxShadow: '0 1px 2px rgba(0,0,0,0.06)', ...style }} />
+);
+
+const HoldHint = React.memo(() => (
+  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', backgroundColor: 'rgba(253,251,247,0.92)', border: '1px solid rgba(139,69,19,0.25)', borderRadius: 3, pointerEvents: 'none', color: theme.color.inkMuted, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+    <span style={{ fontFamily: theme.font.body, fontSize: 8, fontWeight: 800, letterSpacing: '1.5px' }}>HOLD</span>
+  </div>
+));
+
+const FieldCell = ({ icon: Icon, label, value }) => (
+  <div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 5 }}>
+      <Icon size={12} color={theme.color.accent} />
+      <span style={{ fontFamily: theme.font.body, fontSize: 9.5, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', color: theme.color.inkMuted }}>{label}</span>
+    </div>
+    <div style={{ fontFamily: theme.font.typewriter, fontSize: 14, fontWeight: 600, color: theme.color.ink, borderBottom: '1.5px dotted rgba(139,69,19,0.45)', paddingBottom: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
+  </div>
+);
+
+const ScoreStamp = ({ score }) => {
+  const ringColor = score >= 85 ? theme.color.crimson : theme.color.accent;
+  return (
+    <div style={{ width: 88, height: 88, flexShrink: 0, transform: 'rotate(-6deg)' }}>
+      <svg viewBox="0 0 88 88" width="88" height="88">
+        <circle cx="44" cy="44" r="41" fill="none" stroke={ringColor} strokeWidth="2.5" />
+        <text x="44" y="52" textAnchor="middle" fill={ringColor} style={{ fontFamily: theme.font.display, fontSize: '30px', fontWeight: 900 }}>{score}</text>
+        <text x="44" y="64" textAnchor="middle" fill={ringColor} style={{ fontFamily: theme.font.body, fontSize: '7px', fontWeight: 800, letterSpacing: '2px' }}>%</text>
+      </svg>
+    </div>
+  );
+};
+
+const StampChip = ({ children }) => (
+  <span style={{ display: 'inline-block', transform: 'rotate(-1.2deg)', border: `1.5px solid ${theme.color.crimson}`, color: theme.color.crimson, fontFamily: theme.font.body, fontSize: 10, fontWeight: 900, letterSpacing: '2px', textTransform: 'uppercase', padding: '6px 10px', borderRadius: 4, backgroundColor: 'rgba(139,26,26,0.04)' }}>{children}</span>
+);
+
+const PaperTag = ({ children }) => (
+  <span style={{ display: 'inline-block', backgroundColor: theme.color.paper, border: `1px solid ${theme.color.lineDark}`, padding: '8px 12px', borderRadius: 4, fontFamily: theme.font.typewriter, fontSize: 12, fontWeight: 600, color: theme.color.inkSoft, boxShadow: '0 2px 6px rgba(88,63,30,0.12)' }}>{children}</span>
+);
+
+const Polaroid = ({ src, alt, tilt = '0deg', aspect = '1 / 1' }) => (
+  <div style={{ position: 'relative', transform: `rotate(${tilt})`, backgroundColor: '#ffffff', padding: '7px 7px 20px', borderRadius: 3, border: '1px solid rgba(0,0,0,0.06)', boxShadow: '0 10px 24px rgba(88,63,30,0.2)', zIndex: 1 }}>
+    <div style={{ width: '100%', aspectRatio: aspect, overflow: 'hidden', backgroundColor: theme.color.surfaceAlt }}>
+      <img src={src} alt={alt} loading="lazy" decoding="async" onLoad={(e) => { e.currentTarget.style.opacity = 1; }} onError={(e) => { e.currentTarget.src = 'https://via.placeholder.com/400x500'; e.currentTarget.style.opacity = 1; }} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: 0, transition: 'opacity 0.4s ease-out' }} />
+    </div>
+    <div style={{ position: 'absolute', bottom: 4, right: 8, zIndex: 5 }}><HoldHint /></div>
+  </div>
+);
+
+const IndexCard = ({ children, tilt = '0deg' }) => (
+  <div style={{ position: 'relative', transform: `rotate(${tilt})`, zIndex: 1 }}>
+    <Tape style={{ left: 18, transform: 'rotate(-5deg)' }} />
+    <div style={{ backgroundColor: theme.color.card, backgroundImage: 'linear-gradient(rgba(139,69,19,0.08) 1px, transparent 1px)', backgroundSize: '100% 20px', backgroundPosition: '0 14px', border: '1px solid rgba(139,69,19,0.25)', borderRadius: 6, padding: '20px 16px 16px 34px', minHeight: 130, display: 'flex', flexDirection: 'column', justifyContent: 'center', position: 'relative', boxShadow: '0 8px 20px rgba(88,63,30,0.16)' }}>
+      <span aria-hidden="true" style={{ position: 'absolute', top: 0, bottom: 0, left: 24, width: 1, backgroundColor: 'rgba(139,26,26,0.3)' }} />
+      <span aria-hidden="true" style={{ fontFamily: theme.font.display, fontSize: 34, lineHeight: 0.5, opacity: 0.25, marginBottom: 10, color: theme.color.accent, display: 'block' }}>“</span>
+      <p style={{ fontFamily: theme.font.typewriter, fontSize: 13.5, color: theme.color.ink, margin: 0, lineHeight: 1.55, fontWeight: 600, wordBreak: 'break-word' }}>{children}</p>
+      <div style={{ position: 'absolute', bottom: 8, right: 8, zIndex: 4 }}><HoldHint /></div>
+    </div>
+  </div>
+);
+
+/* ---------------- Main card ---------------- */
 const ProfileCard = ({ profile = {}, scrollRef: externalScrollRef, onAction, onNavigate }) => {
   const localScrollRef = useRef(null);
   const scrollContainer = externalScrollRef || localScrollRef;
   const heroImgRef = useRef(null);
-  
+
   const targetScore = Math.min(100, Math.max(0, profile.compatScore || 0));
   const [displayScore, setDisplayScore] = useState(0);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -3667,9 +3482,9 @@ const ProfileCard = ({ profile = {}, scrollRef: externalScrollRef, onAction, onN
   const dragY = useMotionValue(0);
   const touchStartY = useRef(0);
   const isAtBoundary = useRef(false);
-  const boundaryType = useRef(null); 
+  const boundaryType = useRef(null);
 
-  const currentUser = (() => { try { return JSON.parse(localStorage.getItem('matchalize_user')) || {}; } catch { return {}; }})();
+  const currentUser = (() => { try { return JSON.parse(localStorage.getItem('matchalize_user')) || {}; } catch { return {}; } })();
   const sharedInterests = (profile.interests || []).filter(i => (currentUser.interests || []).includes(i));
   const userIntent = Array.isArray(currentUser.intent) ? currentUser.intent : [currentUser.intent];
   const profileIntent = Array.isArray(profile.intent) ? profile.intent : [profile.intent];
@@ -3680,17 +3495,19 @@ const ProfileCard = ({ profile = {}, scrollRef: externalScrollRef, onAction, onN
     return userAnswers.filter(a => profileAnswers.some(b => b.question === a.question && b.answer === a.answer));
   })();
 
+  const grainUrl = design?.texture?.grain || '';
+
   useEffect(() => { if (heroImgRef.current?.complete) setHeroLoaded(true); }, [profile.photos]);
 
   useEffect(() => {
     let startTimestamp = null;
     let animationFrameId = null;
-    const duration = 1600; 
+    const duration = 1600;
     const startScore = displayScore;
     const step = (timestamp) => {
       if (!startTimestamp) startTimestamp = timestamp;
       const progress = Math.min((timestamp - startTimestamp) / duration, 1);
-      const easeProgress = 1 - Math.pow(1 - progress, 4); 
+      const easeProgress = 1 - Math.pow(1 - progress, 4);
       setDisplayScore(Math.round(startScore + (targetScore - startScore) * easeProgress));
       if (progress < 1) animationFrameId = window.requestAnimationFrame(step);
     };
@@ -3702,9 +3519,8 @@ const ProfileCard = ({ profile = {}, scrollRef: externalScrollRef, onAction, onN
     if (!scrollContainer.current) return;
     touchStartY.current = e.touches[0].clientY;
     const { scrollTop, scrollHeight, clientHeight } = scrollContainer.current;
-    
-    if (scrollTop <= 0) { isAtBoundary.current = true; boundaryType.current = 'top'; } 
-    else if (Math.ceil(scrollTop + clientHeight) >= scrollHeight - 1) { isAtBoundary.current = true; boundaryType.current = 'bottom'; } 
+    if (scrollTop <= 0) { isAtBoundary.current = true; boundaryType.current = 'top'; }
+    else if (Math.ceil(scrollTop + clientHeight) >= scrollHeight - 1) { isAtBoundary.current = true; boundaryType.current = 'bottom'; }
     else { isAtBoundary.current = false; boundaryType.current = null; }
   };
 
@@ -3712,7 +3528,7 @@ const ProfileCard = ({ profile = {}, scrollRef: externalScrollRef, onAction, onN
     if (!isAtBoundary.current) return;
     const currentY = e.touches[0].clientY;
     const deltaY = currentY - touchStartY.current;
-    if (boundaryType.current === 'top' && deltaY > 0) { dragY.set(deltaY); } 
+    if (boundaryType.current === 'top' && deltaY > 0) { dragY.set(deltaY); }
     else if (boundaryType.current === 'bottom' && deltaY < 0) { dragY.set(deltaY); }
   };
 
@@ -3720,7 +3536,10 @@ const ProfileCard = ({ profile = {}, scrollRef: externalScrollRef, onAction, onN
     const currentDrag = dragY.get();
     if (Math.abs(currentDrag) >= OVERSCROLL_THRESHOLD) {
       triggerHaptic('heavy');
-      if (onNavigate) onNavigate('up', false); 
+      if (onNavigate) {
+        const direction = currentDrag > 0 ? 'down' : 'up';
+        onNavigate(direction, false);
+      }
     }
     animate(dragY, 0, { type: 'spring', stiffness: 400, damping: 25 });
     isAtBoundary.current = false;
@@ -3728,237 +3547,185 @@ const ProfileCard = ({ profile = {}, scrollRef: externalScrollRef, onAction, onN
   };
 
   return (
-    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-      
+    <div style={{ width: '100%', height: '100%', position: 'relative', backgroundColor: '#ece4d4' }}>
+
       <style>{`
         .hide-scroll::-webkit-scrollbar { display: none; }
         .hide-scroll { -ms-overflow-style: none; scrollbar-width: none; overscroll-behavior-y: none; }
         .tactile-btn { transition: transform 0.15s ease-out; will-change: transform; }
         .tactile-btn:active { transform: scale(0.96) !important; }
-        
-        /* PURE NEUMORPHISM CLASSES */
         .neu-flat {
-          background: ${theme.color.surfaceAlt};
-          border-radius: 20px;
-          box-shadow: 8px 8px 16px #dedad2, -8px -8px 16px #ffffff;
-          border: none;
+          background: #f4f1ea; border-radius: 20px;
+          box-shadow: 8px 8px 16px #dedad2, -8px -8px 16px #ffffff; border: none;
         }
         .neu-pressed {
-          background: ${theme.color.surfaceAlt};
-          border-radius: 12px;
-          box-shadow: inset 6px 6px 12px #dedad2, inset -6px -6px 12px #ffffff;
-          border: none;
+          background: #f4f1ea; border-radius: 12px;
+          box-shadow: inset 6px 6px 12px #dedad2, inset -6px -6px 12px #ffffff; border: none;
         }
         .neu-pill {
-          background: ${theme.color.surfaceAlt};
-          border-radius: 50px;
-          box-shadow: 4px 4px 8px #dedad2, -4px -4px 8px #ffffff;
-          border: none;
-          color: ${theme.color.crimson};
+          background: #f4f1ea; border-radius: 50px;
+          box-shadow: 4px 4px 8px #dedad2, -4px -4px 8px #ffffff; border: none; color: #8b1a1a;
         }
       `}</style>
 
-      <InkPullIndicator dragY={dragY} profileId={profile._id} />
+      {/* Tap-anywhere dismiss layer for the profile menu */}
+      {showProfileMenu && (
+        <div onClick={() => setShowProfileMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 45, background: 'transparent' }} />
+      )}
 
-      {/* 
-        THE INVISIBLE SCROLLING VIEWPORT 
-        Padding creates the "gap" around the card. As you scroll, the card visually slides UP through the padding.
-      */}
-      <div 
-        ref={scrollContainer} 
+      {/* Continuous warm desk surface + one unifying grain film */}
+      {grainUrl && (
+        <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${grainUrl}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 2 }} />
+      )}
+
+      <InkPullIndicator dragY={dragY} />
+
+      <div
+        ref={scrollContainer}
         className="hide-scroll"
         onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
-        style={{ 
-          width: '100%', height: '100%', 
-          overflowY: 'auto', WebkitOverflowScrolling: 'touch', 
-          position: 'relative', zIndex: 1, 
-          padding: '16px 12px 40px 12px', // Top gap, side gaps, bottom gap
-          willChange: 'scroll-position' 
+        style={{
+          width: '100%', height: '100%',
+          overflowY: 'auto', WebkitOverflowScrolling: 'touch',
+          position: 'relative', zIndex: 1,
+          padding: '16px 14px 44px 14px',
+          willChange: 'scroll-position'
         }}
       >
-        {/* 
-          THE PHYSICAL CARDBOARD ENTITY 
-          It has 24px borders permanently. It scrolls UP as a single unit. 
-        */}
-        <div style={{
-          width: '100%',
-          backgroundColor: theme.color.surfaceAlt, 
-          display: 'flex', flexDirection: 'column', position: 'relative',
-          borderRadius: '24px', 
-          overflow: 'hidden', // Clips everything to the 24px corners
-          boxShadow: '0 24px 60px rgba(0,0,0,0.2), 0 8px 16px rgba(139,69,19,0.1)', // Heavy floating shadow
-          border: '1px solid rgba(255,255,255,0.6)', 
-        }}>
-          
-          <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${design.texture.grain}")`, mixBlendMode: 'multiply', pointerEvents: 'none', zIndex: 15 }} />
+        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 18 }}>
 
-          {/* 1. HERO PHOTO */}
-          {/* using dvh minus standard navbar height approx (130px) so it sits flush above your bottom nav */}
-          <div style={{ width: '100%', height: 'calc(100dvh - 130px)', flexShrink: 0, position: 'relative', backgroundColor: '#000' }}>
-            
+          {/* ============ HERO PANEL — clean, no spine ============ */}
+          <div style={{
+            width: '100%',
+            height: 'calc(100dvh - 130px)',
+            flexShrink: 0,
+            position: 'relative',
+            borderRadius: 18,
+            overflow: 'hidden',
+            border: '1px solid rgba(212,197,169,0.7)',
+            boxShadow: '0 18px 44px rgba(88,63,30,0.28), 0 4px 12px rgba(88,63,30,0.14)',
+            backgroundColor: '#000',
+          }}>
             <img ref={heroImgRef} src={profile.photos?.[0] || 'https://via.placeholder.com/600x800'} alt={profile.name} onLoad={() => setHeroLoaded(true)} decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: heroLoaded ? 1 : 0, transition: 'opacity 0.4s ease-out' }} />
-            
             <div aria-hidden="true" style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(15,12,10,0.95) 0%, rgba(15,12,10,0.4) 40%, transparent 100%)', pointerEvents: 'none' }} />
-            
-            <div style={{ position: 'absolute', bottom: '32px', left: '24px', right: '24px', zIndex: 2 }}>
-              <h2 style={{ fontFamily: theme.font.display, fontSize: '36px', color: '#fff', margin: 0, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.1 }}>{profile.name || 'Anonymous'}<span style={{ fontWeight: 400, opacity: 0.85 }}>, {profile.age || '—'}</span></h2>
-              <p style={{ fontFamily: theme.font.body, fontSize: '12px', color: 'rgba(255,255,255,0.92)', margin: '8px 0 0 0', letterSpacing: '1.5px', textTransform: 'uppercase', fontWeight: 700, display: 'flex', alignItems: 'center' }}>{profile.branch || 'General'} <Sparkle size={12} color="#e6b17a" style={{ margin: '0 8px' }} /> Era {profile.year || '20XX'}</p>
+
+            <div style={{ position: 'absolute', bottom: '32px', left: '24px', right: '24px', zIndex: 5 }}>
+              <h2 style={{ fontFamily: theme.font.display, fontSize: '38px', color: '#fff', margin: 0, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.05, textShadow: '0 2px 16px rgba(0,0,0,0.5)' }}>
+                {profile.name || 'Anonymous'}<span style={{ fontWeight: 400, fontStyle: 'italic', opacity: 0.85 }}>, {profile.age || '—'}</span>
+              </h2>
+              <p style={{ fontFamily: theme.font.typewriter, fontSize: '11px', color: 'rgba(255,255,255,0.9)', margin: '10px 0 0 0', letterSpacing: '2px', textTransform: 'uppercase', display: 'flex', alignItems: 'center' }}>
+                {profile.branch || 'General'}
+                <span style={{ color: theme.color.gold, margin: '0 9px' }}>·</span>
+                Era {profile.year || '20XX'}
+              </p>
             </div>
-            
-            <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 10 }}>
-              <button onClick={() => setShowProfileMenu(!showProfileMenu)} className="tactile-btn neu-pill" style={{ width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: theme.color.ink }}><MoreVertical size={20} /></button>
+
+            <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 50 }}>
+              <button onClick={() => setShowProfileMenu(!showProfileMenu)} className="tactile-btn" style={{ width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: 12, backgroundColor: 'rgba(253,251,247,0.92)', backdropFilter: 'blur(6px)', border: '1px solid rgba(255,255,255,0.7)', color: theme.color.ink, boxShadow: '0 4px 12px rgba(0,0,0,0.25)' }}><MoreVertical size={18} /></button>
               {showProfileMenu && (
-                <div className="neu-flat" style={{ position: 'absolute', top: 52, right: 0, zIndex: 20, minWidth: 160, padding: '8px' }}>
-                  <button onClick={() => { triggerHaptic('light'); setShowProfileMenu(false); setShowReport(true); }} style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%', padding: '10px 12px', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: theme.font.body, fontSize: '13px', color: theme.color.crimson, fontWeight: 700 }}><Flag size={14} /> Report Profile</button>
-                </div>
+                <motion.div initial={{ opacity: 0, y: -6, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} style={{ position: 'absolute', top: 50, right: 0, zIndex: 55, minWidth: 160, padding: 6, backgroundColor: theme.color.paper, border: `1px dashed ${theme.color.lineDark}`, borderRadius: 8, boxShadow: '0 12px 28px rgba(0,0,0,0.22)' }}>
+                  <button onClick={() => { triggerHaptic('light'); setShowProfileMenu(false); setShowReport(true); }} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 12px', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: theme.font.body, fontSize: 12, color: theme.color.crimson, fontWeight: 800, borderRadius: 5 }}><Flag size={13} /> Report Profile</button>
+                </motion.div>
               )}
             </div>
           </div>
 
-          <div style={{ padding: '24px', paddingBottom: '40px' }}>
-            
-            {/* 2. THE EDITORIAL GRID: Vitals & Bio */}
-            <div className="neu-flat" style={{ marginBottom: '32px', display: 'flex', flexDirection: 'column', gap: '16px', padding: '24px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <div className="neu-pressed" style={vitalGridItem}><MapPin size={16} color={theme.color.accent} /> <span style={vitalText}>{profile.hostel || 'Campus'}</span></div>
-                <div className="neu-pressed" style={vitalGridItem}><Calendar size={16} color={theme.color.accent} /> <span style={vitalText}>{profile.year || 'Era'}</span></div>
-                <div className="neu-pressed" style={vitalGridItem}><Award size={16} color={theme.color.accent} /> <span style={vitalText}>{profile.branch || 'Discipline'}</span></div>
-                <div className="neu-pressed" style={vitalGridItem}><Sparkle size={16} color={theme.color.accent} /> <span style={vitalText}>{profile.pronouns || 'Identity'}</span></div>
-              </div>
-              {profile.bio && (
-                <div style={{ paddingTop: '8px' }}>
-                  <SectionLabel>Foreword</SectionLabel>
-                  <p style={{ fontFamily: theme.font.typewriter, fontSize: '15px', color: theme.color.ink, lineHeight: 1.5, margin: 0, fontWeight: 600 }}>"{profile.bio}"</p>
-                </div>
-              )}
-            </div>
-
-            {/* 3. COMPATIBILITY SCAN */}
+          {/* ============ COMPATIBILITY — first panel after the photo ============ */}
+          <Panel style={{ padding: '22px 20px' }}>
             <PopoutItem targetId="compatibility" onAction={onAction} type="compatibility" compatScore={targetScore}>
-              <div className="neu-flat" style={{ padding: '24px', marginBottom: '32px', cursor: 'pointer', position: 'relative' }}>
-                <SectionLabel>Alignment Scan</SectionLabel>
-                
+              <div style={{ cursor: 'pointer', position: 'relative', zIndex: 1 }}>
                 {targetScore > 0 && (
-                  <div style={{ marginBottom: '20px' }}>
-                    <ScoreGauge score={displayScore} status={matchStatus(targetScore)} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginBottom: 18 }}>
+                    <ScoreStamp score={displayScore} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontFamily: theme.font.display, fontSize: 18, fontWeight: 800, color: theme.color.ink, lineHeight: 1.2 }}>{matchStatus(targetScore)}</span>
+                      <span style={{ fontFamily: theme.font.typewriter, fontSize: 11, color: theme.color.inkMuted, lineHeight: 1.4 }}>Based on 7 compatibility metrics</span>
+                    </div>
                   </div>
                 )}
-                
-                <div className="neu-pressed" style={{ padding: '16px', borderRadius: '12px' }}>
-                  <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ border: '1px solid rgba(139,69,19,0.3)', borderRadius: 6, padding: '14px 16px', backgroundColor: 'rgba(139,69,19,0.03)' }}>
+                  <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {sharedInterests.length > 0 && (
-                      <li style={{ fontSize: '13px', color: theme.color.inkSoft, display: 'flex', alignItems: 'flex-start', gap: '8px', fontFamily: theme.font.body }}><span style={{ color: theme.color.crimson, fontWeight: 700 }}>•</span><span>You both love {sharedInterests.join(' and ')}.</span></li>
+                      <li style={{ fontSize: 13, color: theme.color.inkSoft, display: 'flex', alignItems: 'flex-start', gap: 8, fontFamily: theme.font.body }}><span style={{ color: theme.color.crimson, fontWeight: 700 }}>•</span><span>You both love {sharedInterests.join(' and ')}.</span></li>
                     )}
                     {sharedIntent.length > 0 && (
-                      <li style={{ fontSize: '13px', color: theme.color.inkSoft, display: 'flex', alignItems: 'flex-start', gap: '8px', fontFamily: theme.font.body }}><span style={{ color: theme.color.crimson, fontWeight: 700 }}>•</span><span>You are both looking for {sharedIntent.join(' and ')}.</span></li>
+                      <li style={{ fontSize: 13, color: theme.color.inkSoft, display: 'flex', alignItems: 'flex-start', gap: 8, fontFamily: theme.font.body }}><span style={{ color: theme.color.crimson, fontWeight: 700 }}>•</span><span>You are both looking for {sharedIntent.join(' and ')}.</span></li>
                     )}
                     {compatMatches.length > 0 && (
-                      <li style={{ fontSize: '13px', color: theme.color.inkSoft, display: 'flex', alignItems: 'flex-start', gap: '8px', fontFamily: theme.font.body }}><span style={{ color: theme.color.crimson, fontWeight: 700 }}>•</span><span>You both chose "{compatMatches[0].answer}" for "{compatMatches[0].question}".</span></li>
+                      <li style={{ fontSize: 13, color: theme.color.inkSoft, display: 'flex', alignItems: 'flex-start', gap: 8, fontFamily: theme.font.body }}><span style={{ color: theme.color.crimson, fontWeight: 700 }}>•</span><span>You both chose "{compatMatches[0].answer}" for "{compatMatches[0].question}".</span></li>
                     )}
                     {sharedInterests.length === 0 && sharedIntent.length === 0 && compatMatches.length === 0 && (
-                      <li style={{ fontSize: '13px', color: theme.color.inkMuted, display: 'flex', alignItems: 'flex-start', gap: '8px', fontFamily: theme.font.body, fontStyle: 'italic' }}><span>•</span><span>Discover something new about each other.</span></li>
+                      <li style={{ fontSize: 13, color: theme.color.inkMuted, display: 'flex', alignItems: 'flex-start', gap: 8, fontFamily: theme.font.body, fontStyle: 'italic' }}><span>•</span><span>Discover something new about each other.</span></li>
                     )}
                   </ul>
                 </div>
-                
-                <div style={{ position: 'absolute', top: '16px', right: '16px', zIndex: 3 }}><HoldHint /></div>
+                <div style={{ position: 'absolute', top: -4, right: 0, zIndex: 3 }}><HoldHint /></div>
               </div>
             </PopoutItem>
+          </Panel>
 
-            {/* 4. SEEKING INTENT & CURIOSITIES */}
-            <div className="neu-flat" style={{ marginBottom: '32px', padding: '24px' }}>
-               <SectionLabel>Seeking Parameters</SectionLabel>
-               <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                    {(profile.intent && profile.intent.length > 0 ? profile.intent : ['Connection']).map((item, i) => (
-                      <span key={i} className="neu-pill" style={{ padding: '10px 16px', fontFamily: theme.font.body, fontSize: '12px', fontWeight: 800, textTransform: 'uppercase' }}>{item}</span>
-                    ))}
-                  </div>
-                  {profile.interests && profile.interests.length > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
-                      {profile.interests.map((interest, i) => (
-                        <span key={i} className="neu-pressed" style={{ padding: '10px 14px', color: theme.color.inkSoft, fontFamily: theme.font.typewriter, fontSize: '13px', fontWeight: 600 }}>{interest}</span>
-                      ))}
-                    </div>
-                  )}
-               </div>
+          {/* ============ VITALS PANEL ============ */}
+          <Panel style={{ padding: '22px 20px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 14px' }}>
+              <FieldCell icon={MapPin} label="Hostel" value={profile.hostel || 'Campus'} />
+              <FieldCell icon={Calendar} label="Year" value={profile.year || '—'} />
+              <FieldCell icon={Award} label="Branch" value={profile.branch || 'General'} />
+              <FieldCell icon={Sparkle} label="Pronouns" value={profile.pronouns || '—'} />
             </div>
+          </Panel>
 
-            {/* 5. BENTO GRID (Pure Photos & Prompts) */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px 16px', marginBottom: '24px', alignItems: 'center' }}>
-              <PopoutItem targetId="prompt_0" onAction={onAction} style={{ height: 'auto' }}><IndexCard>{profile.prompts?.[0]?.question || "A shower thought I recently had..."}</IndexCard></PopoutItem>
-              
-              {profile.photos?.[1] ? <PopoutItem targetId="photo_1" onAction={onAction}><MountedPhoto src={profile.photos[1]} alt="artifact 2" aspect="1 / 1" /></PopoutItem> : <div />}
-              {profile.photos?.[2] ? <PopoutItem targetId="photo_2" onAction={onAction}><MountedPhoto src={profile.photos[2]} alt="artifact 3" aspect="1 / 1" /></PopoutItem> : <div />}
-              
-              <PopoutItem targetId="prompt_1" onAction={onAction} style={{ height: 'auto' }}><IndexCard>{profile.prompts?.[1]?.question || "My ideal weekend looks like..."}</IndexCard></PopoutItem>
-              {profile.prompts?.[2] && <PopoutItem targetId="prompt_2" onAction={onAction} style={{ gridColumn: 'span 2' }}><IndexCard>{profile.prompts[2].question}</IndexCard></PopoutItem>}
-              {profile.photos?.[3] && <PopoutItem targetId="photo_3" onAction={onAction} style={{ gridColumn: 'span 2' }}><MountedPhoto src={profile.photos[3]} alt="artifact 4" aspect="16 / 9" /></PopoutItem>}
+          {/* ============ BIO — loose artifact ============ */}
+          {profile.bio && (
+            <Reveal>
+              <div style={{ position: 'relative' }}>
+                <Paperclip size={30} strokeWidth={1.75} color="#6f6a5c" style={{ position: 'absolute', top: -16, left: 16, transform: 'rotate(-8deg)', zIndex: 6, filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.2))' }} />
+                <IndexCard tilt="-0.5deg">{profile.bio}</IndexCard>
+              </div>
+            </Reveal>
+          )}
+
+          {/* ============ SEEKING PANEL — headed groups, one radius system ============ */}
+          <Panel style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div>
+              <PanelHeader icon={Sliders}>Seeking</PanelHeader>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
+                {(profile.intent && profile.intent.length > 0 ? profile.intent : ['Connection']).map((item, i) => (
+                  <StampChip key={i}>{item}</StampChip>
+                ))}
+              </div>
             </div>
-          </div>
+            {profile.interests && profile.interests.length > 0 && (
+              <div>
+                <PanelHeader icon={Star}>Interests</PanelHeader>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 12 }}>
+                  {profile.interests.map((interest, i) => (
+                    <PaperTag key={i}>{interest}</PaperTag>
+                  ))}
+                </div>
+              </div>
+            )}
+          </Panel>
+
+          {/* ============ EXHIBITS — loose artifacts ============ */}
+          <Reveal>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px 16px', alignItems: 'center', paddingTop: 4 }}>
+              <PopoutItem targetId="prompt_0" onAction={onAction} style={{ height: 'auto' }}><IndexCard tilt={TILTS.prompt_0}>{profile.prompts?.[0]?.question || "A shower thought I recently had..."}</IndexCard></PopoutItem>
+
+              {profile.photos?.[1] && <PopoutItem targetId="photo_1" onAction={onAction}><Polaroid src={profile.photos[1]} alt="photo" tilt={TILTS.photo_1} /></PopoutItem>}
+              {profile.photos?.[2] && <PopoutItem targetId="photo_2" onAction={onAction}><Polaroid src={profile.photos[2]} alt="photo" tilt={TILTS.photo_2} /></PopoutItem>}
+
+              <PopoutItem targetId="prompt_1" onAction={onAction} style={{ height: 'auto' }}><IndexCard tilt={TILTS.prompt_1}>{profile.prompts?.[1]?.question || "My ideal weekend looks like..."}</IndexCard></PopoutItem>
+
+              {profile.prompts?.[2] && <PopoutItem targetId="prompt_2" onAction={onAction} style={{ gridColumn: 'span 2', height: 'auto' }}><IndexCard tilt={TILTS.prompt_2}>{profile.prompts[2].question}</IndexCard></PopoutItem>}
+              {profile.photos?.[3] && <PopoutItem targetId="photo_3" onAction={onAction} style={{ gridColumn: 'span 2' }}><Polaroid src={profile.photos[3]} alt="photo" tilt={TILTS.photo_3} aspect="16 / 9" /></PopoutItem>}
+            </div>
+          </Reveal>
         </div>
       </div>
 
       <AnimatePresence>
         {showReport && profile._id && <ReportModal reportedUserId={profile._id} onClose={() => setShowReport(false)} onReported={() => { setShowReport(false); toast.success('Report submitted.'); }} />}
       </AnimatePresence>
-    </div>
-  );
-};
-
-/* ==================================================================
-   SUB-COMPONENTS
-================================================================== */
-const ScoreGauge = ({ score, status }) => {
-  const radius = 34; const stroke = 6; const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (score / 100) * circumference;
-  const color = score >= 85 ? theme.color.crimson : score >= 65 ? theme.color.accent : theme.color.inkMuted;
-  
-  const gauge = (
-    <div style={{ position: 'relative', width: '80px', height: '80px', flexShrink: 0 }}>
-      <svg width="80" height="80" viewBox="0 0 80 80" style={{ transform: 'rotate(-90deg)' }}>
-        <circle cx="40" cy="40" r={radius} fill="none" stroke="rgba(139,69,19,0.1)" strokeWidth={stroke} />
-        <circle cx="40" cy="40" r={radius} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset} style={{ transition: 'stroke-dashoffset 1.2s cubic-bezier(0.4, 0, 0.2, 1)', stroke: color }} />
-      </svg>
-      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}><span style={{ fontFamily: theme.font.body, fontSize: '22px', fontWeight: 900, color: theme.color.ink, lineHeight: 1 }}>{score}</span><span style={{ fontFamily: theme.font.body, fontSize: '8px', fontWeight: 700, color: theme.color.inkMuted, letterSpacing: '1px', textTransform: 'uppercase', marginTop: '1px' }}>%</span></div>
-    </div>
-  );
-
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-      {gauge}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}><span style={{ fontFamily: theme.font.display, fontSize: '15px', fontWeight: 700, color: theme.color.ink }}>{status}</span><span style={{ fontFamily: theme.font.body, fontSize: '11px', color: theme.color.inkMuted, lineHeight: 1.4 }}>Based on 7 compatibility metrics</span></div>
-    </div>
-  );
-};
-
-const vitalGridItem = { display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px' };
-const vitalText = { fontFamily: theme.font.body, fontSize: '13px', fontWeight: 600, color: theme.color.inkSoft };
-
-const HoldHint = React.memo(() => (
-  <div className="neu-pill" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '6px 10px', pointerEvents: 'none', color: theme.color.inkMuted }}><Sparkle size={10} color={theme.color.inkMuted} /><span style={{ fontFamily: theme.font.body, fontSize: '9px', fontWeight: 800, letterSpacing: '1px', textTransform: 'uppercase' }}>Hold</span></div>
-));
-
-const SectionLabel = React.memo(({ children }) => (
-  <p style={{ fontFamily: theme.font.body, fontSize: '11px', fontWeight: 800, letterSpacing: '2px', textTransform: 'uppercase', color: theme.color.inkMuted, margin: '0 0 16px 0', display: 'flex', alignItems: 'center' }}>{children}</p>
-));
-
-/* Pure photo, no background boxes, just a drop shadow and corner radius */
-const MountedPhoto = React.memo(({ src, alt, aspect, ...rest }) => (
-  <div {...rest} style={{ position: 'relative', width: '100%', aspectRatio: aspect || '4 / 5', cursor: 'pointer', zIndex: 1, borderRadius: '12px', overflow: 'hidden', boxShadow: '0 6px 16px rgba(0,0,0,0.15)' }}>
-    <img src={src} alt={alt} loading="lazy" decoding="async" onLoad={(e) => { e.currentTarget.style.opacity = 1; }} onError={(e) => { e.currentTarget.src = 'https://via.placeholder.com/400x500'; e.currentTarget.style.opacity = 1; }} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: 0, transition: 'opacity 0.4s ease-out' }} />
-    <div style={{ position: 'absolute', bottom: '12px', right: '12px', zIndex: 5 }}><HoldHint /></div>
-  </div>
-));
-
-const IndexCard = ({ children, ...rest }) => {
-  return (
-    <div {...rest} style={{ position: 'relative', width: '100%', cursor: 'pointer', zIndex: 1 }}>
-      <div className="neu-flat" style={{ padding: '32px 24px 24px', minHeight: '160px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-        <div style={{ position: 'absolute', bottom: '12px', right: '12px', zIndex: 4 }}><HoldHint /></div>
-        <span aria-hidden="true" style={{ fontFamily: theme.font.display, fontSize: '32px', lineHeight: 0.5, opacity: 0.2, marginBottom: '12px', display: 'block', color: theme.color.ink }}>"</span>
-        <p style={{ fontFamily: theme.font.display, fontSize: '16px', fontStyle: 'italic', color: theme.color.inkSoft, margin: '0 0 4px 0', lineHeight: 1.5, textAlign: 'center', fontWeight: 600 }}>{children}</p>
-      </div>
     </div>
   );
 };
@@ -3974,24 +3741,29 @@ import { theme as design } from '../utils/theme';
 
 const theme = {
   paper: '#fdfbf7',
+  card: '#fffdf8',
   surfaceAlt: '#f4f1ea',
-  borderDark: '#d4c5a9',
-  shadowWarm: 'rgba(139, 69, 19, 0.12)',
+  lineDark: '#d4c5a9',
+  desk: '#ece4d4',
 };
 
-// Deterministic variable-tooth deckle edge (Matches ProfileCard exactly)
-function buildTornEdge(teeth = 64) {
-  const heights = [0, 18, 4, 22, 8, 16, 2, 24, 6, 14, 10, 20];
-  const pts = ['0% 100%'];
-  for (let i = 0; i <= teeth; i++) {
-    const x = ((i / teeth) * 100).toFixed(2);
-    const y = heights[i % heights.length];
-    pts.push(`${x}% ${y}%`);
-  }
-  pts.push('100% 100%');
-  return `polygon(${pts.join(',')})`;
-}
-const TORN_EDGE_CLIP = buildTornEdge();
+/* One skeleton primitive — every placeholder is a shimmering bar */
+const Bar = ({ w = '100%', h = 12, r = 6, style }) => (
+  <div
+    className="pc-skeleton-shimmer"
+    style={{ width: w, height: h, borderRadius: r, backgroundColor: theme.surfaceAlt, position: 'relative', overflow: 'hidden', flexShrink: 0, ...style }}
+  />
+);
+
+/* Matches the Panel primitive in ProfileCard exactly */
+const panelStyle = {
+  backgroundColor: theme.paper,
+  border: '1px solid rgba(212,197,169,0.7)',
+  borderRadius: 18,
+  boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)',
+  position: 'relative',
+  overflow: 'hidden',
+};
 
 const ProfileCardSkeleton = () => {
   return (
@@ -4001,93 +3773,111 @@ const ProfileCardSkeleton = () => {
         width: '100%',
         height: '100%',
         minHeight: 0,
-        backgroundColor: theme.paper,
+        backgroundColor: theme.desk,
         display: 'flex',
         flexDirection: 'column',
+        gap: 18,
+        padding: '16px 14px 44px 14px',
         position: 'relative',
-        borderRadius: '0 16px 16px 0',
         overflow: 'hidden',
-        boxShadow: `-15px 0 40px ${theme.shadowWarm}`,
         contain: 'paint layout style',
+        boxSizing: 'border-box',
       }}
     >
-      {/* Cinematic Film Grain Overlay */}
+      {/* Grain film — same layer as the real card */}
       <div
         style={{
           position: 'absolute',
           inset: 0,
           backgroundImage: `url("${design?.texture?.grain || ''}")`,
           mixBlendMode: 'multiply',
-          opacity: 0.85,
+          opacity: 0.3,
           pointerEvents: 'none',
-          zIndex: 15,
+          zIndex: 2,
         }}
       />
 
-      {/* Hero Photo Skeleton */}
-      <div 
+      {/* HERO PANEL — exact height of the real hero so swap-in is seamless */}
+      <div
         className="pc-skeleton-shimmer"
-        style={{ 
-          width: '100%', 
-          aspectRatio: '4/5.8', 
+        style={{
+          ...panelStyle,
+          width: '100%',
+          height: 'calc(100dvh - 130px)',
           flexShrink: 0,
-          position: 'relative',
-          overflow: 'hidden',
           backgroundColor: theme.surfaceAlt,
         }}
       />
 
-      {/* Torn Deckle Edge */}
-      <div 
-        style={{ 
-          width: '100%', 
-          height: '24px', 
-          backgroundColor: theme.paper, 
-          clipPath: TORN_EDGE_CLIP, 
-          marginTop: '-14px', 
-          position: 'relative', 
-          zIndex: 3,
-          filter: 'drop-shadow(0 -3px 3px rgba(0,0,0,0.12))'
-        }} 
-      />
+      {/* COMPATIBILITY PANEL — stamp + status + findings box */}
+      <div style={{ ...panelStyle, padding: '22px 20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginBottom: 16 }}>
+          <Bar w={88} h={88} r="50%" />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <Bar w={130} h={16} />
+            <Bar w={170} h={10} />
+          </div>
+        </div>
+        <div style={{ border: `1px solid rgba(139,69,19,0.3)`, borderRadius: 6, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <Bar w="85%" h={10} />
+          <Bar w="65%" h={10} />
+        </div>
+      </div>
 
-      {/* Structural Placeholders (Prevents layout snapping on load) */}
-      <div style={{ padding: '24px 24px 0 24px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-        
-        {/* Vitals Mockup */}
+      {/* VITALS PANEL — 2x2 field cells: label bar + dotted-value bar */}
+      <div style={{ ...panelStyle, padding: '22px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 14px' }}>
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i}>
+            <Bar w={52} h={9} r={3} style={{ marginBottom: 8 }} />
+            <Bar w="80%" h={13} r={4} style={{ borderBottom: '1.5px dotted rgba(139,69,19,0.25)', paddingBottom: 5, borderRadius: '4px 4px 0 0' }} />
+          </div>
+        ))}
+      </div>
+
+      {/* BIO — loose index card artifact */}
+      <div style={{ ...panelStyle, borderRadius: 6, border: '1px solid rgba(139,69,19,0.25)', backgroundColor: theme.card, boxShadow: '0 8px 20px rgba(88,63,30,0.16)', minHeight: 120, padding: '20px 16px 16px 34px', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 10 }}>
+        <Bar w="30%" h={18} r={4} />
+        <Bar w="90%" h={10} />
+        <Bar w="70%" h={10} />
+      </div>
+
+      {/* SEEKING PANEL — two headed chip groups */}
+      <div style={{ ...panelStyle, padding: 20, display: 'flex', flexDirection: 'column', gap: 18 }}>
         <div>
-          <div className="pc-skeleton-shimmer" style={{ width: '64px', height: '12px', borderRadius: '4px', marginBottom: '12px', position: 'relative', overflow: 'hidden', backgroundColor: theme.surfaceAlt }} />
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <div className="pc-skeleton-shimmer" style={{ width: '48px', height: '28px', borderRadius: '4px', position: 'relative', overflow: 'hidden', backgroundColor: theme.surfaceAlt }} />
-            <div className="pc-skeleton-shimmer" style={{ width: '72px', height: '28px', borderRadius: '4px', position: 'relative', overflow: 'hidden', backgroundColor: theme.surfaceAlt }} />
-            <div className="pc-skeleton-shimmer" style={{ width: '88px', height: '28px', borderRadius: '4px', position: 'relative', overflow: 'hidden', backgroundColor: theme.surfaceAlt }} />
+          <Bar w={58} h={9} r={3} style={{ marginBottom: 12 }} />
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Bar w={72} h={28} r={4} />
+            <Bar w={64} h={28} r={4} />
           </div>
         </div>
-
-        {/* Scan / Badge Mockup */}
-        <div style={{ 
-          height: '112px', 
-          borderRadius: '16px', 
-          border: `1px solid ${theme.borderDark}`,
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 24px',
-          justifyContent: 'space-between'
-        }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <div className="pc-skeleton-shimmer" style={{ width: '120px', height: '10px', borderRadius: '4px', position: 'relative', overflow: 'hidden', backgroundColor: theme.surfaceAlt }} />
-            <div className="pc-skeleton-shimmer" style={{ width: '180px', height: '24px', borderRadius: '4px', position: 'relative', overflow: 'hidden', backgroundColor: theme.surfaceAlt }} />
+        <div>
+          <Bar w={64} h={9} r={3} style={{ marginBottom: 12 }} />
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <Bar w={78} h={30} r={4} />
+            <Bar w={90} h={30} r={4} />
+            <Bar w={56} h={30} r={4} />
           </div>
-          <div className="pc-skeleton-shimmer" style={{ width: '72px', height: '72px', borderRadius: '50%', position: 'relative', overflow: 'hidden', backgroundColor: theme.surfaceAlt }} />
         </div>
+      </div>
 
+      {/* EXHIBITS — 2-col artifact grid: card, photo, photo, card */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px 16px', alignItems: 'center', paddingTop: 4 }}>
+        <div style={{ ...panelStyle, borderRadius: 6, border: '1px solid rgba(139,69,19,0.25)', backgroundColor: theme.card, boxShadow: '0 8px 20px rgba(88,63,30,0.16)', minHeight: 130, padding: 16, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 9 }}>
+          <Bar w="80%" h={9} />
+          <Bar w="55%" h={9} />
+        </div>
+        <div className="pc-skeleton-shimmer" style={{ ...panelStyle, aspectRatio: '1 / 1', backgroundColor: theme.surfaceAlt }} />
+        <div className="pc-skeleton-shimmer" style={{ ...panelStyle, aspectRatio: '1 / 1', backgroundColor: theme.surfaceAlt }} />
+        <div style={{ ...panelStyle, borderRadius: 6, border: '1px solid rgba(139,69,19,0.25)', backgroundColor: theme.card, boxShadow: '0 8px 20px rgba(88,63,30,0.16)', minHeight: 130, padding: 16, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 9 }}>
+          <Bar w="70%" h={9} />
+          <Bar w="60%" h={9} />
+        </div>
       </div>
     </div>
   );
 };
 
 export default ProfileCardSkeleton;
-
 ```
 
 ### ./client/src/components/ShadowbanBanner.jsx
@@ -4096,18 +3886,19 @@ export default ProfileCardSkeleton;
 import React from 'react';
 import { motion } from 'framer-motion';
 import { AlertTriangle } from 'lucide-react';
+import { triggerHaptic } from '../utils/haptics';
 
-const theme = {
+/* Locked tokens — same family as ProfileCard */
+const t = {
   paper: '#fdfbf7',
-  surface: '#ffffff',
   surfaceAlt: '#f4f1ea',
-  border: '#e0d8c8',
-  borderDark: '#d4c5a9',
+  lineDark: '#d4c5a9',
   ink: '#1a1a1a',
-  inkMuted: '#8c8275',
   inkSoft: '#4a4a4a',
+  inkMuted: '#8c8275',
   accent: '#8b4513',
   crimson: '#8b1a1a',
+  fontBody: "'Inter', -apple-system, sans-serif",
 };
 
 /**
@@ -4129,49 +3920,51 @@ const ShadowbanBanner = ({ score = 0, onLearnMore }) => {
     <motion.div
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: 'easeOut' }}
+      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
       style={{
         backgroundColor: isHighTier ? 'rgba(139, 26, 26, 0.06)' : 'rgba(139, 69, 19, 0.05)',
         border: `1px solid ${isHighTier ? 'rgba(139, 26, 26, 0.2)' : 'rgba(139, 69, 19, 0.15)'}`,
-        borderRadius: '12px',
-        padding: '14px 16px',
+        borderRadius: 12,
+        padding: '12px 14px',
         display: 'flex',
         alignItems: 'center',
-        gap: '12px',
+        gap: 12,
         margin: '0 24px 16px',
-        backgroundImage: `linear-gradient(135deg, ${theme.paper} 0%, ${theme.surfaceAlt} 100%)`,
       }}
     >
+      {/* Standard icon tile, tinted by tier */}
       <div style={{
-        width: '36px',
-        height: '36px',
-        borderRadius: '10px',
-        backgroundColor: isHighTier ? 'rgba(139, 26, 26, 0.1)' : 'rgba(139, 69, 19, 0.1)',
+        width: 36,
+        height: 36,
+        borderRadius: 12,
+        backgroundColor: isHighTier ? 'rgba(139, 26, 26, 0.08)' : 'rgba(139, 69, 19, 0.08)',
+        border: `1px solid ${isHighTier ? 'rgba(139, 26, 26, 0.15)' : 'rgba(139, 69, 19, 0.12)'}`,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,
       }}>
-        <AlertTriangle size={18} color={isHighTier ? theme.crimson : theme.accent} />
+        <AlertTriangle size={18} color={isHighTier ? t.crimson : t.accent} strokeWidth={2} />
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
         <p style={{
-          fontFamily: "'Inter', sans-serif",
-          fontSize: '13px',
+          fontFamily: t.fontBody,
+          fontSize: 13.5,
           fontWeight: 600,
-          color: theme.ink,
+          color: t.ink,
           margin: 0,
           lineHeight: 1.4,
         }}>
           Your account is currently under review.
         </p>
         <p style={{
-          fontFamily: "'Inter', sans-serif",
-          fontSize: '12px',
-          color: theme.inkMuted,
+          fontFamily: t.fontBody,
+          fontSize: 12,
+          fontWeight: 450,
+          color: t.inkMuted,
           margin: '3px 0 0 0',
-          lineHeight: 1.4,
+          lineHeight: 1.45,
         }}>
           {isHighTier
             ? 'Profile editing and photo uploads are temporarily limited.'
@@ -4180,24 +3973,31 @@ const ShadowbanBanner = ({ score = 0, onLearnMore }) => {
       </div>
 
       <button
-        onClick={onLearnMore}
+        className="tactile-btn"
+        onClick={() => { triggerHaptic('light'); onLearnMore(); }}
         style={{
-          background: 'none',
-          border: `1px solid ${isHighTier ? 'rgba(139, 26, 26, 0.3)' : 'rgba(139, 69, 19, 0.2)'}`,
-          borderRadius: '8px',
-          padding: '8px 14px',
-          fontFamily: "'Inter', sans-serif",
-          fontSize: '12px',
-          fontWeight: 700,
-          color: isHighTier ? theme.crimson : theme.accent,
+          backgroundColor: isHighTier ? 'rgba(139, 26, 26, 0.06)' : 'rgba(139, 69, 19, 0.06)',
+          border: `1px solid ${isHighTier ? 'rgba(139, 26, 26, 0.25)' : 'rgba(139, 69, 19, 0.2)'}`,
+          borderRadius: 999,
+          padding: '8px 13px',
+          fontFamily: t.fontBody,
+          fontSize: 10,
+          fontWeight: 800,
+          letterSpacing: '1px',
+          textTransform: 'uppercase',
+          color: isHighTier ? t.crimson : t.accent,
           cursor: 'pointer',
           whiteSpace: 'nowrap',
           flexShrink: 0,
-          letterSpacing: '0.3px',
         }}
       >
         Learn more
       </button>
+
+      <style>{`
+        .tactile-btn { transition: transform 0.15s ease-out; will-change: transform; }
+        .tactile-btn:active { transform: scale(0.96) !important; }
+      `}</style>
     </motion.div>
   );
 };
@@ -4209,28 +4009,28 @@ export default ShadowbanBanner;
 
 ```
 import React from 'react';
-import { theme } from '../utils/theme';
 
-export const SkeletonBox = ({ width, height, radius = theme.radius?.sm || '4px' }) => (
-  <div 
+/* Locked skeleton fill — the shimmer surface of the whole app */
+const SKELETON_FILL = '#f4f1ea';
+
+export const SkeletonBox = ({ width, height, radius = 4 }) => (
+  <div
     className="archival-skeleton"
     aria-hidden="true"
     style={{
-      width, 
-      height, 
+      width,
+      height,
       borderRadius: radius,
-      backgroundColor: theme.color?.surfaceAlt || '#f4f1ea',
+      backgroundColor: SKELETON_FILL,
       position: 'relative',
       overflow: 'hidden',
       flexShrink: 0,
       contain: 'paint layout',
-      boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.03)',
     }}
   />
 );
 
 export default SkeletonBox;
-
 ```
 
 ### ./client/src/components/chat/EmojiPicker.jsx
@@ -6129,28 +5929,27 @@ import {
   Ban, EyeOff, X, Clock
 } from 'lucide-react';
 
+/* Locked tokens — same family as ProfileCard */
 const T = {
+  desk: '#ece4d4',
   paper: '#fdfbf7',
-  surface: '#f5f0e8',
-  surfaceAlt: '#ede7db',
-  surfaceDim: '#e0d8c8',
-  border: '#d4c9b5',
-  borderDark: '#b8a98e',
-  ink: '#2c2416',
-  inkSoft: '#5c4f3d',
-  inkMuted: '#8a7e6e',
+  card: '#fffdf8',
+  surfaceAlt: '#f4f1ea',
+  lineDark: '#d4c5a9',
+  ink: '#1a1a1a',
+  inkSoft: '#4a4a4a',
+  inkMuted: '#8c8275',
+  accent: '#8b4513',
   crimson: '#8b1a1a',
-  crimsonLight: '#b8333a',
-  success: '#2d6a4f',
-  warning: '#b8860b',
-  danger: '#8b1a1a',
-  amber: '#c4952a',
-  shadow: '0 1px 3px rgba(44,36,22,0.08)',
-  shadowMd: '0 4px 12px rgba(44,36,22,0.12)',
-  fontDisplay: "'Playfair Display', serif",
-  fontMono: "'Special Elite', cursive",
-  fontBody: "'Inter', sans-serif",
+  gold: '#c4952a',
+  goldDeep: '#8b6914',
+  success: '#2e7d32',
+  fontDisplay: "'Playfair Display', Georgia, serif",
+  fontType: "'Special Elite', 'Courier New', monospace",
+  fontBody: "'Inter', -apple-system, sans-serif",
 };
+
+const label = { fontFamily: T.fontBody, fontSize: 9.5, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', color: T.inkMuted };
 
 const API = '/api/admin';
 const TABS = ['overview', 'reports', 'users', 'analytics', 'settings'];
@@ -6186,7 +5985,7 @@ async function apiFetch(path, opts = {}) {
 
 function Card({ children, style = {}, ...props }) {
   return (
-    <div style={{ backgroundColor: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, boxShadow: T.shadow, ...style }} {...props}>
+    <div style={{ backgroundColor: T.paper, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 18, boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)', ...style }} {...props}>
       {children}
     </div>
   );
@@ -6196,38 +5995,55 @@ function Badge({ children, color = T.inkMuted, style = {} }) {
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 4,
-      fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999,
-      backgroundColor: `${color}15`, color,
+      fontSize: 10, fontWeight: 800, letterSpacing: '0.8px', textTransform: 'uppercase',
+      padding: '3px 9px', borderRadius: 999,
+      backgroundColor: `${color}14`, color,
+      border: `1px solid ${color}30`,
       ...style,
     }}>{children}</span>
   );
 }
 
 function Skeleton({ style = {} }) {
-  return <div style={{ backgroundColor: T.surfaceDim, borderRadius: 6, ...style }} />;
+  return <div style={{ backgroundColor: T.surfaceAlt, borderRadius: 6, ...style }} />;
 }
 
 function PageHeader({ title, subtitle }) {
   return (
     <div style={{ marginBottom: 24 }}>
-      <h2 style={{ fontFamily: T.fontDisplay, fontSize: 24, fontWeight: 700, color: T.ink, margin: 0 }}>{title}</h2>
-      {subtitle && <p style={{ fontSize: 14, color: T.inkMuted, marginTop: 4, margin: 0 }}>{subtitle}</p>}
+      <h2 style={{ fontFamily: T.fontDisplay, fontSize: 26, fontWeight: 800, color: T.ink, margin: 0, letterSpacing: '-0.02em' }}>{title}</h2>
+      {subtitle && <p style={{ ...label, marginTop: 6 }}>{subtitle}</p>}
     </div>
   );
 }
 
+const pillBtn = (variant = 'quiet') => ({
+  background: variant === 'danger' ? T.crimson : variant === 'active' ? T.crimson : T.surfaceAlt,
+  border: variant === 'danger' || variant === 'active' ? 'none' : '1px solid rgba(212,197,169,0.7)',
+  borderRadius: 999,
+  padding: '8px 16px',
+  cursor: 'pointer',
+  fontSize: 10.5,
+  fontWeight: 800,
+  letterSpacing: '1px',
+  textTransform: 'uppercase',
+  color: variant === 'danger' || variant === 'active' ? '#fff' : T.inkSoft,
+  fontFamily: T.fontBody,
+  transition: 'transform 0.15s ease-out',
+});
+
 function Pagination({ page, totalPages, onPage }) {
   if (!totalPages || totalPages <= 1) return null;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginTop: 16 }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginTop: 20 }}>
       <button onClick={() => onPage(page - 1)} disabled={page <= 1}
-        style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, padding: '6px 10px', cursor: page <= 1 ? 'not-allowed' : 'pointer', opacity: page <= 1 ? 0.4 : 1 }}>
-        <ChevronLeft size={16} />
+        style={{ ...pillBtn(), width: 36, height: 36, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: page <= 1 ? 'not-allowed' : 'pointer', opacity: page <= 1 ? 0.4 : 1 }}>
+        <ChevronLeft size={16} strokeWidth={2} />
       </button>
-      <span style={{ fontSize: 13, color: T.inkSoft, fontFamily: T.fontMono }}>{page} / {totalPages}</span>
+      <span style={{ fontFamily: T.fontType, fontSize: 13, color: T.inkSoft }}>{page} / {totalPages}</span>
       <button onClick={() => onPage(page + 1)} disabled={page >= totalPages}
-        style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, padding: '6px 10px', cursor: page >= totalPages ? 'not-allowed' : 'pointer', opacity: page >= totalPages ? 0.4 : 1 }}>
-        <ChevronRight size={16} />
+        style={{ ...pillBtn(), width: 36, height: 36, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: page >= totalPages ? 'not-allowed' : 'pointer', opacity: page >= totalPages ? 0.4 : 1 }}>
+        <ChevronRight size={16} strokeWidth={2} />
       </button>
     </div>
   );
@@ -6235,17 +6051,17 @@ function Pagination({ page, totalPages, onPage }) {
 
 function StatusBadge({ status }) {
   const colors = {
-    pending: { bg: '#fef3c7', text: '#92400e', border: '#f59e0b' },
-    reviewed: { bg: '#dbeafe', text: '#1e40af', border: '#3b82f6' },
-    actioned: { bg: '#fce4ec', text: '#991b1b', border: '#ef4444' },
-    dismissed: { bg: T.surfaceAlt, text: T.inkMuted, border: T.border },
+    pending: T.gold,
+    reviewed: T.accent,
+    actioned: T.crimson,
+    dismissed: T.inkMuted,
   };
   const c = colors[status] || colors.pending;
   return (
     <span style={{
-      fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 999,
-      backgroundColor: c.bg, color: c.text, border: `1px solid ${c.border}40`,
-      textTransform: 'capitalize',
+      fontSize: 10, fontWeight: 800, letterSpacing: '0.8px', textTransform: 'uppercase',
+      padding: '3px 10px', borderRadius: 999,
+      backgroundColor: `${c}14`, color: c, border: `1px solid ${c}30`,
     }}>{status}</span>
   );
 }
@@ -6269,13 +6085,13 @@ function OverviewTab() {
   useEffect(() => { loadStats(); }, []);
 
   const cards = stats ? [
-    { label: 'Total Users', value: stats.totalUsers, icon: <Users size={20} />, accent: T.success },
-    { label: 'New Today', value: stats.newToday, icon: <Users size={20} />, accent: T.success },
-    { label: 'Active (7d)', value: stats.active7d, icon: <LayoutDashboard size={20} />, accent: T.success },
-    { label: 'Active (30d)', value: stats.active30d, icon: <Clock size={20} />, accent: T.success },
-    { label: 'Pending Reports', value: stats.pendingReports, icon: <AlertTriangle size={20} />, accent: T.crimson },
-    { label: 'Active Bans', value: stats.activeBans, icon: <Ban size={20} />, accent: T.crimson },
-    { label: 'Shadowbans', value: stats.activeShadowbans, icon: <EyeOff size={20} />, accent: T.amber },
+    { label: 'Total Users', value: stats.totalUsers, icon: <Users size={18} strokeWidth={2} />, accent: T.accent },
+    { label: 'New Today', value: stats.newToday, icon: <Users size={18} strokeWidth={2} />, accent: T.accent },
+    { label: 'Active (7d)', value: stats.active7d, icon: <LayoutDashboard size={18} strokeWidth={2} />, accent: T.accent },
+    { label: 'Active (30d)', value: stats.active30d, icon: <Clock size={18} strokeWidth={2} />, accent: T.accent },
+    { label: 'Pending Reports', value: stats.pendingReports, icon: <AlertTriangle size={18} strokeWidth={2} />, accent: T.crimson },
+    { label: 'Active Bans', value: stats.activeBans, icon: <Ban size={18} strokeWidth={2} />, accent: T.crimson },
+    { label: 'Shadowbans', value: stats.activeShadowbans, icon: <EyeOff size={18} strokeWidth={2} />, accent: T.gold },
   ] : [];
 
   if (loading) {
@@ -6283,8 +6099,8 @@ function OverviewTab() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
         {Array.from({ length: 7 }).map((_, i) => (
           <Card key={i} style={{ padding: 20 }}>
-            <Skeleton style={{ height: 20, width: 100, marginBottom: 12 }} />
-            <Skeleton style={{ height: 32, width: 80 }} />
+            <Skeleton style={{ height: 10, width: 100, marginBottom: 14 }} />
+            <Skeleton style={{ height: 30, width: 80 }} />
           </Card>
         ))}
       </div>
@@ -6292,28 +6108,27 @@ function OverviewTab() {
   }
 
   if (!stats) {
-    return <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ color: T.inkMuted }}>Failed to load stats. Check your connection and admin access.</p></Card>;
+    return <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ fontFamily: T.fontBody, fontSize: 13.5, color: T.inkMuted, margin: 0 }}>Failed to load stats. Check your connection and admin access.</p></Card>;
   }
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <PageHeader title="Overview" subtitle="Platform health at a glance" />
-        <button onClick={loadStats} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, padding: '8px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, color: T.inkSoft, fontSize: 13 }}>
-          <RefreshCw size={14} /> Refresh
+        <button onClick={loadStats} className="tactile-btn" style={{ ...pillBtn(), display: 'flex', alignItems: 'center', gap: 6 }}>
+          <RefreshCw size={13} strokeWidth={2} /> Refresh
         </button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
         {cards.map((c, i) => (
-          <motion.div key={c.label} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
-            <Card style={{ padding: 20, borderLeft: `3px solid ${c.accent}` }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <span style={{ fontSize: 13, color: T.inkSoft, fontWeight: 500 }}>{c.label}</span>
-                <div style={{ width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: `${c.accent}15`, color: c.accent }}>{c.icon}</div>
+          <motion.div key={c.label} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}>
+            <Card style={{ padding: 20 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                <span style={label}>{c.label}</span>
+                <div style={{ width: 32, height: 32, borderRadius: 12, border: `1px solid ${c.accent}30`, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: `${c.accent}12`, color: c.accent }}>{c.icon}</div>
               </div>
-              <p style={{ fontFamily: T.fontDisplay, fontSize: 28, fontWeight: 700, color: T.ink, margin: 0 }}>
-                {(c.value ?? 0).toLocaleString()
-                }
+              <p style={{ fontFamily: T.fontDisplay, fontSize: 28, fontWeight: 800, color: T.ink, margin: 0, letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}>
+                {(c.value ?? 0).toLocaleString()}
               </p>
             </Card>
           </motion.div>
@@ -6365,17 +6180,17 @@ function ReportsTab() {
       <PageHeader title="Reports" subtitle={`${pagination.total} total reports`} />
       <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
         <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
-          <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: T.inkMuted }} />
+          <Search size={14} strokeWidth={2} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: T.inkMuted }} />
           <input
             placeholder="Search by name or email..."
             value={search}
             onChange={e => setSearch(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && load(1)}
-            style={{ width: '100%', padding: '10px 12px 10px 36px', borderRadius: 8, border: `1px solid ${T.border}`, backgroundColor: T.paper, fontSize: 14, color: T.ink, outline: 'none', fontFamily: T.fontBody }}
+            style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px 10px 38px', borderRadius: 6, border: '1px solid rgba(212,197,169,0.7)', backgroundColor: T.paper, fontSize: 13.5, color: T.ink, outline: 'none', fontFamily: T.fontBody }}
           />
         </div>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
-          style={{ padding: '10px 16px', borderRadius: 8, border: `1px solid ${T.border}`, backgroundColor: T.paper, fontSize: 13, color: T.ink, cursor: 'pointer' }}>
+          style={{ padding: '10px 16px', borderRadius: 999, border: '1px solid rgba(212,197,169,0.7)', backgroundColor: T.paper, fontSize: 12, fontWeight: 600, color: T.ink, cursor: 'pointer', fontFamily: T.fontBody }}>
           <option value="all">All Status</option>
           <option value="pending">Pending</option>
           <option value="reviewed">Reviewed</option>
@@ -6388,37 +6203,37 @@ function ReportsTab() {
         <div style={{ display: 'grid', gap: 12 }}>
           {Array.from({ length: 5 }).map((_, i) => (
             <Card key={i} style={{ padding: 16 }}>
-              <Skeleton style={{ height: 16, width: '60%', marginBottom: 8 }} />
-              <Skeleton style={{ height: 14, width: '40%' }} />
+              <Skeleton style={{ height: 14, width: '60%', marginBottom: 10 }} />
+              <Skeleton style={{ height: 12, width: '40%' }} />
             </Card>
           ))}
         </div>
       ) : reports.length === 0 ? (
-        <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ color: T.inkMuted }}>No reports found</p></Card>
+        <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ fontFamily: T.fontBody, fontSize: 13.5, color: T.inkMuted, margin: 0 }}>No reports found</p></Card>
       ) : (
         <div style={{ display: 'grid', gap: 12 }}>
           {reports.map(r => (
             <Card key={r._id} style={{ padding: 16 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
                 <div style={{ display: 'flex', gap: 12, alignItems: 'center', flex: 1, minWidth: 0 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: '50%', backgroundColor: T.surfaceDim, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
-                    {r.reported.photo ? <img src={r.reported.photo} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" /> : <Users size={18} style={{ color: T.inkMuted }} />}
+                  <div style={{ width: 40, height: 40, borderRadius: '50%', backgroundColor: T.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
+                    {r.reported.photo ? <img src={r.reported.photo} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" /> : <Users size={16} strokeWidth={2} style={{ color: T.inkMuted }} />}
                   </div>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ fontWeight: 600, fontSize: 14, color: T.ink }}>{r.reported.name}</span>
                       <StatusBadge status={r.status} />
-                      <Badge color={T.amber}>{r.reportCount} reports</Badge>
+                      <Badge color={T.gold}>{r.reportCount} reports</Badge>
                     </div>
-                    <p style={{ fontSize: 12, color: T.inkMuted, margin: '2px 0 0' }}>{r.reason} — by {r.reporter.name}</p>
-                    <p style={{ fontSize: 11, color: T.inkMuted, margin: '2px 0 0', fontFamily: T.fontMono }}>{new Date(r.createdAt).toLocaleDateString()}</p>
+                    <p style={{ fontSize: 12.5, fontWeight: 450, color: T.inkSoft, margin: '3px 0 0' }}>{r.reason} — by {r.reporter.name}</p>
+                    <p style={{ fontFamily: T.fontType, fontSize: 11, color: T.inkMuted, margin: '3px 0 0' }}>{new Date(r.createdAt).toLocaleDateString()}</p>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  <button onClick={() => setDetailReport(r)} style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.paper, cursor: 'pointer', fontSize: 12, color: T.inkSoft }}>View</button>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  <button className="tactile-btn" onClick={() => setDetailReport(r)} style={pillBtn()}>View</button>
                   {r.status === 'pending' && <>
-                    <button onClick={() => updateReport(r._id, { status: 'dismissed' })} style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.paper, cursor: 'pointer', fontSize: 12, color: T.inkMuted }}>Dismiss</button>
-                    <button onClick={() => updateReport(r._id, { status: 'actioned' })} style={{ padding: '6px 10px', borderRadius: 6, border: 'none', background: T.crimson, color: '#fff', cursor: 'pointer', fontSize: 12 }}>Action</button>
+                    <button className="tactile-btn" onClick={() => updateReport(r._id, { status: 'dismissed' })} style={pillBtn()}>Dismiss</button>
+                    <button className="tactile-btn" onClick={() => updateReport(r._id, { status: 'actioned' })} style={pillBtn('danger')}>Action</button>
                   </>}
                 </div>
               </div>
@@ -6430,46 +6245,46 @@ function ReportsTab() {
 
       <AnimatePresence>
         {detailReport && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
             onClick={() => setDetailReport(null)}
-            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(28,19,10,0.6)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+            <motion.div initial={{ scale: 0.95, opacity: 0, y: 16 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.95, opacity: 0, y: 16 }} transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
               onClick={e => e.stopPropagation()}
-              style={{ background: T.paper, borderRadius: 16, border: `1px solid ${T.border}`, boxShadow: T.shadowMd, maxWidth: 500, width: '100%', maxHeight: '80vh', overflowY: 'auto', padding: 24 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
-                <h3 style={{ fontFamily: T.fontDisplay, fontSize: 18, fontWeight: 700, color: T.ink, margin: 0 }}>Report Detail</h3>
-                <button onClick={() => setDetailReport(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkMuted }}><X size={20} /></button>
+              style={{ background: T.paper, borderRadius: 18, border: '1px solid rgba(212,197,169,0.7)', boxShadow: '0 24px 64px rgba(12,7,2,0.4)', maxWidth: 500, width: '100%', maxHeight: '80vh', overflowY: 'auto', padding: 24, boxSizing: 'border-box' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <h3 style={{ fontFamily: T.fontDisplay, fontSize: 19, fontWeight: 800, color: T.ink, margin: 0, letterSpacing: '-0.02em' }}>Report Detail</h3>
+                <button className="tactile-btn" onClick={() => setDetailReport(null)} aria-label="Close" style={{ backgroundColor: T.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 12, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: T.ink, flexShrink: 0 }}><X size={16} strokeWidth={2} /></button>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
-                <Card style={{ padding: 12 }}>
-                  <p style={{ fontSize: 11, color: T.inkMuted, marginBottom: 4, margin: 0 }}>Reporter</p>
-                  <p style={{ fontWeight: 600, fontSize: 14, color: T.ink, margin: '4px 0 0' }}>{detailReport.reporter.name}</p>
-                  <p style={{ fontSize: 12, color: T.inkMuted, margin: '2px 0 0' }}>{detailReport.reporter.email}</p>
-                </Card>
-                <Card style={{ padding: 12 }}>
-                  <p style={{ fontSize: 11, color: T.inkMuted, marginBottom: 4, margin: 0 }}>Reported</p>
-                  <p style={{ fontWeight: 600, fontSize: 14, color: T.ink, margin: '4px 0 0' }}>{detailReport.reported.name}</p>
-                  <p style={{ fontSize: 12, color: T.inkMuted, margin: '2px 0 0' }}>{detailReport.reported.email}</p>
-                </Card>
+                <div style={{ backgroundColor: T.surfaceAlt, borderRadius: 6, border: '1px solid rgba(212,197,169,0.5)', padding: 12 }}>
+                  <p style={label}>Reporter</p>
+                  <p style={{ fontWeight: 600, fontSize: 14, color: T.ink, margin: '6px 0 0' }}>{detailReport.reporter.name}</p>
+                  <p style={{ fontFamily: T.fontType, fontSize: 11.5, color: T.inkMuted, margin: '2px 0 0' }}>{detailReport.reporter.email}</p>
+                </div>
+                <div style={{ backgroundColor: T.surfaceAlt, borderRadius: 6, border: '1px solid rgba(212,197,169,0.5)', padding: 12 }}>
+                  <p style={label}>Reported</p>
+                  <p style={{ fontWeight: 600, fontSize: 14, color: T.ink, margin: '6px 0 0' }}>{detailReport.reported.name}</p>
+                  <p style={{ fontFamily: T.fontType, fontSize: 11.5, color: T.inkMuted, margin: '2px 0 0' }}>{detailReport.reported.email}</p>
+                </div>
               </div>
               <div style={{ marginBottom: 16 }}>
-                <p style={{ fontSize: 12, fontWeight: 600, color: T.inkSoft, marginBottom: 4 }}>Reason</p>
-                <Badge>{detailReport.reason}</Badge>
+                <p style={{ ...label, marginBottom: 8 }}>Reason</p>
+                <Badge color={T.accent}>{detailReport.reason}</Badge>
               </div>
               {detailReport.details && (
                 <div style={{ marginBottom: 16 }}>
-                  <p style={{ fontSize: 12, fontWeight: 600, color: T.inkSoft, marginBottom: 4 }}>Details</p>
-                  <p style={{ fontSize: 14, color: T.ink, backgroundColor: T.surface, padding: 12, borderRadius: 8 }}>{detailReport.details}</p>
+                  <p style={{ ...label, marginBottom: 8 }}>Details</p>
+                  <p style={{ fontFamily: T.fontType, fontSize: 13, color: T.ink, backgroundColor: T.surfaceAlt, padding: 12, borderRadius: 6, border: '1px solid rgba(212,197,169,0.5)', lineHeight: 1.6, margin: 0, wordBreak: 'break-word' }}>{detailReport.details}</p>
                 </div>
               )}
-              <div style={{ marginBottom: 16 }}>
-                <p style={{ fontSize: 12, fontWeight: 600, color: T.inkSoft, marginBottom: 4 }}>Total Reports Against This User</p>
-                <p style={{ fontSize: 24, fontWeight: 700, fontFamily: T.fontMono, color: T.crimson }}>{detailReport.reportCount}</p>
+              <div style={{ marginBottom: 20 }}>
+                <p style={{ ...label, marginBottom: 8 }}>Total Reports Against This User</p>
+                <p style={{ fontFamily: T.fontDisplay, fontSize: 26, fontWeight: 800, color: T.crimson, margin: 0, fontVariantNumeric: 'tabular-nums' }}>{detailReport.reportCount}</p>
               </div>
               {detailReport.status === 'pending' && (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button onClick={() => updateReport(detailReport._id, { status: 'dismissed' })} style={{ flex: 1, padding: '10px 16px', borderRadius: 8, border: `1px solid ${T.border}`, background: T.paper, cursor: 'pointer', fontWeight: 600, fontSize: 13, color: T.inkSoft }}>Dismiss</button>
-                  <button onClick={() => updateReport(detailReport._id, { status: 'actioned' })} style={{ flex: 1, padding: '10px 16px', borderRadius: 8, border: 'none', background: T.crimson, color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>Action</button>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  <button className="tactile-btn" onClick={() => updateReport(detailReport._id, { status: 'dismissed' })} style={{ ...pillBtn(), flex: 1 }}>Dismiss</button>
+                  <button className="tactile-btn" onClick={() => updateReport(detailReport._id, { status: 'actioned' })} style={{ ...pillBtn('danger'), flex: 1 }}>Action</button>
                 </div>
               )}
             </motion.div>
@@ -6525,7 +6340,7 @@ function UsersTab() {
 
   const statusColor = (s) => {
     if (s === 'Suspended') return T.crimson;
-    if (s === 'Shadowbanned') return T.amber;
+    if (s === 'Shadowbanned') return T.gold;
     return T.success;
   };
 
@@ -6534,22 +6349,22 @@ function UsersTab() {
       <PageHeader title="Users" subtitle={`${pagination.total} total users`} />
       <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
         <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
-          <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: T.inkMuted }} />
+          <Search size={14} strokeWidth={2} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: T.inkMuted }} />
           <input placeholder="Search by name or email..." value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && load(1)}
-            style={{ width: '100%', padding: '10px 12px 10px 36px', borderRadius: 8, border: `1px solid ${T.border}`, backgroundColor: T.paper, fontSize: 14, color: T.ink, outline: 'none', fontFamily: T.fontBody }} />
+            style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px 10px 38px', borderRadius: 6, border: '1px solid rgba(212,197,169,0.7)', backgroundColor: T.paper, fontSize: 13.5, color: T.ink, outline: 'none', fontFamily: T.fontBody }} />
         </div>
         {['all', 'active', 'shadowbanned', 'suspended'].map(s => (
-          <button key={s} onClick={() => setStatusFilter(s)}
-            style={{ padding: '8px 16px', borderRadius: 8, border: `1px solid ${statusFilter === s ? T.crimson : T.border}`, background: statusFilter === s ? `${T.crimson}10` : T.paper, cursor: 'pointer', fontSize: 13, fontWeight: 500, color: statusFilter === s ? T.crimson : T.inkSoft, textTransform: 'capitalize' }}>
+          <button key={s} className="tactile-btn" onClick={() => setStatusFilter(s)}
+            style={{ ...pillBtn(statusFilter === s ? 'active' : 'quiet'), color: statusFilter === s ? '#fff' : T.inkSoft, textTransform: 'capitalize', letterSpacing: '0.5px' }}>
             {s}
           </button>
         ))}
       </div>
 
       {loading ? (
-        <div style={{ display: 'grid', gap: 12 }}>{Array.from({ length: 5 }).map((_, i) => <Card key={i} style={{ padding: 16 }}><Skeleton style={{ height: 16, width: '50%', marginBottom: 8 }} /><Skeleton style={{ height: 14, width: '30%' }} /></Card>)}</div>
+        <div style={{ display: 'grid', gap: 12 }}>{Array.from({ length: 5 }).map((_, i) => <Card key={i} style={{ padding: 16 }}><Skeleton style={{ height: 14, width: '50%', marginBottom: 10 }} /><Skeleton style={{ height: 12, width: '30%' }} /></Card>)}</div>
       ) : users.length === 0 ? (
-        <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ color: T.inkMuted }}>No users found</p></Card>
+        <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ fontFamily: T.fontBody, fontSize: 13.5, color: T.inkMuted, margin: 0 }}>No users found</p></Card>
       ) : (
         <div style={{ display: 'grid', gap: 12 }}>
           {users.map(u => {
@@ -6558,7 +6373,7 @@ function UsersTab() {
               <Card key={u._id} style={{ padding: 16 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
                   <div style={{ display: 'flex', gap: 12, alignItems: 'center', flex: 1, minWidth: 0 }}>
-                    <div style={{ width: 40, height: 40, borderRadius: '50%', backgroundColor: T.surfaceDim, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
+                    <div style={{ width: 40, height: 40, borderRadius: '50%', backgroundColor: T.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
                       {u.photos?.[0] ? <img src={u.photos[0]} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" /> : <span style={{ fontWeight: 700, color: T.inkMuted, fontSize: 16 }}>{u.name?.[0]}</span>}
                     </div>
                     <div style={{ minWidth: 0 }}>
@@ -6566,11 +6381,11 @@ function UsersTab() {
                         <span style={{ fontWeight: 600, fontSize: 14, color: T.ink }}>{u.name}</span>
                         <Badge color={statusColor(status)}>{status}</Badge>
                       </div>
-                      <p style={{ fontSize: 12, color: T.inkMuted, margin: '2px 0 0' }}>{u.email} · {u.branch} · {u.year}</p>
-                      <p style={{ fontSize: 11, color: T.inkMuted, margin: '2px 0 0', fontFamily: T.fontMono }}>Reports: {u.reportStats?.count || 0} · Last active: {u.lastActive ? new Date(u.lastActive).toLocaleDateString() : 'Never'}</p>
+                      <p style={{ fontSize: 12.5, fontWeight: 450, color: T.inkSoft, margin: '3px 0 0' }}>{u.email} · {u.branch} · {u.year}</p>
+                      <p style={{ fontFamily: T.fontType, fontSize: 11, color: T.inkMuted, margin: '3px 0 0' }}>Reports: {u.reportStats?.count || 0} · Last active: {u.lastActive ? new Date(u.lastActive).toLocaleDateString() : 'Never'}</p>
                     </div>
                   </div>
-                  <button onClick={() => setDetailUser(u)} style={{ padding: '6px 12px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.paper, cursor: 'pointer', fontSize: 12, color: T.inkSoft }}>Manage</button>
+                  <button className="tactile-btn" onClick={() => setDetailUser(u)} style={{ ...pillBtn(), flexShrink: 0 }}>Manage</button>
                 </div>
               </Card>
             );
@@ -6581,45 +6396,57 @@ function UsersTab() {
 
       <AnimatePresence>
         {detailUser && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
             onClick={() => setDetailUser(null)}
-            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(28,19,10,0.6)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+            <motion.div initial={{ scale: 0.95, opacity: 0, y: 16 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.95, opacity: 0, y: 16 }} transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
               onClick={e => e.stopPropagation()}
-              style={{ background: T.paper, borderRadius: 16, border: `1px solid ${T.border}`, boxShadow: T.shadowMd, maxWidth: 500, width: '100%', maxHeight: '80vh', overflowY: 'auto', padding: 24 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
-                <h3 style={{ fontFamily: T.fontDisplay, fontSize: 18, fontWeight: 700, color: T.ink, margin: 0 }}>{detailUser.name}</h3>
-                <button onClick={() => setDetailUser(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkMuted }}><X size={20} /></button>
+              style={{ background: T.paper, borderRadius: 18, border: '1px solid rgba(212,197,169,0.7)', boxShadow: '0 24px 64px rgba(12,7,2,0.4)', maxWidth: 500, width: '100%', maxHeight: '80vh', overflowY: 'auto', padding: 24, boxSizing: 'border-box' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <h3 style={{ fontFamily: T.fontDisplay, fontSize: 19, fontWeight: 800, color: T.ink, margin: 0, letterSpacing: '-0.02em' }}>{detailUser.name}</h3>
+                <button className="tactile-btn" onClick={() => setDetailUser(null)} aria-label="Close" style={{ backgroundColor: T.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 12, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: T.ink, flexShrink: 0 }}><X size={16} strokeWidth={2} /></button>
               </div>
-              <div style={{ fontSize: 13, color: T.inkSoft, marginBottom: 16, lineHeight: 1.8 }}>
-                <p style={{ margin: 0 }}><strong>Email:</strong> {detailUser.email}</p>
-                <p style={{ margin: 0 }}><strong>College:</strong> {detailUser.college} · {detailUser.branch} · {detailUser.year}</p>
-                <p style={{ margin: 0 }}><strong>Joined:</strong> {new Date(detailUser.createdAt).toLocaleDateString()}</p>
-                <p style={{ margin: 0 }}><strong>Last Active:</strong> {detailUser.lastActive ? new Date(detailUser.lastActive).toLocaleString() : 'Never'}</p>
-                <p style={{ margin: 0 }}><strong>Reports:</strong> {detailUser.reportStats?.count || 0} total, {detailUser.reportStats?.pendingCount || 0} pending</p>
-                {detailUser.suspendedReason && <p style={{ margin: 0, color: T.crimson }}><strong>Suspension Reason:</strong> {detailUser.suspendedReason}</p>}
+              <div style={{ backgroundColor: T.surfaceAlt, borderRadius: 6, border: '1px solid rgba(212,197,169,0.5)', padding: 16, marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {[
+                  ['Email', detailUser.email],
+                  ['College', `${detailUser.college} · ${detailUser.branch} · ${detailUser.year}`],
+                  ['Joined', new Date(detailUser.createdAt).toLocaleDateString()],
+                  ['Last Active', detailUser.lastActive ? new Date(detailUser.lastActive).toLocaleString() : 'Never'],
+                  ['Reports', `${detailUser.reportStats?.count || 0} total, ${detailUser.reportStats?.pendingCount || 0} pending`],
+                ].map(([k, v]) => (
+                  <div key={k}>
+                    <span style={label}>{k}</span>
+                    <p style={{ fontFamily: T.fontType, fontSize: 13, color: T.ink, margin: '3px 0 0', wordBreak: 'break-word' }}>{v}</p>
+                  </div>
+                ))}
+                {detailUser.suspendedReason && (
+                  <div>
+                    <span style={{ ...label, color: T.crimson }}>Suspension Reason</span>
+                    <p style={{ fontFamily: T.fontType, fontSize: 13, color: T.crimson, margin: '3px 0 0' }}>{detailUser.suspendedReason}</p>
+                  </div>
+                )}
               </div>
               <div style={{ marginBottom: 16 }}>
-                <p style={{ fontSize: 12, fontWeight: 600, color: T.inkSoft, marginBottom: 6 }}>Admin Notes</p>
+                <p style={{ ...label, marginBottom: 8 }}>Admin Notes</p>
                 <textarea value={detailUser.adminNotes || ''} onChange={e => setDetailUser({ ...detailUser, adminNotes: e.target.value })}
                   placeholder="Internal notes..."
-                  style={{ width: '100%', minHeight: 60, padding: 10, borderRadius: 8, border: `1px solid ${T.border}`, backgroundColor: T.surface, fontSize: 13, color: T.ink, resize: 'vertical', fontFamily: T.fontBody }} />
+                  style={{ width: '100%', boxSizing: 'border-box', minHeight: 60, padding: 10, borderRadius: 6, border: '1px solid rgba(212,197,169,0.7)', backgroundColor: T.surfaceAlt, fontSize: 13, color: T.ink, resize: 'vertical', fontFamily: T.fontBody, outline: 'none' }} />
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                <button onClick={() => updateUser(detailUser._id, { suspended: !detailUser.suspended, suspendedReason: !detailUser.suspended ? 'Admin action' : '' })}
-                  style={{ padding: '10px 12px', borderRadius: 8, border: 'none', background: detailUser.suspended ? T.success : T.crimson, color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <button className="tactile-btn" onClick={() => updateUser(detailUser._id, { suspended: !detailUser.suspended, suspendedReason: !detailUser.suspended ? 'Admin action' : '' })}
+                  style={{ ...pillBtn(detailUser.suspended ? 'quiet' : 'danger'), padding: '12px 8px' }}>
                   {detailUser.suspended ? 'Unsuspend' : 'Suspend'}
                 </button>
-                <button onClick={() => updateUser(detailUser._id, { isGhost: !detailUser.isGhost })}
-                  style={{ padding: '10px 12px', borderRadius: 8, border: `1px solid ${T.border}`, background: detailUser.isGhost ? T.paper : `${T.amber}15`, color: detailUser.isGhost ? T.inkSoft : T.amber, cursor: 'pointer', fontWeight: 600, fontSize: 12 }}>
+                <button className="tactile-btn" onClick={() => updateUser(detailUser._id, { isGhost: !detailUser.isGhost })}
+                  style={{ ...pillBtn('quiet'), padding: '12px 8px', color: detailUser.isGhost ? T.inkSoft : T.gold, borderColor: detailUser.isGhost ? 'rgba(212,197,169,0.7)' : `${T.gold}55` }}>
                   {detailUser.isGhost ? 'Unshadowban' : 'Shadowban'}
                 </button>
-                <button onClick={() => updateUser(detailUser._id, { adminNotes: detailUser.adminNotes })}
-                  style={{ padding: '10px 12px', borderRadius: 8, border: `1px solid ${T.border}`, background: T.paper, color: T.inkSoft, cursor: 'pointer', fontWeight: 600, fontSize: 12 }}>
+                <button className="tactile-btn" onClick={() => updateUser(detailUser._id, { adminNotes: detailUser.adminNotes })}
+                  style={{ ...pillBtn('quiet'), padding: '12px 8px' }}>
                   Save Notes
                 </button>
-                <button onClick={async () => { try { await apiFetch(`/users/${detailUser._id}/disconnect`, { method: 'POST' }); alert('Disconnect signal sent'); } catch (e) { alert('Failed: ' + e.message); } }}
-                  style={{ padding: '10px 12px', borderRadius: 8, border: `1px solid ${T.border}`, background: T.paper, color: T.danger, cursor: 'pointer', fontWeight: 600, fontSize: 12 }}>
+                <button className="tactile-btn" onClick={async () => { try { await apiFetch(`/users/${detailUser._id}/disconnect`, { method: 'POST' }); alert('Disconnect signal sent'); } catch (e) { alert('Failed: ' + e.message); } }}
+                  style={{ ...pillBtn('quiet'), padding: '12px 8px', color: T.crimson, borderColor: `${T.crimson}45` }}>
                   Kick
                 </button>
               </div>
@@ -6644,12 +6471,12 @@ function AnalyticsTab() {
     const max = Math.max(...items.map(i => i.count), 1);
     return (
       <Card style={{ padding: 20 }}>
-        <h4 style={{ fontFamily: T.fontDisplay, fontSize: 15, fontWeight: 700, color: T.ink, margin: '0 0 16px' }}>{title}</h4>
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 120 }}>
+        <h4 style={{ ...label, marginBottom: 16 }}>{title}</h4>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 120 }}>
           {items.slice(-14).map((item, i) => (
-            <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-              <div style={{ width: '100%', backgroundColor: color, borderRadius: '3px 3px 0 0', height: `${(item.count / max) * 100}%`, minHeight: 2, transition: 'height 0.3s' }} />
-              <span style={{ fontSize: 8, color: T.inkMuted, transform: 'rotate(-45deg)', whiteSpace: 'nowrap' }}>{item.date?.slice(5)}</span>
+            <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
+              <div style={{ width: '100%', backgroundColor: color, borderRadius: '3px 3px 0 0', height: `${(item.count / max) * 100}%`, minHeight: 2, transition: 'height 0.4s cubic-bezier(0.22, 1, 0.36, 1)' }} />
+              <span style={{ fontFamily: T.fontType, fontSize: 8, color: T.inkMuted, transform: 'rotate(-45deg)', whiteSpace: 'nowrap' }}>{item.date?.slice(5)}</span>
             </div>
           ))}
         </div>
@@ -6658,17 +6485,17 @@ function AnalyticsTab() {
   };
 
   if (loading) return <div style={{ display: 'grid', gap: 16 }}>{Array.from({ length: 4 }).map((_, i) => <Card key={i} style={{ padding: 20, height: 180 }}><Skeleton style={{ height: '100%', width: '100%' }} /></Card>)}</div>;
-  if (!data) return <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ color: T.inkMuted }}>Failed to load analytics</p></Card>;
+  if (!data) return <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ fontFamily: T.fontBody, fontSize: 13.5, color: T.inkMuted, margin: 0 }}>Failed to load analytics</p></Card>;
 
   return (
     <div>
       <PageHeader title="Analytics" subtitle="Last 30 days" />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
         <Chart title="Daily Signups" items={data.dailySignups} color={T.success} />
-        <Chart title="Active Users" items={data.dailyActive} color="#0d7377" />
+        <Chart title="Active Users" items={data.dailyActive} color={T.accent} />
         <Chart title="Reports" items={data.dailyReports} color={T.crimson} />
-        <Chart title="Matches" items={data.dailyMatches} color={T.crimsonLight} />
-        <Chart title="Messages" items={data.dailyMessages} color={T.amber} />
+        <Chart title="Matches" items={data.dailyMatches} color={T.gold} />
+        <Chart title="Messages" items={data.dailyMessages} color={T.goldDeep} />
       </div>
     </div>
   );
@@ -6711,37 +6538,37 @@ function SettingsTab() {
 
   const hasChanges = JSON.stringify(settings) !== JSON.stringify(original);
 
-  if (loading) return <div>{Array.from({ length: 3 }).map((_, i) => <Card key={i} style={{ padding: 20, marginBottom: 12 }}><Skeleton style={{ height: 20, width: 200, marginBottom: 12 }} /><Skeleton style={{ height: 40 }} /></Card>)}</div>;
+  if (loading) return <div>{Array.from({ length: 3 }).map((_, i) => <Card key={i} style={{ padding: 20, marginBottom: 12 }}><Skeleton style={{ height: 12, width: 200, marginBottom: 14 }} /><Skeleton style={{ height: 40 }} /></Card>)}</div>;
 
   return (
     <div>
       <PageHeader title="Settings" subtitle="Platform configuration" />
       {fields.map(group => (
         <Card key={group.group} style={{ padding: 20, marginBottom: 16 }}>
-          <h4 style={{ fontFamily: T.fontDisplay, fontSize: 15, fontWeight: 700, color: T.ink, margin: '0 0 16px' }}>{group.group}</h4>
+          <h4 style={{ fontFamily: T.fontDisplay, fontSize: 16, fontWeight: 800, color: T.ink, margin: '0 0 16px', letterSpacing: '-0.01em' }}>{group.group}</h4>
           {group.items.map(f => (
-            <div key={f.key} style={{ marginBottom: 12 }}>
-              <label style={{ fontSize: 13, fontWeight: 500, color: T.inkSoft, display: 'block', marginBottom: 6 }}>{f.label}</label>
+            <div key={f.key} style={{ marginBottom: 14 }}>
+              <label style={label}>{f.label}</label>
               {f.type === 'bool'
-                ? <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <button onClick={() => set(f.key, !settings[f.key])} style={{ width: 44, height: 24, borderRadius: 12, border: 'none', backgroundColor: settings[f.key] ? T.crimson : T.surfaceDim, cursor: 'pointer', position: 'relative', transition: 'background 0.2s' }}>
-                      <div style={{ width: 20, height: 20, borderRadius: '50%', backgroundColor: '#fff', position: 'absolute', top: 2, left: settings[f.key] ? 22 : 2, transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
+                ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+                    <button onClick={() => set(f.key, !settings[f.key])} style={{ width: 44, height: 24, borderRadius: 999, border: '1px solid rgba(212,197,169,0.7)', backgroundColor: settings[f.key] ? T.crimson : T.surfaceAlt, cursor: 'pointer', position: 'relative', transition: 'background 0.2s' }}>
+                      <div style={{ width: 18, height: 18, borderRadius: '50%', backgroundColor: '#fff', position: 'absolute', top: 2, left: settings[f.key] ? 23 : 2, transition: 'left 0.2s cubic-bezier(0.22, 1, 0.36, 1)', boxShadow: '0 2px 6px rgba(88,63,30,0.25)' }} />
                     </button>
-                    <span style={{ fontSize: 12, color: T.inkMuted }}>{settings[f.key] ? 'Enabled' : 'Disabled'}</span>
+                    <span style={{ fontFamily: T.fontType, fontSize: 11.5, color: T.inkMuted }}>{settings[f.key] ? 'Enabled' : 'Disabled'}</span>
                   </div>
                 : <input
                     type={f.type === 'number' ? 'number' : 'text'}
                     value={settings[f.key] ?? ''}
                     onChange={e => set(f.key, f.type === 'number' ? Number(e.target.value) : e.target.value)}
-                    style={{ width: '100%', maxWidth: 300, padding: '8px 12px', borderRadius: 8, border: `1px solid ${T.border}`, backgroundColor: T.paper, fontSize: 14, color: T.ink, fontFamily: T.fontBody }}
+                    style={{ width: '100%', maxWidth: 300, padding: '9px 12px', borderRadius: 6, border: '1px solid rgba(212,197,169,0.7)', backgroundColor: T.paper, fontSize: 13.5, color: T.ink, fontFamily: T.fontBody, outline: 'none', marginTop: 8 }}
                   />
               }
             </div>
           ))}
         </Card>
       ))}
-      <button onClick={save} disabled={!hasChanges}
-        style={{ padding: '10px 24px', borderRadius: 8, border: 'none', background: hasChanges ? T.crimson : T.surfaceDim, color: '#fff', cursor: hasChanges ? 'pointer' : 'not-allowed', fontWeight: 600, fontSize: 14, opacity: hasChanges ? 1 : 0.6 }}>
+      <button className="tactile-btn" onClick={save} disabled={!hasChanges}
+        style={{ ...pillBtn('danger'), padding: '13px 28px', fontSize: 11, opacity: hasChanges ? 1 : 0.4, cursor: hasChanges ? 'pointer' : 'not-allowed' }}>
         {saved ? 'Saved' : 'Save Settings'}
       </button>
     </div>
@@ -6757,44 +6584,53 @@ export default function Admin() {
     apiFetch('/stats').then(() => setAuthed(true)).catch(() => setAuthed(false));
   }, []);
 
-  if (authed === null) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', backgroundColor: T.paper }}><p style={{ color: T.inkMuted, fontSize: 16 }}>Checking admin access...</p></div>;
-  if (authed === false) return <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', backgroundColor: T.paper, gap: 12 }}><AlertTriangle size={48} style={{ color: T.crimson }} /><p style={{ color: T.ink, fontSize: 18, fontWeight: 600, fontFamily: T.fontDisplay }}>Access Denied</p><p style={{ color: T.inkMuted, fontSize: 14 }}>Only the admin can access this page.</p></div>;
+  if (authed === null) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', backgroundColor: T.desk }}><p style={{ fontFamily: T.fontType, color: T.inkMuted, fontSize: 13 }}>Checking admin access...</p></div>;
+  if (authed === false) return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', backgroundColor: T.desk, gap: 12, padding: 20, textAlign: 'center' }}>
+      <div style={{ width: 48, height: 48, borderRadius: 12, backgroundColor: T.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <AlertTriangle size={18} strokeWidth={2} color={T.crimson} />
+      </div>
+      <p style={{ fontFamily: T.fontDisplay, color: T.ink, fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: '-0.02em' }}>Access Denied</p>
+      <p style={{ fontFamily: T.fontBody, color: T.inkMuted, fontSize: 13.5, margin: 0 }}>Only the admin can access this page.</p>
+    </div>
+  );
 
   const tabConfig = {
-    overview: { label: 'Overview', icon: <LayoutDashboard size={20} /> },
-    reports: { label: 'Reports', icon: <AlertTriangle size={20} /> },
-    users: { label: 'Users', icon: <Users size={20} /> },
-    analytics: { label: 'Analytics', icon: <BarChart3 size={20} /> },
-    settings: { label: 'Settings', icon: <Settings size={20} /> },
+    overview: { label: 'Overview', Icon: LayoutDashboard },
+    reports: { label: 'Reports', Icon: AlertTriangle },
+    users: { label: 'Users', Icon: Users },
+    analytics: { label: 'Analytics', Icon: BarChart3 },
+    settings: { label: 'Settings', Icon: Settings },
   };
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: T.paper }}>
-      <aside style={{ width: 240, backgroundColor: T.surface, borderRight: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column', position: 'sticky', top: 0, height: '100vh', flexShrink: 0 }}>
-        <div style={{ padding: '20px 16px', borderBottom: `1px solid ${T.border}` }}>
-          <h1 style={{ fontFamily: T.fontDisplay, fontSize: 20, fontWeight: 700, color: T.crimson, margin: 0 }}>Matchalize</h1>
-          <p style={{ fontSize: 11, color: T.inkMuted, textTransform: 'uppercase', letterSpacing: '0.05em', margin: '4px 0 0' }}>Admin Panel</p>
+    <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: T.desk }}>
+      <aside style={{ width: 240, backgroundColor: T.paper, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 18, boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)', display: 'flex', flexDirection: 'column', position: 'sticky', top: 16, height: 'calc(100vh - 32px)', margin: 16, flexShrink: 0, overflow: 'hidden', boxSizing: 'border-box' }}>
+        <div style={{ padding: '22px 18px 18px', borderBottom: '1px solid rgba(212,197,169,0.7)' }}>
+          <h1 style={{ fontFamily: T.fontDisplay, fontSize: 22, fontWeight: 900, color: T.ink, margin: 0, letterSpacing: '-0.02em', lineHeight: 1 }}>matchalize</h1>
+          <p style={{ ...label, marginTop: 8 }}>Admin Panel</p>
         </div>
-        <nav style={{ flex: 1, padding: '12px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {TABS.map(t => {
-            const active = tab === t;
+        <nav style={{ flex: 1, padding: '14px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {TABS.map(tb => {
+            const active = tab === tb;
+            const { Icon } = tabConfig[tb];
             return (
-              <button key={t} onClick={() => setTab(t)}
-                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 500, textAlign: 'left', backgroundColor: active ? 'rgba(139,26,26,0.06)' : 'transparent', color: active ? T.crimson : T.inkSoft, borderLeft: active ? `3px solid ${T.crimson}` : '3px solid transparent', width: '100%' }}>
-                <span style={{ color: active ? T.crimson : T.inkMuted }}>{tabConfig[t].icon}</span>
-                {tabConfig[t].label}
+              <button key={tb} onClick={() => setTab(tb)}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 12, border: active ? '1px solid rgba(212,197,169,0.9)' : '1px solid transparent', cursor: 'pointer', fontSize: 13.5, fontWeight: active ? 700 : 500, textAlign: 'left', backgroundColor: active ? T.card : 'transparent', boxShadow: active ? '0 6px 16px rgba(88,63,30,0.12)' : 'none', color: T.ink, fontFamily: T.fontBody, width: '100%' }}>
+                <Icon size={17} strokeWidth={active ? 2.5 : 2} color={active ? T.crimson : T.inkMuted} />
+                {tabConfig[tb].label}
               </button>
             );
           })}
         </nav>
-        <div style={{ padding: '16px', borderTop: `1px solid ${T.border}`, textAlign: 'center' }}>
-          <p style={{ fontSize: 11, color: T.inkMuted, margin: 0 }}>v1.0.0</p>
+        <div style={{ padding: 16, borderTop: '1px solid rgba(212,197,169,0.7)', textAlign: 'center' }}>
+          <p style={{ fontFamily: T.fontType, fontSize: 10.5, color: T.inkMuted, margin: 0 }}>v1.0.0</p>
         </div>
       </aside>
 
-      <main style={{ flex: 1, padding: '24px 32px', maxWidth: 1200, overflowY: 'auto' }}>
+      <main style={{ flex: 1, padding: '24px 32px', maxWidth: 1200, overflowY: 'auto', position: 'relative' }}>
         <AnimatePresence mode="wait">
-          <motion.div key={tab} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
+          <motion.div key={tab} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}>
             {tab === 'overview' && <OverviewTab />}
             {tab === 'reports' && <ReportsTab />}
             {tab === 'users' && <UsersTab />}
@@ -6803,10 +6639,16 @@ export default function Admin() {
           </motion.div>
         </AnimatePresence>
       </main>
+
+      <style>{`
+        .tactile-btn { transition: transform 0.15s ease-out; will-change: transform; }
+        .tactile-btn:active { transform: scale(0.96) !important; }
+        input:focus, textarea:focus, select:focus { border-color: rgba(139,69,19,0.45) !important; }
+        ::selection { background: rgba(139,26,26,0.15); }
+      `}</style>
     </div>
   );
 }
-
 ```
 
 ### ./client/src/pages/Auth.jsx
@@ -6814,28 +6656,31 @@ export default function Admin() {
 ```
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { api } from '../utils/api'; 
+import { api } from '../utils/api';
 import socket from '../utils/socket';
 import { theme as design } from '../utils/theme';
 import { triggerHaptic } from '../utils/haptics';
 import { Feather, KeySquare, CheckCircle2 } from 'lucide-react';
 import AccountSuspendedScreen from '../components/AccountSuspendedScreen';
 
-const theme = {
+/* Locked tokens — same family as ProfileCard */
+const t = {
+  desk: '#ece4d4',
   paper: '#fdfbf7',
+  card: '#fffdf8',
   surfaceAlt: '#f4f1ea',
+  lineDark: '#d4c5a9',
   ink: '#1a1a1a',
+  inkSoft: '#4a4a4a',
   inkMuted: '#8c8275',
   accent: '#8b4513',
-  borderDark: '#d4c5a9',
   crimson: '#8b1a1a',
   success: '#2e7d32',
-  shadowWarm: 'rgba(139, 69, 19, 0.12)',
+  fontDisplay: design?.font?.heading || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  fontType: "'Special Elite', 'Courier New', monospace",
+  grain: design?.texture?.grain || '',
 };
-
-const TYPEWRITER_FONT = "'Special Elite', 'Courier New', monospace";
-const HEADER_FONT = design?.font?.heading || "'Playfair Display', serif";
-const LABEL_FONT = design?.font?.body || "'Inter', sans-serif";
 
 const Auth = ({ onSuccess }) => {
   const [step, setStep] = useState('email');
@@ -6870,22 +6715,22 @@ const Auth = ({ onSuccess }) => {
     setError('');
     setLoading(true);
     triggerHaptic('medium');
-    
+
     // Force blur to close keyboard and fix hitboxes before making API call
     if (document.activeElement) {
       document.activeElement.blur();
     }
-    
+
     try {
       await api.post('/auth/send-otp', { email: email.trim() });
       setStep('otp');
     } catch (err) {
       const exactError = err.response?.data?.message || err.response?.data?.error || err.message;
-      
+
       if (exactError?.includes('Network Error')) {
         setError('The courier was lost. Check your connection.');
       } else {
-        setError(exactError || 'Failed to seal the letter.');
+        setError(exactError || 'Failed to send the code.');
       }
       triggerHaptic('heavy');
     } finally {
@@ -6896,7 +6741,7 @@ const Auth = ({ onSuccess }) => {
   const handleVerifyOtp = useCallback(async (otpValue) => {
     setError('');
     setLoading(true);
-    
+
     // Force blur to fix hitboxes
     if (document.activeElement) {
       document.activeElement.blur();
@@ -6906,19 +6751,19 @@ const Auth = ({ onSuccess }) => {
       const data = await api.post('/auth/verify-otp', { email: email.trim(), otp: otpValue });
       // Token is set as httpOnly cookie by the server Set-Cookie header
       localStorage.setItem('matchalize_user', JSON.stringify(data.user));
-      
+
       if (socket && socket.disconnected) socket.connect();
-      
+
       setVerified(true);
       triggerHaptic('heavy');
-      
+
       setTimeout(() => {
         onSuccess();
       }, 1200);
 
     } catch (err) {
       const exactError = err.response?.data?.message || err.response?.data?.error || err.message;
-      
+
       // If this was a suspension, show the lock screen
       try {
         const susData = JSON.parse(localStorage.getItem('matchalize_suspended'));
@@ -6928,9 +6773,9 @@ const Auth = ({ onSuccess }) => {
       if (exactError?.includes('Network Error')) {
         setError('The courier was lost. Check your connection.');
       } else {
-        setError(exactError || 'Invalid seal code.');
+        setError(exactError || 'Invalid code.');
       }
-      
+
       setOtp(['', '', '', '', '', '']);
       if (inputRefs.current[0]) inputRefs.current[0].focus();
       triggerHaptic('heavy');
@@ -6940,19 +6785,19 @@ const Auth = ({ onSuccess }) => {
 
   const handleOtpChange = (e, index) => {
     const val = e.target.value;
-    
+
     if (val.length > 1) {
       const pasted = val.replace(/\D/g, '').slice(0, 6).split('');
       const newOtp = [...otp];
       // Fill from current index, not from 0
-      pasted.forEach((char, i) => { 
-        if (index + i < 6) newOtp[index + i] = char; 
+      pasted.forEach((char, i) => {
+        if (index + i < 6) newOtp[index + i] = char;
       });
       setOtp(newOtp);
-      
+
       const nextIndex = Math.min(index + pasted.length, 5);
       inputRefs.current[nextIndex].focus();
-      
+
       if (newOtp.every(d => d !== '')) {
         handleVerifyOtp(newOtp.join(''));
       }
@@ -6960,7 +6805,7 @@ const Auth = ({ onSuccess }) => {
     }
 
     if (isNaN(val)) return;
-    
+
     const newOtp = [...otp.map((v, i) => (i === index ? val : v))];
     setOtp(newOtp);
     triggerHaptic('light');
@@ -6990,207 +6835,289 @@ const Auth = ({ onSuccess }) => {
       minHeight: '100dvh', // Dynamic Viewport Height
       width: '100%',
       display: 'flex',
-      flexDirection: 'column',
-      backgroundColor: theme.surfaceAlt,
-      paddingTop: 'max(80px, env(safe-area-inset-top))',
-      paddingBottom: 'max(40px, env(safe-area-inset-bottom))',
-      paddingLeft: '32px',
-      paddingRight: '32px',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: t.desk,
+      padding: 'max(24px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom))',
+      boxSizing: 'border-box',
       position: 'relative',
       // CHANGED: From 'hidden' to 'auto' to allow native scrolling and fix the Phantom Hitbox
       overflowX: 'hidden',
-      overflowY: 'auto', 
-      WebkitOverflowScrolling: 'touch'
+      overflowY: 'auto',
+      WebkitOverflowScrolling: 'touch',
     }}>
 
       <style>{`
         * { -webkit-tap-highlight-color: transparent; }
-        
-        .auth-btn { transition: transform 0.15s ease-out, box-shadow 0.15s ease-out, background-color 0.3s ease; }
-        @media (hover: hover) { .auth-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(139, 26, 26, 0.3); } }
-        .auth-btn:active:not(:disabled) { transform: scale(0.97) !important; box-shadow: 0 4px 12px rgba(139, 26, 26, 0.2) !important; transition: transform 0.05s ease-out !important; }
-        
-        .email-input::placeholder { color: ${theme.inkMuted}; opacity: 0.5; font-family: ${TYPEWRITER_FONT}; font-size: 16px; letter-spacing: 0px; }
-        
-        .stamp-box { transition: all 0.2s ease; border-bottom: 3px solid ${theme.borderDark}; }
-        .stamp-box:focus { border-bottom: 3px solid ${theme.crimson}; background-color: #fff; transform: translateY(-2px); box-shadow: 0 8px 16px ${theme.shadowWarm}; }
-        .stamp-box.filled { border-bottom: 3px solid ${theme.ink}; }
-        .stamp-box.success { border-color: ${theme.success}; background-color: ${theme.success}; color: #fff; transform: scale(1.05); }
+
+        .auth-btn { transition: transform 0.15s ease-out, box-shadow 0.15s ease-out; will-change: transform; }
+        @media (hover: hover) { .auth-btn:hover:not(:disabled) { transform: translateY(-1px); } }
+        .auth-btn:active:not(:disabled) { transform: scale(0.96) !important; }
+
+        .email-input::placeholder { color: ${t.inkMuted}; opacity: 0.5; font-family: ${t.fontType}; font-size: 16px; letter-spacing: 0px; }
+
+        .stamp-box { transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease; border-bottom: 2.5px solid ${t.lineDark}; }
+        .stamp-box:focus { border-bottom-color: ${t.crimson}; background-color: #fff; }
+        .stamp-box.filled { border-bottom-color: ${t.ink}; }
+        .stamp-box.success { border-bottom-color: ${t.success}; background-color: ${t.success}; color: #fff; transform: translateY(-3px); }
       `}</style>
 
-      <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${design?.texture?.grain || ''}")`, mixBlendMode: 'multiply', opacity: 0.6, pointerEvents: 'none', zIndex: 1 }} />
+      {/* Grain film — same strength as every surface */}
+      <div aria-hidden="true" style={{ position: 'fixed', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 1 }} />
 
-      <AnimatePresence mode="wait">
-        {step === 'email' ? (
-          <motion.div
-            key="email-step"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -40, scale: 0.95, filter: 'blur(4px)' }}
-            transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-            style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', position: 'relative', zIndex: 10 }}
-          >
-            <div style={{ marginBottom: '40px' }}>
-              <Feather size={32} color={theme.accent} strokeWidth={1.5} style={{ marginBottom: '16px' }} />
-              <h2 style={{ fontFamily: HEADER_FONT, fontSize: '38px', fontWeight: '900', color: theme.ink, margin: '0 0 12px 0', letterSpacing: '-0.02em', lineHeight: 1.1 }}>
+      {/* The floating paper panel */}
+      <div style={{
+        width: '100%',
+        maxWidth: 400,
+        backgroundColor: t.paper,
+        border: '1px solid rgba(212,197,169,0.7)',
+        borderRadius: 18,
+        boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)',
+        padding: '36px 28px 32px',
+        boxSizing: 'border-box',
+        position: 'relative',
+        zIndex: 2,
+      }}>
+
+        <AnimatePresence mode="wait">
+          {step === 'email' ? (
+            <motion.div
+              key="email-step"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -16 }}
+              transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+            >
+              {/* Standard icon tile */}
+              <div style={{
+                width: 48,
+                height: 48,
+                borderRadius: 12,
+                backgroundColor: t.surfaceAlt,
+                border: '1px solid rgba(212,197,169,0.7)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginBottom: 20,
+              }}>
+                <Feather size={20} color={t.accent} strokeWidth={1.75} />
+              </div>
+
+              <h2 style={{ fontFamily: t.fontDisplay, fontSize: 32, fontWeight: 800, color: t.ink, margin: '0 0 10px 0', letterSpacing: '-0.02em', lineHeight: 1.1 }}>
                 Identify yourself.
               </h2>
-              <p style={{ fontFamily: LABEL_FONT, fontSize: '15px', color: theme.inkMuted, margin: 0, lineHeight: '1.5', fontWeight: 500 }}>
+              <p style={{ fontFamily: t.fontBody, fontSize: 14, fontWeight: 450, color: t.inkMuted, margin: '0 0 32px 0', lineHeight: 1.55 }}>
                 Enter your university email to pull your records from the Archives.
               </p>
-            </div>
 
-            <form onSubmit={handleSendOtp} style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-              <div style={{ position: 'relative' }}>
-                    <input
-                      type="email"
-                      inputMode="email"
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck="false"
-                      className="email-input"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="name@university.edu"
-                      required
-                      style={{
-                        width: '100%',
-                        backgroundColor: 'transparent',
-                        border: 'none',
-                        borderBottom: `2px solid ${theme.ink}`,
-                        padding: '12px 4px',
-                        fontSize: '22px',
-                        color: theme.ink,
-                        fontFamily: TYPEWRITER_FONT,
-                        outline: 'none',
-                        borderRadius: 0,
-                        WebkitAppearance: 'none'
-                      }}
-                    />
-                
-                <AnimatePresence>
-                  {error && (
-                    <motion.div 
-                      initial={{ opacity: 0, height: 0 }} 
-                      animate={{ opacity: 1, height: 'auto' }} 
-                      exit={{ opacity: 0, height: 0 }}
-                      style={{ overflow: 'hidden' }}
-                    >
-                      <p style={{ color: theme.crimson, fontSize: '13px', fontFamily: LABEL_FONT, fontWeight: 600, margin: '16px 0 0 0' }}>
-                        {error}
-                      </p>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
+              <form onSubmit={handleSendOtp} style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type="email"
+                    inputMode="email"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck="false"
+                    className="email-input"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="name@university.edu"
+                    required
+                    style={{
+                      width: '100%',
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      borderBottom: `2px solid ${t.ink}`,
+                      padding: '10px 4px',
+                      fontSize: 20,
+                      color: t.ink,
+                      fontFamily: t.fontType,
+                      outline: 'none',
+                      borderRadius: 0,
+                      WebkitAppearance: 'none',
+                      boxSizing: 'border-box',
+                    }}
+                  />
 
-              <button
-                type="submit"
-                disabled={loading || !email.trim()}
-                className="auth-btn"
-                style={{
-                  width: '100%', padding: '22px',
-                  backgroundColor: theme.crimson, color: '#fff',
-                  border: 'none', borderRadius: '14px',
-                  fontFamily: LABEL_FONT, fontSize: '15px', fontWeight: '800', letterSpacing: '2px', textTransform: 'uppercase',
-                  cursor: (!email.trim() || loading) ? 'not-allowed' : 'pointer',
-                  boxShadow: `0 8px 24px rgba(139, 26, 26, 0.25)`,
-                  opacity: (!email.trim() || loading) ? 0.7 : 1,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px',
-                }}
-              >
-                {loading ? 'Consulting Ledger...' : 'Request Ledger Access'}
-              </button>
-            </form>
-          </motion.div>
-        ) : (
-          <motion.div
-            key="otp-step"
-            initial={{ opacity: 0, y: 40 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1], delay: 0.1 }}
-            style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', position: 'relative', zIndex: 10 }}
-          >
-            <div style={{ backgroundColor: '#fff', padding: '16px', borderRadius: '12px', border: `1px solid ${theme.borderDark}`, boxShadow: `0 8px 16px ${theme.shadowWarm}`, display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '40px' }}>
-              <KeySquare size={24} color={theme.accent} strokeWidth={1.5} />
-              <div style={{ flex: 1, overflow: 'hidden' }}>
-                <p style={{ fontFamily: LABEL_FONT, fontSize: '10px', fontWeight: 800, color: theme.inkMuted, textTransform: 'uppercase', letterSpacing: '1px', margin: '0 0 4px 0' }}>Dispatched To</p>
-                <p style={{ fontFamily: TYPEWRITER_FONT, fontSize: '14px', color: theme.ink, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 700 }}>{email}</p>
-              </div>
-            </div>
+                  <AnimatePresence>
+                    {error && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        style={{ overflow: 'hidden' }}
+                      >
+                        <p style={{ color: t.crimson, fontSize: 13, fontFamily: t.fontBody, fontWeight: 600, margin: '14px 0 0 0' }}>
+                          {error}
+                        </p>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
 
-            <div>
-              <h3 style={{ fontFamily: HEADER_FONT, fontSize: '28px', color: theme.ink, margin: '0 0 12px 0', fontWeight: 800 }}>Break the Seal.</h3>
-              <p style={{ fontFamily: LABEL_FONT, fontSize: '14px', color: theme.inkMuted, margin: '0 0 32px 0', lineHeight: 1.5 }}>
-                A sealed 6-digit code has been sent to your inbox.
-              </p>
-            </div>
-
-            <AnimatePresence>
-              {error && (
-                <motion.div 
-                  initial={{ opacity: 0, height: 0 }} 
-                  animate={{ opacity: 1, height: 'auto' }} 
-                  exit={{ opacity: 0, height: 0 }}
-                  style={{ overflow: 'hidden' }}
-                >
-                  <p style={{ color: theme.crimson, fontSize: '13px', fontFamily: LABEL_FONT, fontWeight: 600, margin: '0 0 24px 0' }}>
-                    {error}
-                  </p>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '32px' }}>
-              {otp.map((data, index) => (
-                <input
-                  key={index}
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  maxLength={6} 
-                  value={data}
-                  ref={(el) => (inputRefs.current[index] = el)}
-                  onChange={(e) => handleOtpChange(e, index)}
-                  onKeyDown={(e) => handleOtpKeyDown(e, index)}
-                  className={`stamp-box ${data ? 'filled' : ''} ${verified ? 'success' : ''}`}
-                  disabled={verified || loading}
-                  style={{
-                    width: '100%', aspectRatio: '1/1.2',
-                    textAlign: 'center', fontSize: '28px', fontWeight: '700',
-                    fontFamily: TYPEWRITER_FONT,
-                    color: verified ? '#fff' : theme.ink,
-                    backgroundColor: 'rgba(255,255,255,0.4)',
-                    borderTop: 'none', borderLeft: 'none', borderRight: 'none',
-                    outline: 'none', borderRadius: '8px 8px 0 0',
-                    caretColor: theme.crimson,
-                    WebkitAppearance: 'none'
-                  }}
-                />
-              ))}
-            </div>
-
-            <div>
-              {verified ? (
-                <motion.button
-                  initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                  style={{ width: '100%', padding: '22px', backgroundColor: theme.success, color: '#fff', border: 'none', borderRadius: '14px', fontFamily: LABEL_FONT, fontSize: '16px', fontWeight: '900', letterSpacing: '2px', textTransform: 'uppercase', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', boxShadow: `0 8px 24px rgba(46, 125, 50, 0.4)` }}
-                >
-                  <CheckCircle2 size={24} /> Access Granted
-                </motion.button>
-              ) : (
                 <button
-                  onClick={() => { triggerHaptic('light'); setStep('email'); setError(''); setOtp(['', '', '', '', '', '']); }}
-                  disabled={loading}
-                  style={{ width: '100%', background: 'none', border: 'none', color: theme.accent, fontSize: '13px', fontFamily: LABEL_FONT, fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer', textAlign: 'center', textDecoration: 'underline', textUnderlineOffset: '4px', opacity: loading ? 0.5 : 0.8, WebkitTapHighlightColor: 'transparent' }}
+                  type="submit"
+                  disabled={loading || !email.trim()}
+                  className="auth-btn"
+                  style={{
+                    width: '100%',
+                    padding: '17px',
+                    backgroundColor: t.crimson,
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 999,
+                    fontFamily: t.fontBody,
+                    fontSize: 11.5,
+                    fontWeight: 800,
+                    letterSpacing: '1.8px',
+                    textTransform: 'uppercase',
+                    cursor: (!email.trim() || loading) ? 'not-allowed' : 'pointer',
+                    boxShadow: '0 6px 18px rgba(139, 26, 26, 0.28)',
+                    opacity: (!email.trim() || loading) ? 0.4 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 10,
+                  }}
                 >
-                  Wrong address? Go back
+                  {loading ? 'Sending...' : 'Send Code'}
                 </button>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              </form>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="otp-step"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+            >
+              {/* Dispatched-to card — box tier */}
+              <div style={{
+                backgroundColor: t.card,
+                padding: '14px 16px',
+                borderRadius: 6,
+                border: '1px solid rgba(212,197,169,0.7)',
+                boxShadow: '0 4px 12px rgba(88,63,30,0.1)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                marginBottom: 30,
+              }}>
+                <div style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 12,
+                  backgroundColor: t.surfaceAlt,
+                  border: '1px solid rgba(212,197,169,0.7)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}>
+                  <KeySquare size={16} color={t.accent} strokeWidth={2} />
+                </div>
+                <div style={{ flex: 1, overflow: 'hidden' }}>
+                  <p style={{ fontFamily: t.fontBody, fontSize: 9.5, fontWeight: 800, color: t.inkMuted, textTransform: 'uppercase', letterSpacing: '1.5px', margin: '0 0 3px 0' }}>Dispatched To</p>
+                  <p style={{ fontFamily: t.fontType, fontSize: 13.5, color: t.ink, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{email}</p>
+                </div>
+              </div>
+
+              <h3 style={{ fontFamily: t.fontDisplay, fontSize: 26, color: t.ink, margin: '0 0 8px 0', fontWeight: 800, letterSpacing: '-0.02em' }}>Break the Seal.</h3>
+              <p style={{ fontFamily: t.fontBody, fontSize: 14, fontWeight: 450, color: t.inkMuted, margin: '0 0 28px 0', lineHeight: 1.55 }}>
+                A 6-digit code has been sent to your inbox.
+              </p>
+
+              <AnimatePresence>
+                {error && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    style={{ overflow: 'hidden' }}
+                  >
+                    <p style={{ color: t.crimson, fontSize: 13, fontFamily: t.fontBody, fontWeight: 600, margin: '0 0 22px 0' }}>
+                      {error}
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 28 }}>
+                {otp.map((data, index) => (
+                  <input
+                    key={index}
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    value={data}
+                    ref={(el) => (inputRefs.current[index] = el)}
+                    onChange={(e) => handleOtpChange(e, index)}
+                    onKeyDown={(e) => handleOtpKeyDown(e, index)}
+                    className={`stamp-box ${data ? 'filled' : ''} ${verified ? 'success' : ''}`}
+                    disabled={verified || loading}
+                    style={{
+                      width: '100%',
+                      aspectRatio: '1 / 1.15',
+                      textAlign: 'center',
+                      fontSize: 26,
+                      fontWeight: 700,
+                      fontFamily: t.fontType,
+                      color: verified ? '#fff' : t.ink,
+                      backgroundColor: 'rgba(255,255,255,0.55)',
+                      border: 'none',
+                      borderBottom: `2.5px solid ${t.lineDark}`,
+                      outline: 'none',
+                      borderRadius: 4,
+                      caretColor: t.crimson,
+                      WebkitAppearance: 'none',
+                    }}
+                  />
+                ))}
+              </div>
+
+              <div>
+                {verified ? (
+                  <motion.div
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+                    style={{
+                      width: '100%',
+                      padding: '17px',
+                      backgroundColor: t.success,
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 999,
+                      fontFamily: t.fontBody,
+                      fontSize: 11.5,
+                      fontWeight: 800,
+                      letterSpacing: '1.8px',
+                      textTransform: 'uppercase',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 10,
+                      boxShadow: '0 6px 18px rgba(46, 125, 50, 0.3)',
+                      boxSizing: 'border-box',
+                    }}
+                  >
+                    <CheckCircle2 size={16} strokeWidth={2.5} /> Access Granted
+                  </motion.div>
+                ) : (
+                  <button
+                    onClick={() => { triggerHaptic('light'); setStep('email'); setError(''); setOtp(['', '', '', '', '', '']); }}
+                    disabled={loading}
+                    style={{ width: '100%', background: 'none', border: 'none', color: t.accent, fontSize: 13, fontFamily: t.fontBody, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', textAlign: 'center', textDecoration: 'underline', textUnderlineOffset: '4px', opacity: loading ? 0.5 : 0.8, WebkitTapHighlightColor: 'transparent' }}
+                  >
+                    Wrong address? Go back
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 };
@@ -8435,18 +8362,23 @@ import ShadowbanBanner from '../components/ShadowbanBanner';
 import LearnMoreSheet from '../components/LearnMoreSheet';
 import { triggerHaptic } from '../utils/haptics';
 import { theme as design } from '../utils/theme';
+import { discoverStore, initDiscoverStore, saveDiscoverStore, resetDiscoverStore } from '../utils/discoverStore';
 import { RotateCw, Compass, AlertTriangle } from 'lucide-react';
 
-const theme = {
+/* Locked tokens — same family as ProfileCard */
+const t = {
+  desk: '#ece4d4',
   paper: '#fdfbf7',
-  surface: '#ffffff',
   surfaceAlt: '#f4f1ea',
-  border: '#e0d8c8',
-  borderDark: '#d4c5a9',
+  lineDark: '#d4c5a9',
   ink: '#1a1a1a',
   inkMuted: '#8c8275',
   accent: '#8b4513',
   crimson: '#8b1a1a',
+  fontDisplay: design?.font?.heading || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  fontType: "'Special Elite', 'Courier New', monospace",
+  grain: design?.texture?.grain || '',
 };
 
 const slideVariants = {
@@ -8465,11 +8397,11 @@ const slideVariants = {
   }),
 };
 
-const springTransition = { 
-  type: 'spring', 
-  stiffness: 300, 
-  damping: 30, 
-  mass: 1 
+const springTransition = {
+  type: 'spring',
+  stiffness: 300,
+  damping: 30,
+  mass: 1,
 };
 
 const Discover = ({ onOpenChat }) => {
@@ -8480,7 +8412,7 @@ const Discover = ({ onOpenChat }) => {
   const [fetchingMore, setFetchingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [slideDirection, setSlideDirection] = useState('up');
-  
+
   const [showAlignmentModal, setShowAlignmentModal] = useState(false);
   const [alignedProfile, setAlignedProfile] = useState(null);
 
@@ -8490,14 +8422,29 @@ const Discover = ({ onOpenChat }) => {
   const shadowbanScore = myUser?.shadowbanScore || 0;
 
   const fetchProfiles = useCallback(async (append = false) => {
-    if (!append) { setLoading(true); setError(null); }
+    if (!append) { setLoading(true); setError(null); resetDiscoverStore(); }
     else setFetchingMore(true);
 
     try {
       const data = await api.get('/discover?limit=10');
       const newProfiles = data.users || [];
-      if (append) setProfiles((prev) => [...prev, ...newProfiles]);
-      else { setProfiles(newProfiles); setCurrentIndex(0); }
+      if (append) {
+        setProfiles((prev) => {
+          const next = [...prev, ...newProfiles];
+          discoverStore.profiles = next;
+          discoverStore.hasMore = data.hasMore;
+          saveDiscoverStore();
+          return next;
+        });
+      }
+      else {
+        setProfiles(newProfiles);
+        setCurrentIndex(0);
+        discoverStore.profiles = newProfiles;
+        discoverStore.currentIndex = 0;
+        discoverStore.hasMore = data.hasMore;
+        saveDiscoverStore();
+      }
       setHasMore(data.hasMore);
     } catch (err) {
       console.error('Failed to fetch archival profiles:', err);
@@ -8508,11 +8455,33 @@ const Discover = ({ onOpenChat }) => {
     }
   }, []);
 
-  useEffect(() => { fetchProfiles(false); }, [fetchProfiles]);
+  useEffect(() => {
+    const userId = myUser?._id;
+    if (!userId) return;
+    const restored = initDiscoverStore(userId);
+    if (restored && discoverStore.profiles.length > 0) {
+      setProfiles(discoverStore.profiles);
+      setCurrentIndex(discoverStore.currentIndex);
+      setHasMore(discoverStore.hasMore);
+      setLoading(false);
+      return;
+    }
+    fetchProfiles(false);
+  }, [myUser?._id, fetchProfiles]);
 
   const handleNextProfile = useCallback((direction = 'up', isAction = false) => {
+    if (direction === 'down') {
+      if (currentIndex <= 0) return;
+      const next = Math.max(0, currentIndex - 1);
+      setCurrentIndex(next);
+      discoverStore.currentIndex = next;
+      saveDiscoverStore();
+      setSlideDirection('down');
+      return;
+    }
+
     if (currentIndex >= profiles.length) return;
-    
+
     setSlideDirection(direction);
 
     if (!isAction) {
@@ -8523,7 +8492,11 @@ const Discover = ({ onOpenChat }) => {
       }
     }
 
-    setCurrentIndex((prev) => prev + 1);
+    const next = currentIndex + 1;
+    setCurrentIndex(next);
+    discoverStore.currentIndex = next;
+    discoverStore.profiles = profiles;
+    saveDiscoverStore();
 
     if (profiles.length - currentIndex <= 4 && hasMore && !fetchingMore) {
       fetchProfiles(true);
@@ -8538,29 +8511,29 @@ const Discover = ({ onOpenChat }) => {
       return;
     }
     const profile = profiles[currentIndex];
-    
+
     try {
-      if (action === 'like') { 
-        triggerHaptic('light'); 
+      if (action === 'like') {
+        triggerHaptic('light');
         const response = await api.post(`/discover/like/${profile._id}`, payload);
         if (response.matched) {
           setAlignedProfile({ ...response.user, matchId: response.matchId });
           setShowAlignmentModal(true);
         }
-      } 
-      else if (action === 'superlike') { 
-        triggerHaptic('heavy'); 
+      }
+      else if (action === 'superlike') {
+        triggerHaptic('heavy');
         const response = await api.post(`/discover/superlike/${profile._id}`, payload);
         if (response.matched) {
           setAlignedProfile({ ...response.user, matchId: response.matchId });
           setShowAlignmentModal(true);
         }
-      } 
-      else if (action === 'pass') { 
-        triggerHaptic('medium'); 
-        await api.post(`/discover/pass/${profile._id}`); 
       }
-      
+      else if (action === 'pass') {
+        triggerHaptic('medium');
+        await api.post(`/discover/pass/${profile._id}`);
+      }
+
       handleNextProfile('up', true);
 
     } catch (err) {
@@ -8572,7 +8545,7 @@ const Discover = ({ onOpenChat }) => {
 
   if (loading) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '12px' }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '12px', backgroundColor: t.desk }}>
         <ProfileCardSkeleton />
       </div>
     );
@@ -8580,12 +8553,14 @@ const Discover = ({ onOpenChat }) => {
 
   if (error && !loading) {
     return (
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', textAlign: 'center', width: '100%', color: theme.inkMuted, backgroundColor: theme.surfaceAlt }}>
-        <AlertTriangle size={48} strokeWidth={1.5} style={{ marginBottom: '16px', color: theme.crimson, opacity: 0.8 }} />
-        <h3 style={{ fontFamily: "'Playfair Display', serif", fontSize: '22px', color: theme.ink, marginBottom: '8px' }}>The Archive is Unreachable</h3>
-        <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', lineHeight: 1.6, maxWidth: '280px', marginBottom: '24px' }}>{error}</p>
-        <button onClick={() => fetchProfiles(false)} className="tactile-btn" style={{ padding: '12px 24px', borderRadius: '24px', backgroundColor: theme.accent, color: '#fff', border: 'none', fontWeight: 600, cursor: 'pointer', boxShadow: '0 4px 12px rgba(139, 69, 19, 0.2)', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-          <RotateCw size={18} /> Try Again
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', textAlign: 'center', width: '100%', backgroundColor: t.desk }}>
+        <div style={{ width: 48, height: 48, borderRadius: 12, backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
+          <AlertTriangle size={18} strokeWidth={2} color={t.crimson} />
+        </div>
+        <h3 style={{ fontFamily: t.fontDisplay, fontSize: 22, fontWeight: 800, color: t.ink, letterSpacing: '-0.02em', margin: '0 0 8px 0' }}>The Archive is Unreachable</h3>
+        <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 450, lineHeight: 1.6, maxWidth: 280, marginBottom: 24, color: t.inkMuted }}>{error}</p>
+        <button onClick={() => fetchProfiles(false)} className="tactile-btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '13px 24px', backgroundColor: t.crimson, color: '#fff', border: 'none', borderRadius: 999, fontFamily: t.fontBody, fontSize: 11, fontWeight: 800, letterSpacing: '1.8px', textTransform: 'uppercase', cursor: 'pointer', boxShadow: '0 6px 18px rgba(139,26,26,0.28)' }}>
+          <RotateCw size={14} strokeWidth={2.5} /> Try Again
         </button>
       </div>
     );
@@ -8593,12 +8568,14 @@ const Discover = ({ onOpenChat }) => {
 
   if (!profiles || profiles.length === 0 || currentIndex >= profiles.length) {
     return (
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', textAlign: 'center', width: '100%', color: theme.inkMuted, backgroundColor: theme.surfaceAlt }}>
-        <Compass size={48} strokeWidth={1.5} style={{ marginBottom: '16px', opacity: 0.6 }} />
-        <h3 style={{ fontFamily: "'Playfair Display', serif", fontSize: '22px', color: theme.ink, marginBottom: '8px' }}>The Archive is Quiet</h3>
-        <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', lineHeight: 1.6, maxWidth: '280px', marginBottom: '24px' }}>You've reviewed all available subjects at IIT Bombay for now. Check back later.</p>
-        <button onClick={() => fetchProfiles(false)} style={{ padding: '12px 24px', borderRadius: '24px', backgroundColor: theme.accent, color: '#fff', border: 'none', fontWeight: 600, cursor: 'pointer', boxShadow: '0 4px 12px rgba(139, 69, 19, 0.2)', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-          <RotateCw size={18} /> Refresh Archive
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', textAlign: 'center', width: '100%', backgroundColor: t.desk }}>
+        <div style={{ width: 48, height: 48, borderRadius: 12, backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
+          <Compass size={18} strokeWidth={2} color={t.accent} />
+        </div>
+        <h3 style={{ fontFamily: t.fontDisplay, fontSize: 22, fontWeight: 800, color: t.ink, letterSpacing: '-0.02em', margin: '0 0 8px 0' }}>The Archive is Quiet</h3>
+        <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 450, lineHeight: 1.6, maxWidth: 280, marginBottom: 24, color: t.inkMuted }}>You've reviewed everyone for now. Check back later.</p>
+        <button onClick={() => fetchProfiles(false)} className="tactile-btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '13px 24px', backgroundColor: t.crimson, color: '#fff', border: 'none', borderRadius: 999, fontFamily: t.fontBody, fontSize: 11, fontWeight: 800, letterSpacing: '1.8px', textTransform: 'uppercase', cursor: 'pointer', boxShadow: '0 6px 18px rgba(139,26,26,0.28)' }}>
+          <RotateCw size={14} strokeWidth={2.5} /> Refresh
         </button>
       </div>
     );
@@ -8610,12 +8587,13 @@ const Discover = ({ onOpenChat }) => {
 
       <style>{`
         .hide-scroll::-webkit-scrollbar { display: none; }
-        .tactile-btn:active { transform: scale(0.95); }
+        .tactile-btn { transition: transform 0.15s ease-out; will-change: transform; }
+        .tactile-btn:active { transform: scale(0.96) !important; }
       `}</style>
 
       <ShadowbanBanner score={shadowbanScore} onLearnMore={() => setShowLearnMore(true)} />
-      {showLearnMore && <LearnMoreSheet onClose={() => setShowLearnMore(false)} />}
-      
+      {showLearnMore && <LearnMoreSheet onClose={() => setShowLearnMore(true)} onClose={() => setShowLearnMore(false)} />}
+
       <div style={styles.stageContainer}>
         {/* Full width/height container. No overflow clipping here! */}
         <div style={{ position: 'relative', width: '100%', height: '100%' }}>
@@ -8629,16 +8607,16 @@ const Discover = ({ onOpenChat }) => {
                 animate="center"
                 exit="exit"
                 transition={springTransition}
-                style={{ 
-                  position: 'absolute', 
-                  inset: 0, 
-                  display: 'flex', flexDirection: 'column'
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex', flexDirection: 'column',
                 }}
               >
-                <ProfileCard 
-                  profile={profiles[currentIndex]} 
-                  onAction={handleAction} 
-                  onNavigate={handleNextProfile} 
+                <ProfileCard
+                  profile={profiles[currentIndex]}
+                  onAction={handleAction}
+                  onNavigate={handleNextProfile}
                 />
               </motion.div>
             )}
@@ -8649,23 +8627,38 @@ const Discover = ({ onOpenChat }) => {
       <AnimatePresence>
         {showAlignmentModal && alignedProfile && (
           <>
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(10, 8, 6, 0.85)', backdropFilter: 'blur(8px)', zIndex: 99998 }}
+              transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+              style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(28,19,10,0.72)', zIndex: 99998 }}
               onClick={() => { setShowAlignmentModal(false); setAlignedProfile(null); }}
             />
             <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.9, opacity: 0, y: 20 }} transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '90%', maxWidth: '360px', backgroundColor: '#fdfbf7', backgroundImage: `url("${design.texture.grain}")`, border: '2px solid #d4c5a9', borderRadius: '24px', padding: '32px 24px', textAlign: 'center', zIndex: 99999, boxShadow: '0 24px 60px rgba(0,0,0,0.4)' }}
+              initial={{ scale: 0.92, opacity: 0, y: 16 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.94, opacity: 0, y: 16 }} transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+              style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '90%', maxWidth: 340, backgroundColor: t.paper, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 18, padding: '32px 24px 24px', textAlign: 'center', zIndex: 99999, boxShadow: '0 24px 64px rgba(12,7,2,0.45)', overflow: 'hidden' }}
             >
-              <div style={{ width: '80px', height: '80px', margin: '0 auto 16px', backgroundColor: '#8b1a1a', borderRadius: '50%', border: '4px solid #b82e2e', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 24px rgba(139,26,26,0.4), inset 0 2px 8px rgba(255,255,255,0.2)' }}>
-                <span style={{ fontFamily: "'Playfair Display', serif", fontSize: '32px', fontWeight: 900, color: '#ffffff', letterSpacing: '2px' }}>M</span>
-              </div>
-              <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: '28px', color: '#1a1a1a', margin: '0 0 8px 0', fontWeight: 800 }}>You are Aligned</h2>
-              <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: '#8c8275', margin: '0 0 24px 0', lineHeight: 1.5 }}>You and {alignedProfile.name} have found common ground. The correspondence is now open.</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <button onClick={() => { triggerHaptic('heavy'); setShowAlignmentModal(false); if (onOpenChat && alignedProfile) { onOpenChat({ _id: alignedProfile.matchId, user: alignedProfile }); } setAlignedProfile(null); }} style={{ width: '100%', padding: '16px', backgroundColor: '#8b1a1a', color: '#fff', border: 'none', borderRadius: '12px', fontFamily: "'Inter', sans-serif", fontSize: '14px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', cursor: 'pointer', boxShadow: '0 4px 12px rgba(139,26,26,0.3)' }}>Open Correspondence</button>
-                <button onClick={() => { setShowAlignmentModal(false); setAlignedProfile(null); }} style={{ width: '100%', padding: '16px', backgroundColor: 'transparent', color: '#1a1a1a', border: '1px solid #d4c5a9', borderRadius: '12px', fontFamily: "'Inter', sans-serif", fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}>Continue Exploring</button>
+              {/* Grain film */}
+              <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none' }} />
+
+              {/* The match seal — stamp language, one crimson moment */}
+              <motion.div
+                initial={{ scale: 1.8, opacity: 0, rotate: -18 }}
+                animate={{ scale: 1, opacity: 1, rotate: -6 }}
+                transition={{ delay: 0.15, type: 'spring', damping: 16, stiffness: 260 }}
+                style={{ width: 96, height: 96, margin: '0 auto 18px', position: 'relative' }}
+              >
+                <svg viewBox="0 0 96 96" width="96" height="96">
+                  <circle cx="48" cy="48" r="45" fill="none" stroke={t.crimson} strokeWidth="3" />
+                  <circle cx="48" cy="48" r="37" fill="none" stroke={t.crimson} strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
+                  <text x="48" y="60" textAnchor="middle" fill={t.crimson} style={{ fontFamily: t.fontDisplay, fontSize: '38px', fontWeight: 900 }}>M</text>
+                </svg>
+              </motion.div>
+
+              <h2 style={{ fontFamily: t.fontDisplay, fontSize: 26, color: t.ink, margin: '0 0 8px 0', fontWeight: 800, letterSpacing: '-0.02em' }}>You are Aligned</h2>
+              <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 450, color: t.inkMuted, margin: '0 0 24px 0', lineHeight: 1.55 }}>You and {alignedProfile.name} have found common ground. The correspondence is now open.</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, position: 'relative' }}>
+                <button onClick={() => { triggerHaptic('heavy'); setShowAlignmentModal(false); if (onOpenChat && alignedProfile) { onOpenChat({ _id: alignedProfile.matchId, user: alignedProfile }); } setAlignedProfile(null); }} style={{ width: '100%', padding: '15px', backgroundColor: t.crimson, color: '#fff', border: 'none', borderRadius: 999, fontFamily: t.fontBody, fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '1.8px', cursor: 'pointer', boxShadow: '0 6px 18px rgba(139,26,26,0.28)' }}>Open Correspondence</button>
+                <button onClick={() => { setShowAlignmentModal(false); setAlignedProfile(null); }} style={{ width: '100%', padding: '15px', backgroundColor: 'transparent', color: t.ink, border: '1px solid rgba(212,197,169,0.9)', borderRadius: 999, fontFamily: t.fontBody, fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '1.8px', cursor: 'pointer' }}>Continue Exploring</button>
               </div>
             </motion.div>
           </>
@@ -8676,9 +8669,9 @@ const Discover = ({ onOpenChat }) => {
 };
 
 const styles = {
-  viewportRoot: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', backgroundColor: '#e8e4db', position: 'relative', overflow: 'hidden', userSelect: 'none', WebkitUserSelect: 'none' },
-  paperGrain: { position: 'absolute', inset: 0, backgroundImage: `url("${design.texture.grain}")`, mixBlendMode: 'multiply', opacity: 0.85, pointerEvents: 'none', zIndex: 1 },
-  stageContainer: { flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', position: 'relative', padding: 0, zIndex: 2 }
+  viewportRoot: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', backgroundColor: '#ece4d4', position: 'relative', overflow: 'hidden', userSelect: 'none', WebkitUserSelect: 'none' },
+  paperGrain: { position: 'absolute', inset: 0, backgroundImage: `url("${design.texture.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 1 },
+  stageContainer: { flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', position: 'relative', padding: 0, zIndex: 2 },
 };
 
 export default Discover;
@@ -8696,7 +8689,26 @@ import { useAuth } from '../utils/AuthContext';
 import socket from '../utils/socket';
 import { theme as design } from '../utils/theme';
 import { SkeletonBox } from '../components/Skeleton';
-import { Heart, MoreVertical, Search } from 'lucide-react';
+import { Heart, MoreVertical, Search, X } from 'lucide-react';
+import { triggerHaptic } from '../utils/haptics';
+
+/* Locked tokens — same family as ProfileCard */
+const t = {
+  desk: '#ece4d4',
+  paper: '#fdfbf7',
+  card: '#fffdf8',
+  surfaceAlt: '#f4f1ea',
+  lineDark: '#d4c5a9',
+  ink: '#1a1a1a',
+  inkSoft: '#4a4a4a',
+  inkMuted: '#8c8275',
+  accent: '#8b4513',
+  crimson: '#8b1a1a',
+  fontDisplay: design?.font?.heading || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  fontType: "'Special Elite', 'Courier New', monospace",
+  grain: design?.texture?.grain || '',
+};
 
 const Matches = ({ onOpenChat }) => {
   const queryClient = useQueryClient();
@@ -8800,17 +8812,14 @@ const Matches = ({ onOpenChat }) => {
 
   if (isLoading) {
     return (
-      <div style={{ flex: 1, overflowY: 'auto', backgroundColor: design.color.bg, padding: '16px 24px' }}>
-        <h2 style={{ fontFamily: design.font.display, fontSize: '24px', color: design.color.ink, marginBottom: '24px', marginTop: '8px' }}>
-          Your Connections
-        </h2>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: '16px 14px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {[0, 1, 2].map((i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '16px', backgroundColor: design.color.surface, border: `1px solid ${design.color.borderDark}`, borderRadius: '12px', padding: '16px', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
-              <SkeletonBox width="60px" height="60px" radius="12px" />
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <SkeletonBox width="120px" height="18px" />
-                <SkeletonBox width="180px" height="14px" />
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 14, backgroundColor: t.paper, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 18, padding: 16, boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)' }}>
+              <SkeletonBox width={56} height={56} radius="50%" />
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <SkeletonBox width={120} height={14} />
+                <SkeletonBox width={180} height={11} />
               </div>
             </div>
           ))}
@@ -8823,216 +8832,225 @@ const Matches = ({ onOpenChat }) => {
     return (
       <div style={{
         flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        flexDirection: 'column', gap: '16px', padding: '32px', backgroundColor: design.color.bg
+        flexDirection: 'column', gap: 16, padding: 32, backgroundColor: t.desk,
       }}>
-        <div style={{ width: '72px', height: '72px', borderRadius: design.radius.md, backgroundColor: design.color.surface, border: `1px solid ${design.color.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 24px rgba(139,69,19,0.08)' }}>
-          <Heart size={32} style={{ opacity: 0.4, color: design.color.accent || '#8b4513' }} />
+        <div style={{ width: 48, height: 48, borderRadius: 12, backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Heart size={18} strokeWidth={2} color={t.accent} />
         </div>
-        <p style={{ fontFamily: design.font.display, fontSize: '22px', color: design.color.ink, textAlign: 'center', margin: 0, fontWeight: 700 }}>
+        <p style={{ fontFamily: t.fontDisplay, fontSize: 22, color: t.ink, textAlign: 'center', margin: 0, fontWeight: 800, letterSpacing: '-0.02em' }}>
           No connections yet
         </p>
-        <p style={{ fontFamily: design.font.body, fontSize: '14px', color: design.color.inkMuted, textAlign: 'center', maxWidth: '280px', margin: 0, lineHeight: 1.5 }}>
-          Say hello 👋 — start exploring and leave a flower to begin your story.
+        <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 450, color: t.inkMuted, textAlign: 'center', maxWidth: 280, margin: 0, lineHeight: 1.6 }}>
+          Start exploring and leave a flower to begin your story.
         </p>
       </div>
     );
   }
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', backgroundColor: design.color.bg, padding: '16px 24px' }}>
-      {/* GPU-Promoted Zero-Lag Card & Input Interactions */}
+    <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: '16px 14px' }}>
+      {/* Grain film */}
+      <div aria-hidden="true" style={{ position: 'fixed', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 0 }} />
+
       <style>{`
         .match-card {
-          will-change: transform, box-shadow;
-          transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.2s ease, background-color 0.2s ease;
+          will-change: transform;
+          transition: transform 0.15s ease-out, box-shadow 0.2s ease;
           contain: layout style;
         }
-
         @media (hover: hover) {
           .match-card:hover {
-            transform: translate3d(0, -3px, 0) scale3d(1.01, 1.01, 1);
-            box-shadow: 0 10px 24px rgba(26, 26, 26, 0.08), 0 2px 8px rgba(139, 69, 19, 0.06);
-            border-color: ${design.color.accent || '#8b4513'};
-            z-index: 2;
+            transform: translateY(-2px);
+            box-shadow: 0 18px 40px rgba(88,63,30,0.2), 0 4px 12px rgba(88,63,30,0.1);
           }
         }
-
         .match-card:active {
-          transform: scale3d(0.985, 0.985, 1) translate3d(0, 0, 0) !important;
-          transition: transform 0.08s cubic-bezier(0, 0, 0.2, 1) !important;
+          transform: scale(0.98) !important;
+          transition: transform 0.08s ease-out !important;
         }
-
-        .search-container {
-          transition: border-color 0.2s ease, box-shadow 0.2s ease;
-        }
-
         @media (prefers-reduced-motion: reduce) {
-          .match-card, .search-container {
-            transition: none !important;
-            transform: none !important;
-          }
+          .match-card { transition: none !important; transform: none !important; }
         }
       `}</style>
 
-      <h2 style={{ fontFamily: design.font.display, fontSize: '26px', color: design.color.ink, marginBottom: '20px', marginTop: '8px', fontWeight: 700, letterSpacing: '-0.02em' }}>
-        Your Connections
-      </h2>
+      <div style={{ position: 'relative', zIndex: 1 }}>
+        <h2 style={{ fontFamily: t.fontDisplay, fontSize: 24, color: t.ink, marginBottom: 16, marginTop: 4, fontWeight: 800, letterSpacing: '-0.02em' }}>
+          Your Connections
+        </h2>
 
-      {/* Accessible Search Input with Tactile Focus State */}
-      <div 
-        className="search-container"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-          padding: '0 16px',
-          marginBottom: '20px',
-          backgroundColor: design.color.surface,
-          border: `1px solid ${isFocused ? (design.color.accent || '#8b4513') : design.color.border}`,
-          borderRadius: design.radius.md,
-          boxShadow: isFocused ? '0 4px 12px rgba(139, 69, 19, 0.08)' : '0 2px 4px rgba(0,0,0,0.02)',
-        }}
-      >
-        <Search size={18} color={isFocused ? (design.color.accent || '#8b4513') : design.color.inkMuted} style={{ transition: 'color 0.2s ease' }} />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
-          placeholder="Search connections..."
-          aria-label="Search connections"
+        {/* Search — box-tier input */}
+        <div
           style={{
-            width: '100%',
-            boxSizing: 'border-box',
-            padding: '14px 0',
-            backgroundColor: 'transparent',
-            border: 'none',
-            fontFamily: design.font.body,
-            fontSize: '14px',
-            color: design.color.ink,
-            outline: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '0 14px',
+            marginBottom: 18,
+            backgroundColor: t.paper,
+            border: `1px solid ${isFocused ? 'rgba(139,69,19,0.45)' : 'rgba(212,197,169,0.7)'}`,
+            borderRadius: 6,
+            transition: 'border-color 0.2s ease',
           }}
-        />
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        {filtered.map((match) => {
-          const user = match.user;
-          if (!user) return null;
-
-          const lastMessage = match.lastMessage;
-          const unread =
-            match.yourTurn ||
-            (lastMessage && lastMessage.senderId && lastMessage.senderId !== myId && !lastMessage.readAt);
-          const isOpen = openMenuId === match._id;
-
-          return (
-            <div
-              key={match._id}
-              className="match-card"
-              role="button"
-              tabIndex={0}
-              onClick={() => onOpenChat(match)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onOpenChat(match);
-                }
-              }}
-              style={{
-                position: 'relative',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '16px',
-                backgroundColor: unread ? 'rgba(139, 69, 19, 0.03)' : design.color.surface,
-                border: `1px solid ${unread ? 'rgba(139, 69, 19, 0.3)' : design.color.borderDark}`,
-                borderRadius: '12px',
-                padding: '14px 16px',
-                boxShadow: unread ? '0 4px 12px rgba(139, 69, 19, 0.06)' : '0 2px 6px rgba(0,0,0,0.03)',
-                cursor: 'pointer',
-              }}
+        >
+          <Search size={14} strokeWidth={2} color={isFocused ? t.accent : t.inkMuted} style={{ transition: 'color 0.2s ease', flexShrink: 0 }} />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
+            placeholder="Search connections..."
+            aria-label="Search connections"
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              padding: '12px 0',
+              backgroundColor: 'transparent',
+              border: 'none',
+              fontFamily: t.fontBody,
+              fontSize: 13.5,
+              color: t.ink,
+              outline: 'none',
+            }}
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => { triggerHaptic('light'); setSearch(''); }}
+              aria-label="Clear search"
+              style={{ background: 'none', border: 'none', color: t.inkMuted, cursor: 'pointer', display: 'flex', padding: 4, flexShrink: 0 }}
             >
-              <img
-                src={user.photos?.[0] || 'https://via.placeholder.com/80'}
-                alt={user.name}
-                loading="lazy"
-                decoding="async"
-                style={{ width: '56px', height: '56px', borderRadius: design.radius.md, objectFit: 'cover', border: `1px solid ${design.color.border}`, flexShrink: 0 }}
-              />
-              
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <p style={{ fontFamily: design.font.display, fontSize: '16px', fontWeight: unread ? 700 : 600, color: design.color.ink, margin: 0, letterSpacing: '-0.01em' }}>
-                    {user.name}, {user.age}
+              <X size={14} strokeWidth={2} />
+            </button>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {filtered.map((match) => {
+            const user = match.user;
+            if (!user) return null;
+
+            const lastMessage = match.lastMessage;
+            const unread =
+              match.yourTurn ||
+              (lastMessage && lastMessage.senderId && lastMessage.senderId !== myId && !lastMessage.readAt);
+            const isOpen = openMenuId === match._id;
+
+            const lastIsMedia = lastMessage && (lastMessage.type === 'image' || lastMessage.type === 'audio');
+
+            return (
+              <div
+                key={match._id}
+                className="match-card"
+                role="button"
+                tabIndex={0}
+                onClick={() => { triggerHaptic('light'); onOpenChat(match); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onOpenChat(match);
+                  }
+                }}
+                style={{
+                  position: 'relative',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 14,
+                  backgroundColor: unread ? t.card : t.paper,
+                  border: `1px solid ${unread ? 'rgba(139,69,19,0.35)' : 'rgba(212,197,169,0.7)'}`,
+                  borderRadius: 18,
+                  padding: '14px 16px',
+                  boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)',
+                  cursor: 'pointer',
+                }}
+              >
+                {/* Avatar — circular with hairline ring, matching every other avatar in the app */}
+                <img
+                  src={user.photos?.[0] || 'https://via.placeholder.com/80'}
+                  alt={user.name}
+                  loading="lazy"
+                  decoding="async"
+                  style={{ width: 56, height: 56, borderRadius: '50%', objectFit: 'cover', border: '1px solid rgba(212,197,169,0.9)', backgroundColor: t.surfaceAlt, flexShrink: 0 }}
+                />
+
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <p style={{ fontFamily: t.fontBody, fontSize: 15, fontWeight: unread ? 700 : 600, color: t.ink, margin: 0 }}>
+                      {user.name}{user.age ? <span style={{ fontWeight: 400, color: t.inkMuted }}>, {user.age}</span> : null}
+                    </p>
+                    {unread && (
+                      <span
+                        aria-label="Unread message"
+                        style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: t.crimson, flexShrink: 0, boxShadow: '0 0 0 3px rgba(139,26,26,0.12)' }}
+                      />
+                    )}
+                  </div>
+                  <p style={{ fontFamily: t.fontType, fontSize: 12.5, color: unread ? t.inkSoft : t.inkMuted, margin: '4px 0 0 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: unread ? 700 : 400 }}>
+                    {lastMessage
+                      ? lastIsMedia
+                        ? (lastMessage.type === 'image' ? 'Sent a photograph' : 'Sent a voice note')
+                        : lastMessage.text
+                      : 'Say hello'}
                   </p>
-                  {unread && (
-                    <span 
-                      aria-label="Unread message"
-                      style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: design.color.crimson, flexShrink: 0, boxShadow: '0 0 0 3px rgba(185, 28, 28, 0.15)' }} 
-                    />
-                  )}
                 </div>
-                <p style={{ fontFamily: design.font.body, fontSize: '13px', color: unread ? design.color.ink : design.color.inkMuted, margin: '4px 0 0 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: unread ? 600 : 400 }}>
-                  {lastMessage ? lastMessage.text : 'Say hello 👋'}
-                </p>
-              </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px', flexShrink: 0 }}>
-                <span style={{ fontFamily: design.font.body, fontSize: '11px', color: unread ? design.color.accent : design.color.inkMuted, fontWeight: unread ? 600 : 400, whiteSpace: 'nowrap' }}>
-                  {lastMessage ? fmtTime(lastMessage.createdAt) : `Matched ${timeAgo(match.createdAt)}`}
-                </span>
-                <button
-                  type="button"
-                  onClick={(e) => { 
-                    e.stopPropagation(); 
-                    setOpenMenuId(isOpen ? null : match._id); 
-                  }}
-                  style={{ background: 'none', border: 'none', color: design.color.inkMuted, cursor: 'pointer', padding: '4px', margin: '-4px', display: 'flex', alignItems: 'center', borderRadius: '4px' }}
-                  aria-label="More options"
-                  title="More options"
-                >
-                  <MoreVertical size={18} />
-                </button>
-              </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
+                  <span style={{ fontFamily: t.fontType, fontSize: 10.5, color: unread ? t.accent : t.inkMuted, fontWeight: unread ? 700 : 400, whiteSpace: 'nowrap' }}>
+                    {lastMessage ? fmtTime(lastMessage.createdAt) : `Matched ${timeAgo(match.createdAt)}`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      triggerHaptic('light');
+                      setOpenMenuId(isOpen ? null : match._id);
+                    }}
+                    style={{ background: 'none', border: 'none', color: t.inkMuted, cursor: 'pointer', padding: 4, margin: -4, display: 'flex', alignItems: 'center', borderRadius: 4 }}
+                    aria-label="More options"
+                    title="More options"
+                  >
+                    <MoreVertical size={16} strokeWidth={2} />
+                  </button>
+                </div>
 
-              {/* AnimatePresence restores smooth exit transitions for the contextual menu */}
-              <AnimatePresence>
-                {isOpen && (
-                  <>
-                    <div 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOpenMenuId(null);
-                      }} 
-                      style={{ position: 'fixed', inset: 0, zIndex: 90, cursor: 'default' }} 
-                    />
-                    <motion.div
-                      initial={{ opacity: 0, scale: 0.95, y: -6 }}
-                      animate={{ opacity: 1, scale: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.95, y: -6 }}
-                      transition={{ duration: 0.15, ease: 'easeOut' }}
-                      style={{ position: 'absolute', top: '48px', right: '16px', backgroundColor: design.color.surface, border: `1px solid ${design.color.border}`, borderRadius: design.radius.md, boxShadow: '0 12px 32px rgba(0,0,0,0.18)', zIndex: 100, overflow: 'hidden', minWidth: '160px' }}
-                    >
-                      <button
-                        type="button"
+                {/* Contextual menu */}
+                <AnimatePresence>
+                  {isOpen && (
+                    <>
+                      <div
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleUnmatch(match._id);
+                          setOpenMenuId(null);
                         }}
-                        style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%', padding: '12px 16px', background: 'none', border: 'none', fontFamily: design.font.body, fontSize: '13px', fontWeight: 600, color: design.color.crimson, cursor: 'pointer', textAlign: 'left', transition: 'background-color 0.15s ease' }}
-                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(185, 28, 28, 0.05)'}
-                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        style={{ position: 'fixed', inset: 0, zIndex: 90, cursor: 'default' }}
+                      />
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.96, y: -6 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.96, y: -6 }}
+                        transition={{ duration: 0.15, ease: 'easeOut' }}
+                        style={{ position: 'absolute', top: 48, right: 16, backgroundColor: t.paper, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 8, boxShadow: '0 12px 28px rgba(88,63,30,0.22)', zIndex: 100, overflow: 'hidden', minWidth: 150, padding: 6 }}
                       >
-                        Unmatch
-                      </button>
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
-            </div>
-          );
-        })}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleUnmatch(match._id);
+                          }}
+                          style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 12px', background: 'none', border: 'none', fontFamily: t.fontBody, fontSize: 12, fontWeight: 800, color: t.crimson, cursor: 'pointer', textAlign: 'left', borderRadius: 5, transition: 'background-color 0.15s ease' }}
+                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(139, 26, 26, 0.05)'}
+                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                          Unmatch
+                        </button>
+                      </motion.div>
+                    </>
+                  )}
+                </AnimatePresence>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -9044,8 +9062,8 @@ export default Matches;
 ### ./client/src/pages/Onboarding.jsx
 
 ```
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { motion, useScroll, AnimatePresence } from 'framer-motion';
+import React, { useState, useRef, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useAppConfig } from '../utils/AppConfigContext';
 import { useAuth } from '../utils/AuthContext';
 import { api } from '../utils/api';
@@ -9053,9 +9071,9 @@ import { toast } from '../utils/toast';
 import { triggerHaptic } from '../utils/haptics';
 import { theme as design } from '../utils/theme';
 import { 
-  Check, X, Camera, ChevronDown, ChevronRight, Lock, RotateCcw, 
+  X, Camera, ChevronDown, ChevronRight, Lock, RotateCcw, 
   Fingerprint, MapPin, MessageSquare, Sliders, Layers, PenTool, 
-  CheckCircle2, LogOut, Edit3, Sparkle, UserCheck, Award, Calendar 
+  LogOut, Edit3, Sparkle, UserCheck, Award, Calendar 
 } from 'lucide-react';
 
 const theme = {
@@ -9274,7 +9292,7 @@ const Onboarding = ({ onComplete }) => {
   const [formData, setFormData] = useState({
     name: '', dob: '', gender: '', pronouns: '', branch: '', year: '', hostel: '',
     photos: [], bio: '', intent: [], interestedIn: [], interests: [], compatAnswers: [],
-    prompts: [{ question: '' }, { question: '' }, { question: '' }],
+    prompts: [{ question: '', answer: '' }, { question: '', answer: '' }, { question: '', answer: '' }],
   });
   
   const [uploadingSlot, setUploadingSlot] = useState(null);
@@ -9321,7 +9339,9 @@ const Onboarding = ({ onComplete }) => {
           interestedIn: Array.isArray(saved.interestedIn) ? saved.interestedIn : prev.interestedIn,
           interests: Array.isArray(saved.interests) ? saved.interests : prev.interests,
           compatAnswers: Array.isArray(saved.compatAnswers) ? saved.compatAnswers : prev.compatAnswers,
-          prompts: (Array.isArray(saved.prompts) && saved.prompts.length >= 3) ? saved.prompts : prev.prompts
+          prompts: (Array.isArray(saved.prompts) && saved.prompts.length >= 3)
+            ? saved.prompts.map(p => ({ question: p?.question || '', answer: p?.answer || '', photoUrl: p?.photoUrl || '' }))
+            : prev.prompts
         }));
       }
     }).catch(() => {});
@@ -9422,7 +9442,7 @@ const Onboarding = ({ onComplete }) => {
   const isVitalsComplete = !!formData.name.trim() && age >= 18 && age <= 40;
   const isCoordsComplete = !!formData.gender && !!formData.branch && !!formData.year && formData.interestedIn.length > 0;
   const isPortraitComplete = !!formData.photos[0] && !!formData.bio.trim() && formData.bio.length <= 160;
-  const isWhispersComplete = formData.prompts.filter(p => p?.question?.trim()).length >= 3 && formData.photos.filter((_, i) => i > 0 && formData.photos[i]).length >= 1;
+  const isWhispersComplete = formData.prompts.filter(p => p?.question?.trim() && p?.answer?.trim()).length >= 3;
   const isParamsComplete = formData.intent.length > 0;
   const isAlignComplete = formData.compatAnswers.length >= (config.compatQuestions?.length || 7);
   const isFullyComplete = isVitalsComplete && isCoordsComplete && isPortraitComplete && isWhispersComplete && isParamsComplete && isAlignComplete && uploadingSlot === null;
@@ -9441,7 +9461,11 @@ const Onboarding = ({ onComplete }) => {
     if (!isFullyComplete || uploadingSlot !== null) { triggerHaptic('heavy'); return; }
     triggerHaptic('heavy');
     try {
-      const res = await api.post('/users/setup', { ...formData, age });
+      const finalPrompts = formData.prompts.map((p) => ({
+        question: p?.question || '',
+        answer: p?.answer || '',
+      }));
+      const res = await api.post('/users/setup', { ...formData, prompts: finalPrompts, age });
       await api.delete('/users/onboarding/clear').catch(() => {});
 
       const storedUser = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
@@ -9715,12 +9739,22 @@ const Onboarding = ({ onComplete }) => {
             const prompt = formData.prompts[slot];
             const hasQuestion = prompt?.question;
             return (
-              <div key={slot} style={{ minWidth: '85%', minHeight: hasQuestion ? '380px' : '160px', height: hasQuestion ? 'auto' : '160px', scrollSnapAlign: 'center', borderRadius: '16px', padding: '20px', border: `1px dashed ${theme.ink}`, position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', backgroundColor: theme.paper, transition: 'all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)' }}>
+              <div key={slot} style={{ minWidth: '85%', minHeight: hasQuestion ? '420px' : '160px', height: hasQuestion ? 'auto' : '160px', scrollSnapAlign: 'center', borderRadius: '16px', padding: '20px', border: `1px dashed ${theme.ink}`, position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', backgroundColor: theme.paper, transition: 'all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)' }}>
                 <label style={styles.label}>Whisper #{slot + 1}</label>
                 {hasQuestion ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: 1 }}>
                     <span style={{ fontFamily: TYPEWRITER_FONT, fontSize: '15px', fontWeight: '600', color: theme.ink, lineHeight: 1.4, wordBreak: 'break-word' }}>"{prompt.question}"</span>
                     <button className="tactile-btn" onClick={() => setPromptPickerSlot(slot)} style={{ background: 'none', border: 'none', color: theme.accent, fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', cursor: 'pointer', padding: 0, textAlign: 'left', fontFamily: LABEL_FONT }}>Change Whisper</button>
+                    <textarea
+                      placeholder="Your answer..."
+                      value={prompt.answer || ''}
+                      onChange={(e) => {
+                        const updated = [...formData.prompts];
+                        updated[slot] = { ...updated[slot], answer: e.target.value };
+                        updateField('prompts', updated);
+                      }}
+                      style={{ ...styles.textarea, minHeight: '80px', fontSize: '14px', padding: '12px', flex: 1 }}
+                    />
                     <div style={{ marginTop: 'auto', display: 'flex', justifyContent: 'center', paddingTop: '8px' }}>
                       {renderPhotoSlot(slot + 1, 'Attach Polaroid', true)}
                     </div>
@@ -10069,7 +10103,7 @@ const Onboarding = ({ onComplete }) => {
                   <label style={styles.label}>Draft Your Own</label>
                   <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                     <input style={{...styles.input, fontSize: '15px', padding: '8px 4px'}} placeholder="Type your own whisper..." value={customPromptText} onChange={e => setCustomPromptText(e.target.value)} spellCheck="false" autoComplete="off" />
-                    <button className="tactile-btn" onClick={() => { if (customPromptText.trim()) { const updated = [...formData.prompts]; updated[promptPickerSlot] = { question: customPromptText.trim() }; updateField('prompts', updated); setCustomPromptText(''); setPromptPickerSlot(null); }}} disabled={!customPromptText.trim()} style={{ padding: '10px 18px', backgroundColor: customPromptText.trim() ? theme.crimson : 'transparent', color: customPromptText.trim() ? '#fff' : theme.ink, border: customPromptText.trim() ? 'none' : `1px solid ${theme.ink}`, borderRadius: '8px', fontFamily: LABEL_FONT, fontSize: '12px', fontWeight: '700', textTransform: 'uppercase', cursor: 'pointer' }}>Affix</button>
+                    <button className="tactile-btn" onClick={() => { if (customPromptText.trim()) { const updated = [...formData.prompts]; updated[promptPickerSlot] = { ...updated[promptPickerSlot], question: customPromptText.trim() }; updateField('prompts', updated); setCustomPromptText(''); setPromptPickerSlot(null); }}} disabled={!customPromptText.trim()} style={{ padding: '10px 18px', backgroundColor: customPromptText.trim() ? theme.crimson : 'transparent', color: customPromptText.trim() ? '#fff' : theme.ink, border: customPromptText.trim() ? 'none' : `1px solid ${theme.ink}`, borderRadius: '8px', fontFamily: LABEL_FONT, fontSize: '12px', fontWeight: '700', textTransform: 'uppercase', cursor: 'pointer' }}>Affix</button>
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -10079,7 +10113,8 @@ const Onboarding = ({ onComplete }) => {
                     const alreadyUsed = formData.prompts.some((pr, si) => si !== promptPickerSlot && pr?.question === promptText);
                     
                     return (
-                      <button key={i} className={alreadyUsed ? "" : "tactile-btn"} disabled={alreadyUsed} onClick={() => { const updated = [...formData.prompts]; updated[promptPickerSlot] = { question: promptText }; updateField('prompts', updated); setPromptPickerSlot(null); }} style={{ width: '100%', textAlign: 'left', padding: '14px 18px', borderRadius: '10px', border: `1px solid ${theme.borderDark}`, backgroundColor: 'transparent', cursor: alreadyUsed ? 'not-allowed' : 'pointer', fontFamily: TYPEWRITER_FONT, fontSize: '15px', color: alreadyUsed ? theme.borderDark : theme.ink, opacity: alreadyUsed ? 0.5 : 1 }}>
+                      <button key={i} className={alreadyUsed ? "" : "tactile-btn"} disabled={alreadyUsed} onClick={() => { const updated = [...formData.prompts]; updated[promptPickerSlot] = { ...updated[promptPickerSlot], question: promptText }; updateField('prompts', updated); setPromptPickerSlot(null); }}
+                      style={{ width: '100%', textAlign: 'left', padding: '14px 18px', borderRadius: '10px', border: `1px solid ${theme.borderDark}`, backgroundColor: 'transparent', cursor: alreadyUsed ? 'not-allowed' : 'pointer', fontFamily: TYPEWRITER_FONT, fontSize: '15px', color: alreadyUsed ? theme.borderDark : theme.ink, opacity: alreadyUsed ? 0.5 : 1 }}>
                         "{promptText}"
                       </button>
                     );
@@ -10730,32 +10765,48 @@ const Profile = ({ onSignOut }) => {
                 {/* PROMPT EDITOR */}
                 {drawerConfig.type === 'prompt' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <label style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', color: theme.color.accent, fontFamily: theme.font.body }}>Whisper</label>
                     <textarea 
                       placeholder="Type your whisper here..."
                       defaultValue={userData.prompts[drawerConfig.slot]?.question || ''}
                       onBlur={(e) => {
                         const updated = [...userData.prompts];
-                        updated[drawerConfig.slot] = { question: e.target.value.trim() };
+                        updated[drawerConfig.slot] = { ...updated[drawerConfig.slot], question: e.target.value.trim() };
+                        updateProfile({ prompts: updated });
+                      }}
+                      style={{ ...styles.drawerInput, minHeight: '80px', resize: 'none' }}
+                    />
+                    <label style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', color: theme.color.accent, fontFamily: theme.font.body }}>Answer</label>
+                    <textarea 
+                      placeholder="Type your answer here..."
+                      defaultValue={userData.prompts[drawerConfig.slot]?.answer || ''}
+                      onBlur={(e) => {
+                        const updated = [...userData.prompts];
+                        updated[drawerConfig.slot] = { ...updated[drawerConfig.slot], answer: e.target.value.trim() };
                         updateProfile({ prompts: updated });
                       }}
                       style={{ ...styles.drawerInput, minHeight: '80px', resize: 'none' }}
                     />
                     <div style={{ height: '1px', backgroundColor: theme.color.borderDark, margin: '8px 0' }} />
-                    {config?.prompts?.map((p, i) => (
-                      <button 
-                        key={i}
-                        className="tactile-btn"
-                        onClick={() => {
-                          const updated = [...userData.prompts];
-                          updated[drawerConfig.slot] = { question: p.question };
-                          updateProfile({ prompts: updated });
-                          setDrawerConfig(null);
-                        }}
-                        style={styles.promptListBtn}
-                      >
-                        "{p.question}"
-                      </button>
-                    ))}
+                    {config?.prompts?.map((p, i) => {
+                      const promptText = typeof p === 'string' ? p : p.question;
+                      if (!promptText) return null;
+                      return (
+                        <button 
+                          key={i}
+                          className="tactile-btn"
+                          onClick={() => {
+                            const updated = [...userData.prompts];
+                            updated[drawerConfig.slot] = { ...updated[drawerConfig.slot], question: promptText };
+                            updateProfile({ prompts: updated });
+                            setDrawerConfig(null);
+                          }}
+                          style={styles.promptListBtn}
+                        >
+                          "{promptText}"
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
 
@@ -11204,6 +11255,656 @@ export default function CinematicWebsite({ onEnter }) {
 }
 ```
 
+### ./client/src/pages/Waitlist.jsx
+
+```
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import confetti from 'canvas-confetti';
+import { api, API_BASE } from '../utils/api';
+import { theme as design } from '../utils/theme';
+import { Feather, KeyRound } from 'lucide-react';
+
+// Sunlit Library token set — same family as Auth/ProfileCard
+const t = {
+  desk: '#ece4d4',
+  paper: '#fdfbf7',
+  card: '#fffdf8',
+  surfaceAlt: '#f4f1ea',
+  lineDark: '#d4c5a9',
+  line: '#e0d8c8',
+  ink: '#1a1a1a',
+  inkSoft: '#4a4a4a',
+  inkMuted: '#8c8275',
+  accent: '#8b4513',
+  accentSoft: 'rgba(139, 69, 19, 0.18)',
+  accentFaint: 'rgba(139, 69, 19, 0.05)',
+  crimson: '#8b1a1a',
+  success: '#2e7d32',
+  fontDisplay: design?.font?.heading || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  fontType: "'Special Elite', 'Courier New', monospace",
+  grain: design?.texture?.grain || '',
+};
+
+// Single source of truth for tier thresholds (mirrored in backend)
+const TIER_THRESHOLDS = { charter: 50, founding: 250 };
+
+// FIXED: Match the server's hardcoded constant exactly
+const FALLBACK_LAUNCH_DATE = new Date('2026-10-02T00:00:00Z');
+
+const tierName = (position) => {
+  if (position <= TIER_THRESHOLDS.charter) return 'Charter';
+  if (position <= TIER_THRESHOLDS.founding) return 'Founding';
+  return 'Original';
+};
+
+const useCountdown = (target) => {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const diff = Math.max(0, target.getTime() - now);
+  const days = Math.floor(diff / 86400000);
+  const hours = Math.floor((diff % 86400000) / 3600000);
+  const minutes = Math.floor((diff % 3600000) / 60000);
+  const seconds = Math.floor((diff % 60000) / 1000);
+  return {
+    daysS: String(days).padStart(2, '0'),
+    hoursS: String(hours).padStart(2, '0'),
+    minutesS: String(minutes).padStart(2, '0'),
+    secondsS: String(seconds).padStart(2, '0'),
+  };
+};
+
+const TimeBox = ({ value, label }) => (
+  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+    <div
+      style={{
+        width: 64, height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        borderRadius: 16, border: `1px solid ${t.line}`, backgroundColor: t.card,
+        fontFamily: t.fontType, fontSize: 26, fontWeight: 700, color: t.accent,
+        boxShadow: '0 2px 6px rgba(139,69,19,0.06)',
+      }}
+    >
+      {value}
+    </div>
+    <span style={{ marginTop: 6, fontSize: 10, letterSpacing: '0.2em', textTransform: 'uppercase', color: t.inkMuted, fontFamily: t.fontBody, fontWeight: 500 }}>
+      {label}
+    </span>
+  </div>
+);
+
+const Stat = ({ value, label, accent }) => (
+  <div
+    style={{
+      borderRadius: 14, border: `1px solid ${t.line}`, backgroundColor: t.card, padding: 14,
+      boxShadow: '0 2px 6px rgba(139,69,19,0.05)',
+    }}
+  >
+    <div style={{ fontFamily: t.fontType, fontSize: 24, fontWeight: 700, color: accent || t.ink }}>
+      {value}
+    </div>
+    <div style={{ marginTop: 2, fontSize: 11, color: t.inkMuted, fontFamily: t.fontBody }}>{label}</div>
+  </div>
+);
+
+const Panel = ({ children, style = {} }) => (
+  <div
+    style={{
+      borderRadius: 16, border: `1px solid ${t.line}`, backgroundColor: t.card, padding: 20,
+      boxShadow: '0 2px 8px rgba(139,69,19,0.05)', ...style,
+    }}
+  >
+    {children}
+  </div>
+);
+
+export default function Waitlist() {
+  const [step, setStep] = useState('landing');
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [referralCode, setReferralCode] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [stats, setStats] = useState(null);
+  const [myData, setMyData] = useState(null);
+  const [recentToasts, setRecentToasts] = useState([]);
+
+  const confettiFired = useRef(false);
+  const toastTimersRef = useRef([]);
+
+  // FIXED: stable launch date — countdown never resets on refetch
+  const launchDate = useMemo(
+    () => (stats?.launchDate ? new Date(stats.launchDate) : FALLBACK_LAUNCH_DATE),
+    [stats?.launchDate]
+  );
+  const countdown = useCountdown(launchDate);
+
+  const fetchStats = useCallback(async () => {
+    try {
+      setStats(await api.get('/waitlist/stats'));
+    } catch {
+      // keep last stats
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStats();
+    const id = setInterval(fetchStats, 15000);
+    return () => {
+      clearInterval(id);
+      toastTimersRef.current.forEach(clearTimeout);
+      toastTimersRef.current = [];
+    };
+  }, [fetchStats]);
+
+  // FIXED: Real joins instead of fabricated names — matches ethical framework
+  useEffect(() => {
+    if (step !== 'success' || !stats?.recentJoins?.length) return;
+
+    const formatJoin = (join) => {
+      if (!join.name || join.name === 'An IITian') return 'An IITian just joined';
+      const firstName = join.name.split(' ')[0];
+      const yearMatch = join.year?.match(/Freshies|Sophies|Thirdies|Fourthies/);
+      const yearMap = { Freshies: '28', Sophies: '27', Thirdies: '26', Fourthies: '25' };
+      const yearSuffix = yearMatch ? yearMap[yearMatch[0]] || '27' : '27';
+      const branchShort = join.branch ? join.branch.split(' ')[0] : 'IITB';
+      return `${firstName} from ${branchShort} '${yearSuffix} just joined`;
+    };
+
+    const interval = setInterval(() => {
+      const join = stats.recentJoins[Math.floor(Math.random() * stats.recentJoins.length)];
+      const id = Date.now() + Math.random();
+      setRecentToasts(prev => [{ id, name: formatJoin(join) }, ...prev].slice(0, 3));
+      const timer = setTimeout(() => {
+        setRecentToasts(prev => prev.filter(toast => toast.id !== id));
+      }, 4000);
+      toastTimersRef.current.push(timer);
+    }, 8000 + Math.random() * 5000);
+
+    return () => {
+      clearInterval(interval);
+      toastTimersRef.current.forEach(clearTimeout);
+      toastTimersRef.current = [];
+    };
+  }, [step, stats]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    const normalized = email.trim().toLowerCase().replace(/\s+/g, '');
+    setEmail(normalized);
+    if (!normalized || !/^[\w.+-]+@[\w-]+\.[\w.]+$/.test(normalized)) {
+      setError('Please enter a valid email.');
+      return;
+    }
+    if (!normalized.endsWith('@iitb.ac.in')) {
+      setError('Currently only @iitb.ac.in emails are accepted.');
+      return;
+    }
+    setLoading(true);
+    try {
+      // Raw fetch so the 409 resume body and error status are preserved
+      const res = await fetch(`${API_BASE}/api/waitlist/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          email: normalized,
+          name: name.trim(),
+          referralCode: referralCode.trim().toUpperCase(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 409) {
+        confettiFired.current = true;
+        confetti({ particleCount: 60, spread: 70, origin: { y: 0.6 }, colors: ['#8b4513', '#d4c5a9', '#8b1a1a', '#fdfbf7'] });
+        setMyData(data);
+        setStep('success');
+        return;
+      }
+      if (!res.ok) {
+        setError(data.message || 'Something went wrong. Please try again.');
+        return;
+      }
+
+      if (!confettiFired.current) {
+        confettiFired.current = true;
+        confetti({ particleCount: 160, spread: 100, origin: { y: 0.6 }, colors: ['#8b4513', '#d4c5a9', '#8b1a1a', '#fdfbf7'] });
+      }
+      setMyData(data);
+      setStep('success');
+    } catch {
+      setError('Network error. Please check your connection and try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const pct = stats ? Math.round((stats.total / 250) * 100) : 0;
+
+  return (
+    <div
+      style={{
+        minHeight: '100dvh', backgroundColor: t.desk, color: t.ink,
+        fontFamily: t.fontBody, position: 'relative', overflowX: 'hidden',
+        backgroundImage: `radial-gradient(ellipse at top, rgba(139,69,19,0.06), transparent 60%), ${t.grain}`,
+      }}
+    >
+      <style>{`
+        @keyframes wlToast { from { opacity: 0; transform: translate3d(0, -12px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
+        .wl-toast { animation: wlToast 0.3s ease-out both; }
+        @keyframes wlFadeUp { from { opacity: 0; transform: translate3d(0, 18px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
+        .wl-fade-up { animation: wlFadeUp 0.55s cubic-bezier(0.2, 0.8, 0.3, 1) both; }
+      `}</style>
+
+      {/* Recent join toasts — real data from stats.recentJoins */}
+      <div style={{ position: 'fixed', top: 96, left: 16, zIndex: 50, display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: 'none' }}>
+        {recentToasts.map(toast => (
+          <div
+            key={toast.id}
+            className="wl-toast"
+            style={{
+              borderRadius: 12, border: `1px solid ${t.line}`, backgroundColor: 'rgba(253,251,247,0.94)',
+              padding: '10px 14px', fontSize: 12.5, color: t.inkSoft, boxShadow: '0 6px 18px rgba(26,26,26,0.12)',
+              fontFamily: t.fontBody, maxWidth: 260,
+            }}
+          >
+            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 99, backgroundColor: t.crimson, marginRight: 8, verticalAlign: 'middle' }} />
+            {toast.name}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ maxWidth: 520, margin: '0 auto', padding: '28px 20px 64px', position: 'relative' }}>
+        {/* Masthead */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div
+              style={{
+                width: 32, height: 32, borderRadius: 10, backgroundColor: t.accent, color: t.paper,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: t.fontDisplay, fontWeight: 800, fontSize: 17, boxShadow: '0 3px 8px rgba(139,69,19,0.3)',
+              }}
+            >
+              M
+            </div>
+            <span style={{ fontFamily: t.fontDisplay, fontWeight: 700, fontSize: 17, letterSpacing: '0.01em' }}>
+              Matchalize
+            </span>
+          </div>
+          <span
+            style={{
+              border: `1px solid ${t.lineDark}`, borderRadius: 999, padding: '5px 12px',
+              fontFamily: t.fontType, fontSize: 10.5, letterSpacing: '0.22em', color: t.accent,
+              backgroundColor: 'rgba(253,251,247,0.6)', textTransform: 'uppercase',
+            }}
+          >
+            Founding Cohort
+          </span>
+        </div>
+
+        <AnimatePresence mode="wait">
+          {step === 'landing' && (
+            <motion.div
+              key="landing"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.4 }}
+            >
+              {/* Live badge */}
+              <div
+                className="wl-fade-up"
+                style={{
+                  marginTop: 40, display: 'inline-flex', alignItems: 'center', gap: 8,
+                  border: `1px solid ${t.line}`, borderRadius: 999, padding: '6px 14px',
+                  backgroundColor: 'rgba(253,251,247,0.7)', fontSize: 12, color: t.inkSoft, fontFamily: t.fontBody,
+                }}
+              >
+                <span style={{ width: 7, height: 7, borderRadius: 99, backgroundColor: t.accent, animation: 'wlPulse 1.6s ease-in-out infinite' }} />
+                {stats ? `${stats.last24h} joined in the last 24h` : 'Join the waitlist'}
+              </div>
+              <style>{`@keyframes wlPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }`}</style>
+
+              {/* Hero */}
+              <h1
+                className="wl-fade-up"
+                style={{
+                  marginTop: 22, fontFamily: t.fontDisplay, fontWeight: 800, fontSize: 38, lineHeight: 1.12,
+                  letterSpacing: '-0.01em', color: t.ink,
+                }}
+              >
+                The founders of the{' '}
+                <em style={{ color: t.accent, fontStyle: 'italic' }}>campus dating economy</em>{' '}
+                at IIT Bombay.
+              </h1>
+              <p className="wl-fade-up" style={{ marginTop: 14, maxWidth: 460, fontSize: 14.5, lineHeight: 1.65, color: t.inkSoft }}>
+                The <strong style={{ color: t.ink }}>Charter Cohort</strong> gets first access, an exclusive badge, and a direct line to product decisions.
+              </p>
+
+              {/* Tier tiles */}
+              <div className="wl-fade-up" style={{ marginTop: 24, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                <Stat value="50" label="Charter spots" accent={t.accent} />
+                <Stat value="250" label="Founding seats" accent={t.accent} />
+                <Stat value="0" label="Public" accent={t.inkMuted} />
+              </div>
+
+              {/* Founding progress */}
+              <div className="wl-fade-up" style={{ marginTop: 16 }}>
+                <Panel>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 12.5, color: t.inkSoft, fontFamily: t.fontBody }}>
+                    <span>{stats ? `${stats.total} founding members` : 'Loading…'}</span>
+                    <span style={{ fontFamily: t.fontType, fontWeight: 700, color: t.accent }}>{pct}%</span>
+                  </div>
+                  <div style={{ marginTop: 10, height: 8, borderRadius: 999, backgroundColor: t.desk, overflow: 'hidden' }}>
+                    <div
+                      style={{
+                        height: '100%', borderRadius: 999,
+                        background: `linear-gradient(90deg, ${t.accent}, #a05a1c)`,
+                        width: `${pct}%`, transition: 'width 1s ease',
+                      }}
+                    />
+                  </div>
+                  <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', fontSize: 10.5, color: t.inkMuted }}>
+                    <span>Founding Cohort fills at 250</span>
+                    <span>{stats ? 250 - stats.total : '—'} left</span>
+                  </div>
+                </Panel>
+              </div>
+
+              {/* Perks */}
+              <div className="wl-fade-up" style={{ marginTop: 28 }}>
+                <h2 style={{ fontFamily: t.fontDisplay, fontWeight: 700, fontSize: 17, color: t.ink }}>Your spot could be worth it</h2>
+                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 14, color: t.inkSoft }}>Referral Jump</span>
+                    <span style={{ fontSize: 14, fontFamily: t.fontType, color: t.accent, fontWeight: 700 }}>+2 to +15 spots</span>
+                  </div>
+                  <div style={{ height: 1, backgroundColor: t.line }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 14, color: t.inkSoft }}>Top 50</span>
+                    <span style={{ fontSize: 14, fontFamily: t.fontType, color: t.accent, fontWeight: 700 }}>Charter badge</span>
+                  </div>
+                  <div style={{ height: 1, backgroundColor: t.line }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 14, color: t.inkSoft }}>Every 3-day check-in streak</span>
+                    <span style={{ fontSize: 14, fontFamily: t.fontType, color: t.accent, fontWeight: 700 }}>+2 spots</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Join form */}
+              <form className="wl-fade-up" onSubmit={handleSubmit} style={{ marginTop: 28, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {error && (
+                  <div
+                    style={{
+                      borderRadius: 12, border: `1px solid rgba(139,26,26,0.35)`, backgroundColor: 'rgba(139,26,26,0.06)',
+                      padding: '10px 14px', fontSize: 13, color: t.crimson,
+                    }}
+                  >
+                    {error}
+                  </div>
+                )}
+                <input
+                  type="text"
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  placeholder="Your name (optional)"
+                  maxLength={60}
+                  style={{
+                    borderRadius: 12, border: `1px solid ${t.line}`, backgroundColor: t.paper, padding: '13px 15px',
+                    fontSize: 14, color: t.ink, outline: 'none', fontFamily: t.fontBody,
+                    boxShadow: 'inset 0 1px 2px rgba(26,26,26,0.04)',
+                  }}
+                  onFocus={e => Object.assign(e.target.style, { borderColor: t.accent, boxShadow: `0 0 0 3px ${t.accentSoft}` })}
+                  onBlur={e => Object.assign(e.target.style, { borderColor: t.line, boxShadow: 'inset 0 1px 2px rgba(26,26,26,0.04)' })}
+                />
+                <input
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="you@iitb.ac.in"
+                  autoFocus
+                  style={{
+                    borderRadius: 12, border: `1px solid ${t.line}`, backgroundColor: t.paper, padding: '13px 15px',
+                    fontSize: 14, color: t.ink, outline: 'none', fontFamily: t.fontBody,
+                    boxShadow: 'inset 0 1px 2px rgba(26,26,26,0.04)',
+                  }}
+                  onFocus={e => Object.assign(e.target.style, { borderColor: t.accent, boxShadow: `0 0 0 3px ${t.accentSoft}` })}
+                  onBlur={e => Object.assign(e.target.style, { borderColor: t.line, boxShadow: 'inset 0 1px 2px rgba(26,26,26,0.04)' })}
+                />
+                <div>
+                  <input
+                    type="text"
+                    value={referralCode}
+                    onChange={e => setReferralCode(e.target.value.toUpperCase())}
+                    placeholder="Referral code (optional — +2 to +15 spots)"
+                    maxLength={6}
+                    style={{
+                      borderRadius: 12, border: `1px solid ${t.line}`, backgroundColor: t.paper, padding: '13px 15px',
+                      width: '100%', fontSize: 14, color: t.ink, outline: 'none', fontFamily: t.fontType,
+                      letterSpacing: '0.15em', boxShadow: 'inset 0 1px 2px rgba(26,26,26,0.04)',
+                    }}
+                    onFocus={e => Object.assign(e.target.style, { borderColor: t.accent, boxShadow: `0 0 0 3px ${t.accentSoft}` })}
+                    onBlur={e => Object.assign(e.target.style, { borderColor: t.line, boxShadow: 'inset 0 1px 2px rgba(26,26,26,0.04)' })}
+                  />
+                  <p style={{ marginTop: 6, paddingLeft: 2, fontSize: 11, color: t.inkMuted }}>
+                    Hint: find a friend already in — you'll both move up.
+                  </p>
+                </div>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  style={{
+                    borderRadius: 12, backgroundColor: t.accent, color: t.paper, padding: '14px 15px',
+                    fontSize: 14.5, fontWeight: 600, fontFamily: t.fontBody, border: 'none', cursor: 'pointer',
+                    boxShadow: '0 4px 12px rgba(139,69,19,0.3)', opacity: loading ? 0.6 : 1,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  }}
+                >
+                  {loading ? 'Claiming your spot…' : (<><Feather size={16} /> Claim your founding spot →</>)}
+                </button>
+                <p style={{ textAlign: 'center', fontSize: 11, color: t.inkMuted }}>
+                  {stats ? `${stats.charter} Charter / ${stats.founding} Founding spots claimed` : '…'}
+                </p>
+              </form>
+
+              {/* Countdown */}
+              <div className="wl-fade-up" style={{ marginTop: 40, borderTop: `1px solid ${t.line}`, paddingTop: 22 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, letterSpacing: '0.22em', textTransform: 'uppercase', color: t.inkMuted, fontFamily: t.fontBody }}>
+                  <span>Launch countdown</span>
+                  <span style={{ color: t.accent, fontFamily: t.fontType }}>{stats ? 'Live' : '…'}</span>
+                </div>
+                <div style={{ marginTop: 18, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 18 }}>
+                  <TimeBox value={countdown.daysS} label="Days" />
+                  <span style={{ fontFamily: t.fontType, fontWeight: 700, color: t.accent, fontSize: 20 }}>:</span>
+                  <TimeBox value={countdown.hoursS} label="Hours" />
+                  <span style={{ fontFamily: t.fontType, fontWeight: 700, color: t.accent, fontSize: 20 }}>:</span>
+                  <TimeBox value={countdown.minutesS} label="Mins" />
+                  <span style={{ fontFamily: t.fontType, fontWeight: 700, color: t.accent, fontSize: 20 }}>:</span>
+                  <TimeBox value={countdown.secondsS} label="Secs" />
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {step === 'success' && myData && (
+            <motion.div
+              key="success"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.45 }}
+            >
+              {/* Admission ticket */}
+              <div
+                style={{
+                  marginTop: 36, borderRadius: 22, border: `1px solid ${t.lineDark}`,
+                  background: `linear-gradient(180deg, rgba(139,69,19,0.07), transparent 45%), ${t.paper}`,
+                  padding: 28, boxShadow: '0 10px 30px rgba(139,69,19,0.14)', position: 'relative', overflow: 'hidden',
+                  backgroundImage: `linear-gradient(180deg, rgba(139,69,19,0.07), transparent 45%), ${t.grain}`,
+                }}
+              >
+                {/* Corner stamp */}
+                <div
+                  style={{
+                    position: 'absolute', top: 18, right: -38, transform: 'rotate(45deg)', width: 150,
+                    textAlign: 'center', padding: '5px 0', borderTop: `1.5px solid ${t.crimson}`, borderBottom: `1.5px solid ${t.crimson}`,
+                    fontFamily: t.fontType, fontSize: 11, letterSpacing: '0.28em', color: t.crimson, textTransform: 'uppercase',
+                    backgroundColor: 'rgba(139,26,26,0.05)',
+                  }}
+                >
+                  Booking Verified
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontFamily: t.fontType, fontSize: 11, letterSpacing: '0.24em', textTransform: 'uppercase', color: t.accent }}>
+                    {tierName(myData.position)} Cohort
+                  </span>
+                  <span style={{ fontFamily: t.fontType, fontSize: 13, color: t.inkMuted, border: `1px solid ${t.line}`, borderRadius: 999, padding: '4px 10px' }}>
+                    #{myData.position}
+                  </span>
+                </div>
+
+                <div style={{ marginTop: 22 }}>
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.85 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ type: 'spring', stiffness: 200, damping: 16, delay: 0.15 }}
+                    style={{ fontFamily: t.fontDisplay, fontWeight: 800, fontSize: 40, letterSpacing: '-0.01em', color: myData.referralBonus ? t.accent : t.ink, lineHeight: 1.1 }}
+                  >
+                    {myData.referralBonus ? `+${myData.referralBonus.spotsJumped} SPOTS` : 'SPOT CLAIMED'}
+                  </motion.div>
+                  <p style={{ marginTop: 12, maxWidth: 380, fontSize: 14, lineHeight: 1.65, color: t.inkSoft }}>
+                    {myData.referralBonus ? (
+                      <>
+                        <span style={{ color: t.accent, fontWeight: 600 }}>{myData.referralBonus.referrerName}</span> jumped from
+                        #{myData.position + myData.referralBonus.spotsJumped} to #{myData.referralBonus.newPosition}.
+                        You now hold <strong style={{ color: t.ink }}>#{myData.position}</strong> of 250.
+                      </>
+                    ) : (
+                      <>
+                        You're <strong style={{ color: t.ink }}>#{myData.position}</strong> in line.
+                        Share your code to move up — every friend you bring jumps you both.
+                      </>
+                    )}
+                  </p>
+                </div>
+
+                {/* Progress */}
+                <div style={{ marginTop: 22 }}>
+                  <div style={{ height: 8, borderRadius: 999, backgroundColor: t.desk, overflow: 'hidden' }}>
+                    <div
+                      style={{
+                        height: '100%', borderRadius: 999,
+                        background: `linear-gradient(90deg, ${t.accent}, #a05a1c)`,
+                        width: `${Math.min(100, (myData.position / 250) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                  <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', fontSize: 10.5, color: t.inkMuted }}>
+                    <span>Top {tierName(myData.position).toLowerCase()} of 250</span>
+                    <span>{myData.position} of 250</span>
+                  </div>
+                </div>
+
+                {/* Referral code */}
+                <div
+                  style={{
+                    marginTop: 22, borderRadius: 14, border: `1px solid ${t.lineDark}`, backgroundColor: 'rgba(253,251,247,0.7)',
+                    padding: 16,
+                  }}
+                >
+                  <div style={{ fontSize: 10, letterSpacing: '0.24em', textTransform: 'uppercase', color: t.inkMuted, fontFamily: t.fontBody, fontWeight: 600 }}>
+                    Your referral code
+                  </div>
+                  <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <motion.div
+                      initial={{ opacity: 0, letterSpacing: '0.8em' }}
+                      animate={{ opacity: 1, letterSpacing: '0.18em' }}
+                      transition={{ duration: 0.5, delay: 0.3 }}
+                      style={{ fontFamily: t.fontType, fontSize: 28, fontWeight: 700, color: t.accent }}
+                    >
+                      {myData.referralCode}
+                    </motion.div>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(myData.referralCode);
+                        triggerCopyFlash();
+                      }}
+                      style={{
+                        borderRadius: 10, border: `1px solid ${t.lineDark}`, backgroundColor: t.paper,
+                        padding: '8px 14px', fontSize: 12, fontWeight: 600, color: t.accent, cursor: 'pointer', fontFamily: t.fontBody,
+                      }}
+                    >
+                      <KeyRound size={13} style={{ verticalAlign: '-2px', marginRight: 5 }} />
+                      Copy
+                    </button>
+                  </div>
+                </div>
+
+                {/* Mini stats */}
+                <div style={{ marginTop: 18, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, textAlign: 'center' }}>
+                  <div style={{ borderRadius: 12, border: `1px solid ${t.line}`, backgroundColor: 'rgba(253,251,247,0.6)', padding: '12px 4px' }}>
+                    <div style={{ fontFamily: t.fontType, fontWeight: 700, fontSize: 16, color: t.accent }}>#{myData.position}</div>
+                    <div style={{ marginTop: 3, fontSize: 9.5, letterSpacing: '0.14em', textTransform: 'uppercase', color: t.inkMuted }}>My spot</div>
+                  </div>
+                  <div style={{ borderRadius: 12, border: `1px solid ${t.line}`, backgroundColor: 'rgba(253,251,247,0.6)', padding: '12px 4px' }}>
+                    <div style={{ fontFamily: t.fontType, fontWeight: 700, fontSize: 16, color: t.accent }}>
+                      {myData.referralBonus ? `+${myData.referralBonus.spotsJumped}` : '+0'}
+                    </div>
+                    <div style={{ marginTop: 3, fontSize: 9.5, letterSpacing: '0.14em', textTransform: 'uppercase', color: t.inkMuted }}>Advantage</div>
+                  </div>
+                  <div style={{ borderRadius: 12, border: `1px solid ${t.line}`, backgroundColor: 'rgba(253,251,247,0.6)', padding: '12px 4px' }}>
+                    <div style={{ fontFamily: t.fontType, fontWeight: 700, fontSize: 16, color: t.inkMuted }}>Pending</div>
+                    <div style={{ marginTop: 3, fontSize: 9.5, letterSpacing: '0.14em', textTransform: 'uppercase', color: t.inkMuted }}>Status</div>
+                  </div>
+                </div>
+
+                <p style={{ marginTop: 20, textAlign: 'center', fontSize: 11, color: t.inkMuted }}>
+                  We're onboarding a small Founding Cohort before public launch.
+                </p>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+      <CopyFlashController />
+    </div>
+  );
+}
+
+/* Tiny helper to flash a "Copied" state on the copy button */
+function CopyFlashController() {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    window.__setWaitlistCopied = () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    };
+    return () => { delete window.__setWaitlistCopied; };
+  }, []);
+  return copied ? (
+    <div
+      style={{
+        position: 'fixed', bottom: 32, left: '50%', transform: 'translateX(-50%)', zIndex: 60,
+        borderRadius: 999, backgroundColor: t.ink, color: t.paper, padding: '9px 18px', fontSize: 12.5,
+        fontFamily: t.fontBody, boxShadow: '0 8px 20px rgba(26,26,26,0.25)',
+      }}
+    >
+      Code copied to clipboard
+    </div>
+  ) : null;
+}
+
+function triggerCopyFlash() {
+  if (window.__setWaitlistCopied) window.__setWaitlistCopied();
+}
+```
+
 ### ./client/src/utils/AppConfigContext.jsx
 
 ```
@@ -11450,254 +12151,79 @@ export const api = {
 
 ```
 
-### ./client/src/utils/dummyProfiles.js
+### ./client/src/utils/discoverStore.js
 
 ```
-const profiles = [
-  {
-    id: 1,
-    name: "Swastika",
-    age: 21,
-    branch: "CSE",
-    year: "3rd Year",
-    city: "Delhi",
-    photos: [
-      "https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e?w=600&h=700&fit=crop",
-      "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=600&h=700&fit=crop",
-    ],
-    bio: "A curious soul who believes every conversation is a new chapter. I spend my days in lecture halls and my evenings in bookstores.",
-    prompts: [
-      { question: "My happy place is a quiet café with a good book and rain outside.", photo: "https://images.unsplash.com/photo-1509023464722-18d996393ca8?w=100&h=130&fit=crop" },
-      { question: "One thing I can't live without — my morning playlist.", photo: "https://images.unsplash.com/photo-1514320291840-2e0a9bf2a9ae?w=100&h=130&fit=crop" },
-      { question: "I'm looking for someone who can match my chaos.", photo: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=100&h=130&fit=crop" },
-    ],
-    interests: ["Music", "Art", "Travel", "Cooking", "Photography"],
-    about: [
-      { q: "Best weekend activity?", a: "Hiking in the hills with a camera." },
-      { q: "Ideal first date?", a: "A walk through a good bookstore." },
-      { q: "Something I'm proud of", a: "Learning to play the ukulele." },
-    ],
-  },
-  {
-    id: 2,
-    name: "Arjun",
-    age: 22,
-    branch: "Mechanical",
-    year: "4th Year",
-    city: "Mumbai",
-    photos: [
-      "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=600&h=700&fit=crop",
-      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=600&h=700&fit=crop",
-    ],
-    bio: "Petrolhead by passion, engineer by choice. Love building things that move. When I'm not in the workshop, I'm on my bike exploring the ghats.",
-    prompts: [
-      { question: "My ideal weekend involves a long drive and no destination.", photo: "https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=100&h=130&fit=crop" },
-      { question: "I'm low-key obsessed with old cinema and vinyl records.", photo: "https://images.unsplash.com/photo-1535498730771-e735b998cd64?w=100&h=130&fit=crop" },
-      { question: "A dealbreaker? Bad music taste.", photo: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=100&h=130&fit=crop" },
-    ],
-    interests: ["Biking", "Music", "Cars", "Fitness", "Movies"],
-    about: [
-      { q: "Best weekend activity?", a: "Riding to Lonavala and back." },
-      { q: "Ideal first date?", a: "A live music gig at a small venue." },
-      { q: "Something I'm proud of", a: "Restored a 1972 motorcycle." },
-    ],
-  },
-  {
-    id: 3,
-    name: "Ananya",
-    age: 20,
-    branch: "Design",
-    year: "2nd Year",
-    city: "Bangalore",
-    photos: [
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=600&h=700&fit=crop",
-      "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=600&h=700&fit=crop",
-    ],
-    bio: "Illustrator, dreamer, and full-time coffee enthusiast. I see the world in colours and lines. Looking for someone who doesn't take life too seriously.",
-    prompts: [
-      { question: "My love language is — sending voice notes and sketches.", photo: "https://images.unsplash.com/photo-1513364776144-60967b0f800f?w=100&h=130&fit=crop" },
-      { question: "The best advice I've ever gotten — done is better than perfect.", photo: "https://images.unsplash.com/photo-1455390582262-044cdead277a?w=100&h=130&fit=crop" },
-      { question: "I'll fall for you if you can make me laugh until I cry.", photo: "https://images.unsplash.com/photo-1527224857830-43a7acc85260?w=100&h=130&fit=crop" },
-    ],
-    interests: ["Illustration", "Coffee", "Poetry", "Vinyls", "Gardening"],
-    about: [
-      { q: "Best weekend activity?", a: "Farmers market + brunch + a nap." },
-      { q: "Ideal first date?", a: "An art gallery followed by chai at a rooftop." },
-      { q: "Something I'm proud of", a: "My first solo exhibition last year." },
-    ],
-  },
-  {
-    id: 4,
-    name: "Rohan",
-    age: 23,
-    branch: "Electrical",
-    year: "Final Year",
-    city: "Pune",
-    photos: [
-      "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=600&h=700&fit=crop",
-      "https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=600&h=700&fit=crop",
-    ],
-    bio: "Building robots by day, writing code by night. I believe every problem has an elegant solution. Looking for a spark — literal or metaphorical.",
-    prompts: [
-      { question: "I geek out over — AI, space exploration, and perfectly brewed chai.", photo: "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?w=100&h=130&fit=crop" },
-      { question: "A fun fact about me — I once built a robot that makes tea.", photo: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?w=100&h=130&fit=crop" },
-      { question: "I'm looking for deep conversations about the universe.", photo: "https://images.unsplash.com/photo-1462331940025-496dfbfc7564?w=100&h=130&fit=crop" },
-    ],
-    interests: ["Robotics", "AI", "Chess", "Astronomy", "Tea"],
-    about: [
-      { q: "Best weekend activity?", a: "Hackathons or stargazing." },
-      { q: "Ideal first date?", a: "Planetarium + late-night chai discussion." },
-      { q: "Something I'm proud of", a: "Won a national robotics competition." },
-    ],
-  },
-  {
-    id: 5,
-    name: "Priya",
-    age: 21,
-    branch: "Biotech",
-    year: "3rd Year",
-    city: "Hyderabad",
-    photos: [
-      "https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=600&h=700&fit=crop",
-      "https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e?w=600&h=700&fit=crop",
-    ],
-    bio: "Scientist by training, artist by heart. I study cells by day and paint them by night. Looking for someone who can keep up — in conversation and in curiosity.",
-    prompts: [
-      { question: "My happy place is the lab when an experiment works.", photo: "https://images.unsplash.com/photo-1576086213369-97a306d36557?w=100&h=130&fit=crop" },
-      { question: "I'm weirdly good at remembering random trivia.", photo: "https://images.unsplash.com/photo-1507413245164-6160d8298b31?w=100&h=130&fit=crop" },
-      { question: "I'll fall for you if you can teach me something new.", photo: "https://images.unsplash.com/photo-1503676260728-1c00da094a0b?w=100&h=130&fit=crop" },
-    ],
-    interests: ["Science", "Painting", "Running", "Documentaries", "Biryani"],
-    about: [
-      { q: "Best weekend activity?", a: "A long run followed by biryani." },
-      { q: "Ideal first date?", a: "A science museum + conversation over coffee." },
-      { q: "Something I'm proud of", a: "Published a paper in my second year." },
-    ],
-  },
-  {
-    id: 6,
-    name: "Vikram",
-    age: 22,
-    branch: "Civil",
-    year: "4th Year",
-    city: "Chennai",
-    photos: [
-      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=600&h=700&fit=crop",
-      "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=600&h=700&fit=crop",
-    ],
-    bio: "I build bridges — literally. When I'm not designing structures, I'm reading philosophy or playing the guitar. Looking for someone who dreams big.",
-    prompts: [
-      { question: "The best sound in the world — rain on a tin roof and a guitar.", photo: "https://images.unsplash.com/photo-1510915361894-db8b60106cb1?w=100&h=130&fit=crop" },
-      { question: "One thing from my bucket list — road trip across India in a bus I built.", photo: "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=100&h=130&fit=crop" },
-      { question: "I'm drawn to people who are passionate about something.", photo: "https://images.unsplash.com/photo-1522202176988-66273c2fd55f?w=100&h=130&fit=crop" },
-    ],
-    interests: ["Guitar", "Philosophy", "Travel", "Cricket", "Architecture"],
-    about: [
-      { q: "Best weekend activity?", a: "Beach volleyball + sunset guitar." },
-      { q: "Ideal first date?", a: "A walk across the Marina at night." },
-      { q: "Something I'm proud of", a: "Designed a low-cost bridge for a rural village." },
-    ],
-  },
-  {
-    id: 7,
-    name: "Meera",
-    age: 20,
-    branch: "Commerce",
-    year: "2nd Year",
-    city: "Kolkata",
-    photos: [
-      "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=600&h=700&fit=crop",
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=600&h=700&fit=crop",
-    ],
-    bio: "Lost in books, music, and my own thoughts. I write poetry nobody reads and cook food everyone loves. Looking for a kindred spirit.",
-    prompts: [
-      { question: "My love language is — homemade food and handwritten letters.", photo: "https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=100&h=130&fit=crop" },
-      { question: "I'm searching for someone who still believes in slow love.", photo: "https://images.unsplash.com/photo-1516589178581-6cd7833ae3b2?w=100&h=130&fit=crop" },
-      { question: "A dealbreaker? When someone doesn't like cats.", photo: "https://images.unsplash.com/photo-1513364776144-60967b0f800f?w=100&h=130&fit=crop" },
-    ],
-    interests: ["Poetry", "Cooking", "Reading", "Cats", "Classical Music"],
-    about: [
-      { q: "Best weekend activity?", a: "Addicting to a new novel with some cha." },
-      { q: "Ideal first date?", a: "Boating on the Hooghly + street food." },
-      { q: "Something I'm proud of", a: "I have a collection of over 200 books." },
-    ],
-  },
-  {
-    id: 8,
-    name: "Aditya",
-    age: 21,
-    branch: "CSE",
-    year: "3rd Year",
-    city: "Noida",
-    photos: [
-      "https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=600&h=700&fit=crop",
-      "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=600&h=700&fit=crop",
-    ],
-    bio: "Startup kid. Built my first app at 16. Now I build things that matter. I work hard but I make time for deep conversations and deeper laughs.",
-    prompts: [
-      { question: "I'm looking for someone who can challenge my ideas.", photo: "https://images.unsplash.com/photo-1519389950473-47ba0277781c?w=100&h=130&fit=crop" },
-      { question: "My toxic trait — I turn everything into a competition.", photo: "https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?w=100&h=130&fit=crop" },
-      { question: "The way to my heart is through great food and great banter.", photo: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=100&h=130&fit=crop" },
-    ],
-    interests: ["Startups", "Coding", "Badminton", "Chess", "Food"],
-    about: [
-      { q: "Best weekend activity?", a: "Building MVPs and eating momos." },
-      { q: "Ideal first date?", a: "A food crawl across Delhi." },
-      { q: "Something I'm proud of", a: "My app has 50k+ downloads." },
-    ],
-  },
-  {
-    id: 9,
-    name: "Ishita",
-    age: 22,
-    branch: "Psychology",
-    year: "4th Year",
-    city: "Jaipur",
-    photos: [
-      "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=600&h=700&fit=crop",
-      "https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=600&h=700&fit=crop",
-    ],
-    bio: "I study why people do what they do. Empathetic listener, deep thinker, and a sucker for sunsets. Looking for a genuine connection — no games.",
-    prompts: [
-      { question: "I notice the little things — and that's how I fall for people.", photo: "https://images.unsplash.com/photo-1517486808906-6ca8b3f04846?w=100&h=130&fit=crop" },
-      { question: "My comfort show is FRIENDS. I've watched it 12 times.", photo: "https://images.unsplash.com/photo-1522869635100-9f4c5e86aa37?w=100&h=130&fit=crop" },
-      { question: "I want someone who isn't afraid to be vulnerable.", photo: "https://images.unsplash.com/photo-1516589178581-6cd7833ae3b2?w=100&h=130&fit=crop" },
-    ],
-    interests: ["Psychology", "Sunsets", "Journaling", "Yoga", "True Crime"],
-    about: [
-      { q: "Best weekend activity?", a: "Sunset chai at Nahargarh Fort." },
-      { q: "Ideal first date?", a: "A quiet corner at a bookstore café." },
-      { q: "Something I'm proud of", a: "I volunteer as a mental health peer counsellor." },
-    ],
-  },
-  {
-    id: 10,
-    name: "Kabir",
-    age: 23,
-    branch: "Aerospace",
-    year: "Final Year",
-    city: "Bengaluru",
-    photos: [
-      "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=600&h=700&fit=crop",
-      "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=600&h=700&fit=crop",
-    ],
-    bio: "I look at the stars and wonder what's out there. Aerospace engineer by training, astronomer at heart. I play tabla and I'm not half bad at it.",
-    prompts: [
-      { question: "My happy place is anywhere with a clear night sky.", photo: "https://images.unsplash.com/photo-1462331940025-496dfbfc7564?w=100&h=130&fit=crop" },
-      { question: "I can play the tabla — yes, really.", photo: "https://images.unsplash.com/photo-1519892300165-cb5542fb47c7?w=100&h=130&fit=crop" },
-      { question: "I'm looking for someone who dreams beyond this planet.", photo: "https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?w=100&h=130&fit=crop" },
-    ],
-    interests: ["Astronomy", "Tabla", "Running", "Sci-Fi", "Photography"],
-    about: [
-      { q: "Best weekend activity?", a: "Astrophotography at the observatory." },
-      { q: "Ideal first date?", a: "Stargazing + a playlist of interstellar soundtrack." },
-      { q: "Something I'm proud of", a: "I have a minor planet named after me." },
-    ],
-  },
-];
+const STORAGE_PREFIX = 'matchalize_discover_';
+const MAX_BYTES = 4.5 * 1024 * 1024;
 
-export default profiles;
+const store = {
+  profiles: [],
+  currentIndex: 0,
+  hasMore: true,
+};
 
+let storageKey = null;
+
+const persist = () => {
+  if (!storageKey) return;
+  try {
+    const serialized = JSON.stringify({
+      profiles: store.profiles,
+      currentIndex: store.currentIndex,
+      hasMore: store.hasMore,
+    });
+    if (serialized.length > MAX_BYTES) return;
+    localStorage.setItem(storageKey, serialized);
+  } catch {
+    // Storage full or unavailable → keep the in-memory copy only.
+  }
+};
+
+/**
+ * Bind the persisted deck to a user and hydrate from localStorage.
+ * Returns true if a usable deck was restored.
+ */
+const initDiscoverStore = (userId) => {
+  if (!userId) return false;
+  const key = `${STORAGE_PREFIX}${userId}`;
+  if (storageKey === key) return store.profiles.length > 0;
+
+  storageKey = key;
+  store.profiles = [];
+  store.currentIndex = 0;
+  store.hasMore = true;
+
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    if (parsed && Array.isArray(parsed.profiles)) {
+      store.profiles = parsed.profiles;
+      store.currentIndex = Math.max(0, Math.min(parsed.currentIndex || 0, parsed.profiles.length));
+      store.hasMore = parsed.hasMore !== false;
+      return store.profiles.length > 0;
+    }
+  } catch {
+    // Corrupted cache → treat as empty.
+  }
+  return false;
+};
+
+const discoverStore = store;
+
+const saveDiscoverStore = () => persist();
+
+const resetDiscoverStore = () => {
+  store.profiles = [];
+  store.currentIndex = 0;
+  store.hasMore = true;
+  if (storageKey) {
+    try { localStorage.removeItem(storageKey); } catch { /* ignore */ }
+  }
+};
+
+export { discoverStore, initDiscoverStore, saveDiscoverStore, resetDiscoverStore };
 ```
 
 ### ./client/src/utils/haptics.js
@@ -11863,28 +12389,72 @@ export const theme = {
     paper: '#fdfbf7',
     surface: '#ffffff',
     surfaceAlt: '#f4f1ea',
+    surfaceDim: '#e0d8c8',
+
     ink: '#1a1a1a',
+    inkSoft: '#4a4a4a',
     inkMuted: '#8c8275',
+
     border: '#e0d8c8',
     borderDark: '#d4c5a9',
-    crimson: '#8b1a1a',
+
     accent: '#8b4513',
+    accentSoft: 'rgba(139, 69, 19, 0.18)',
+    accentFaint: 'rgba(139, 69, 19, 0.05)',
+
+    crimson: '#8b1a1a',
+    crimsonSoft: 'rgba(139, 26, 26, 0.08)',
+
+    success: '#2e7d32',
+    warning: '#b8860b',
+    telegramTint: 'rgba(212, 175, 55, 0.08)',
+
+    shadowWarm: 'rgba(139, 69, 19, 0.12)',
+    shadowDark: 'rgba(26, 26, 26, 0.20)',
+
+    neuDark: '#dedad2',
+    neuLight: '#ffffff',
   },
+
   font: {
-    heading: "'Playfair Display', serif",
-    body: "'Inter', sans-serif",
+    display: "'Playfair Display', Georgia, serif",
+    heading: "'Playfair Display', Georgia, serif",
+    body: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+    typewriter: "'Special Elite', 'Courier New', monospace",
   },
+
   texture: {
     grain:
       "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E",
   },
+
   radius: {
     sm: '8px',
     md: '12px',
     lg: '24px',
+    pill: '999px',
+  },
+
+  placeholder: {
+    avatar:
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Crect width='120' height='120' fill='%23ede7db'/%3E%3Cg fill='none' stroke='%23c9bda6' stroke-width='3'%3E%3Ccircle cx='60' cy='48' r='17'/%3E%3Cpath d='M28 104c0-18 14-32 32-32s32 14 32 32'/%3E%3C/g%3E%3C/svg%3E",
+    image:
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='500' viewBox='0 0 400 500'%3E%3Crect width='400' height='500' fill='%23ede7db'/%3E%3Cg fill='none' stroke='%23c9bda6' stroke-width='3'%3E%3Ccircle cx='200' cy='195' r='50'/%3E%3Cpath d='M112 385c0-49 39-88 88-88s88 39 88 88'/%3E%3C/g%3E%3C/svg%3E",
+    hero:
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='870' viewBox='0 0 600 870'%3E%3Crect width='600' height='870' fill='%23e8e4d9'/%3E%3Cg fill='none' stroke='%23c9bda6' stroke-width='4'%3E%3Ccircle cx='300' cy='340' r='82'/%3E%3Cpath d='M158 660c0-78 63-142 142-142s142 64 142 142'/%3E%3C/g%3E%3Ctext x='300' y='740' text-anchor='middle' font-family='Georgia,serif' font-size='26' fill='%23a89b85'%3ENo Portrait%3C/text%3E%3C/svg%3E",
+  },
+
+  z: {
+    header: 500,
+    nav: 10,
+    drawer: 1000,
+    modal: 1100,
+    toast: 9999,
+    overlay: 10000,
   },
 };
 
+export default theme;
 ```
 
 ### ./client/src/utils/toast.js
@@ -11906,113 +12476,6 @@ export const toast = {
   info: (message, action) => {
     if (toastCallback) toastCallback({ type: 'info', message, action });
   }
-};
-
-```
-
-### ./client/src/utils/useChat.js
-
-```
-import { useState, useEffect, useRef, useCallback } from 'react';
-import socket from './socket';
-import { api } from './api';
-
-const getMe = () => {
-  try {
-    return JSON.parse(localStorage.getItem('matchalize_user'))?._id || null;
-  } catch {
-    return null;
-  }
-};
-
-export const useChat = (matchId) => {
-  const [messages, setMessages] = useState([]);
-  const [pendingMessages, setPendingMessages] = useState([]);
-  const [isConnected, setIsConnected] = useState(socket.connected);
-
-  // Use refs for mutable state to prevent callback reference recreation
-  const pendingRef = useRef(pendingMessages);
-  useEffect(() => {
-    pendingRef.current = pendingMessages;
-  }, [pendingMessages]);
-
-  const isConnectedRef = useRef(isConnected);
-  useEffect(() => {
-    isConnectedRef.current = isConnected;
-  }, [isConnected]);
-
-  // STABLE CALLBACK: Zero dependencies mean this function never re-creates
-  const sendMessage = useCallback(async (text) => {
-    const me = getMe();
-    const tempId = Date.now().toString();
-    const tempMsg = { _id: tempId, text, deliveryStatus: 'pending', senderId: me };
-
-    if (!isConnectedRef.current) {
-      setPendingMessages(prev => [...prev, tempMsg]);
-      return;
-    }
-
-    setMessages(prev => [...prev, tempMsg]);
-    try {
-      const sent = await api.post(`/messages/${matchId}`, { text, clientMsgId: crypto.randomUUID() });
-      setMessages(prev => prev.map(m => (m._id === tempId ? { ...sent, deliveryStatus: sent.deliveryStatus || 'sent' } : m)));
-    } catch {
-      setMessages(prev => prev.map(m => (m._id === tempId ? { ...m, deliveryStatus: 'failed' } : m)));
-    }
-  }, [matchId]);
-
-  // Fetch initial message history
-  useEffect(() => {
-    let isMounted = true;
-    const fetchHistory = async () => {
-      try {
-        const data = await api.get(`/messages/${matchId}`);
-        if (isMounted) setMessages(data.messages || []);
-      } catch (err) {
-        console.error('History fetch failed', err);
-      }
-    };
-    fetchHistory();
-    return () => { isMounted = false; };
-  }, [matchId]);
-
-  // Socket connection & event listeners (Runs ONLY when matchId changes)
-  useEffect(() => {
-    const handleConnect = () => {
-      setIsConnected(true);
-      socket.emit('join-match', matchId);
-      // Flush pending queue automatically
-      pendingRef.current.forEach(msg => sendMessage(msg.text));
-      setPendingMessages([]);
-    };
-
-    const handleDisconnect = () => {
-      setIsConnected(false);
-    };
-
-    const handleNewMessage = (msg) => {
-      setMessages(prev => (prev.some(m => m._id === msg._id) ? prev : [...prev, msg]));
-    };
-
-    // If global socket is already active, join immediately
-    if (socket.connected) {
-      handleConnect();
-    } else {
-      socket.connect();
-    }
-
-    socket.on('connect', handleConnect);
-    socket.on('disconnect', handleDisconnect);
-    socket.on('new-message', handleNewMessage);
-
-    return () => {
-      socket.off('connect', handleConnect);
-      socket.off('disconnect', handleDisconnect);
-      socket.off('new-message', handleNewMessage);
-    };
-  }, [matchId, sendMessage]);
-
-  return { messages, sendMessage, isConnected };
 };
 
 ```
@@ -12614,7 +13077,6 @@ import mongoSanitize from 'express-mongo-sanitize';
 import dotenv from 'dotenv';
 import * as Sentry from '@sentry/node';
 import { nodeProfilingIntegration } from '@sentry/profiling-node';
-import { AppError } from './utils/AppError.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -12633,6 +13095,7 @@ import adminRoutes from './routes/admin.js';
 import uploadRoutes from './routes/upload.js';
 import notificationRoutes from './routes/notifications.js';
 import reportRoutes from './routes/report.js';
+import waitlistRoutes from './routes/waitlist.js';
 
 dotenv.config();
 
@@ -12765,7 +13228,7 @@ app.use(mongoSanitize());
 // Rate Limiting
 const limiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 500,
+  max: Number(process.env.API_GENERAL_MAX) || 500,
   message: { message: 'Too many requests from this IP, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -12783,6 +13246,7 @@ app.use('/api/config', configRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/report', reportRoutes);
+app.use('/api/waitlist', waitlistRoutes);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Serve production client build
@@ -13057,7 +13521,7 @@ export const discoverLimiter = rateLimit({
 // This allows a small group on shared Wi-Fi to make typos, but stops automated scripts dead.
 export const verifyOtpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 15,
+  max: Number(process.env.OTP_VERIFY_MAX) || 15,
   keyGenerator: (req) => req.ip,
   message: { 
     message: 'Too many verification attempts. Please wait 15 minutes before trying again.' 
@@ -13069,7 +13533,7 @@ export const verifyOtpLimiter = rateLimit({
 // Limit OTP requests by IP to prevent spamming across multiple emails
 export const otpIpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 10,
+  max: Number(process.env.OTP_IP_LIMIT_MAX) || 10,
   keyGenerator: (req) => req.ip,
   message: { message: 'Too many verification requests from this network. Please try again later.' },
   standardHeaders: true,
@@ -13677,6 +14141,96 @@ export default User;
 
 ```
 
+### ./server/models/Waitlist.js
+
+```
+import mongoose from 'mongoose';
+import crypto from 'crypto';
+
+const waitlistSchema = new mongoose.Schema(
+  {
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
+      lowercase: true,
+    },
+    name: { type: String, trim: true, default: '' },
+    college: { type: String, default: 'IIT Bombay' },
+    collegeCode: { type: String, default: 'iitb' },
+    branch: { type: String, default: '' },
+    year: { type: String, default: '' },
+
+    // Unique 6-char referral code they share
+    referralCode: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+    },
+    // Who referred them (ObjectId or null)
+    referredBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+      ref: 'Waitlist',
+    },
+    // Current queue position (recomputed on referral events)
+    position: { type: Number, required: true, index: true },
+    // How many people they've referred
+    referralCount: { type: Number, default: 0 },
+    // Total spots jumped via referrals
+    spotsJumped: { type: Number, default: 0 },
+
+    status: {
+      type: String,
+      enum: ['pending', 'invited', 'registered'],
+      default: 'pending',
+    },
+    // Tier based on position
+    tier: {
+      type: String,
+      enum: ['charter', 'founding', 'original'],
+      default: 'original',
+    },
+
+    // Daily check-in streak (engagement loop)
+    lastCheckIn: { type: Date, default: null },
+    checkInStreak: { type: Number, default: 0 },
+
+    joinedAt: { type: Date, default: Date.now },
+    invitedAt: { type: Date, default: null },
+    registeredAt: { type: Date, default: null },
+  },
+  { timestamps: true }
+);
+
+// Single source of truth for tier thresholds (mirrored in frontend)
+waitlistSchema.statics.TIER_THRESHOLDS = { charter: 50, founding: 250 };
+
+// Generate a unique 6-char alphanumeric referral code (no I/O/0/1 to avoid confusion)
+waitlistSchema.statics.generateReferralCode = async function () {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code;
+  let exists = true;
+  while (exists) {
+    code = Array.from({ length: 6 }, () => chars[crypto.randomInt(chars.length)]).join('');
+    exists = await this.findOne({ referralCode: code });
+  }
+  return code;
+};
+
+waitlistSchema.methods.computeTier = function () {
+  const T = this.constructor.TIER_THRESHOLDS;
+  if (this.position <= T.charter) return 'charter';
+  if (this.position <= T.founding) return 'founding';
+  return 'original';
+};
+
+const Waitlist = mongoose.model('Waitlist', waitlistSchema);
+export default Waitlist;
+```
+
 ### ./server/routes/admin.js
 
 ```
@@ -13811,6 +14365,29 @@ router.get('/reports', async (req, res) => {
   }
 });
 
+router.put('/reports/bulk', async (req, res) => {
+  try {
+    const { ids, status } = req.body;
+    if (!Array.isArray(ids) || !ids.length || !status) {
+      return res.status(400).json({ message: 'ids (array) and status required' });
+    }
+    if (ids.some(id => !mongoose.Types.ObjectId.isValid(id))) {
+      return res.status(400).json({ message: 'One or more invalid report IDs' });
+    }
+    if (!VALID_REPORT_STATUSES.includes(status)) {
+      return res.status(400).json({ message: `Invalid status. Must be one of: ${VALID_REPORT_STATUSES.join(', ')}` });
+    }
+    await Report.updateMany(
+      { _id: { $in: ids } },
+      { $set: { status } }
+    );
+    res.json({ message: `${ids.length} reports updated to ${status}` });
+  } catch (err) {
+    console.error('Admin bulk update error:', err);
+    res.status(500).json({ message: 'Failed to bulk update' });
+  }
+});
+
 router.put('/reports/:id', async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
@@ -13832,29 +14409,6 @@ router.put('/reports/:id', async (req, res) => {
   } catch (err) {
     console.error('Admin report update error:', err);
     res.status(500).json({ message: 'Failed to update report' });
-  }
-});
-
-router.put('/reports/bulk', async (req, res) => {
-  try {
-    const { ids, status } = req.body;
-    if (!Array.isArray(ids) || !ids.length || !status) {
-      return res.status(400).json({ message: 'ids (array) and status required' });
-    }
-    if (ids.some(id => !mongoose.Types.ObjectId.isValid(id))) {
-      return res.status(400).json({ message: 'One or more invalid report IDs' });
-    }
-    if (!VALID_REPORT_STATUSES.includes(status)) {
-      return res.status(400).json({ message: `Invalid status. Must be one of: ${VALID_REPORT_STATUSES.join(', ')}` });
-    }
-    await Report.updateMany(
-      { _id: { $in: ids } },
-      { $set: { status } }
-    );
-    res.json({ message: `${ids.length} reports updated to ${status}` });
-  } catch (err) {
-    console.error('Admin bulk update error:', err);
-    res.status(500).json({ message: 'Failed to bulk update' });
   }
 });
 
@@ -14807,7 +15361,6 @@ import Interaction from '../models/Interaction.js';
 import { sendPushNotification } from '../utils/push.js';
 import { addToQueue } from '../utils/queue.js';
 import { protect } from '../middleware/auth.js';
-import { areBlocked } from '../middleware/blockFilter.js';
 
 const router = express.Router();
 
@@ -14851,7 +15404,7 @@ router.get('/', protect, async (req, res) => {
             { $match: { $expr: { $eq: ['$matchId', '$$matchId'] } } },
             { $sort: { createdAt: -1 } },
             { $limit: 1 },
-            { $project: { text: 1, senderId: 1, createdAt: 1, readAt: 1 } }
+            { $project: { text: 1, senderId: 1, createdAt: 1, readAt: 1, type: 1, mediaUrl: 1 } }
           ],
           as: 'lastMessageArr'
         }
@@ -14888,6 +15441,18 @@ router.get('/', protect, async (req, res) => {
           lastMessage: '$lastMessageArr',
           originInteraction: 1,
           updatedAt: 1,
+          yourTurn: {
+             $cond: {
+               if: { $ifNull: ['$lastMessageArr.senderId', false] },
+               then: {
+                 $and: [
+                   { $ne: ['$lastMessageArr.senderId', userId] },
+                   { $eq: [{ $ifNull: ['$lastMessageArr.readAt', null] }, null] }
+                 ]
+               },
+               else: false
+             }
+           },
           sortDate: { $ifNull: ['$lastMessageArr.createdAt', '$updatedAt'] }
         }
       },
@@ -15627,27 +16192,28 @@ router.post('/:userId', protect, async (req, res) => {
       details: details || '',
     });
 
-    // Escalation: 3-4 reports = shadowban, 5+ = full suspension
-    const reportCount = await Report.countDocuments({ reported: reportedId });
-    if (reportCount >= 3 && reportCount < 5) {
-      reported.isGhost = true; // Hidden from Discover, existing matches remain active
-      reported.shadowbannedAt = reported.shadowbannedAt || new Date();
-      reported.contentFrozen = true;
-      await reported.save();
-    } else if (reportCount >= 5) {
+    // Escalation: count only non-dismissed reports so admin dismissals work
+    const activeReportCount = await Report.countDocuments({
+      reported: reportedId,
+      status: { $ne: 'dismissed' },
+    });
+
+    // Escalate only. Never auto-clear a restriction an admin applied.
+    if (activeReportCount >= 5) {
       reported.suspended = true;
-      reported.suspendedAt = new Date();
-      reported.suspendedReason = 'Multiple community reports';
+      reported.suspendedAt = reported.suspendedAt || new Date();
+      reported.suspendedReason = reported.suspendedReason || 'Multiple community reports';
       reported.isGhost = true;
       reported.shadowbannedAt = reported.shadowbannedAt || new Date();
       reported.contentFrozen = false;
       await reported.save();
-    } else {
-      reported.isGhost = false;
-      reported.shadowbannedAt = null;
-      reported.contentFrozen = false;
+    } else if (activeReportCount >= 3) {
+      reported.isGhost = true;
+      reported.shadowbannedAt = reported.shadowbannedAt || new Date();
+      reported.contentFrozen = true;
       await reported.save();
     }
+    // activeReportCount < 3 → leave the account as an admin last set it.
 
     res.status(201).json({ message: 'Report submitted', reportId: report._id });
   } catch (error) {
@@ -16236,6 +16802,285 @@ export default router;
 
 ```
 
+### ./server/routes/waitlist.js
+
+```
+import express from 'express';
+import { body } from '../middleware/validate.js';
+import { validate } from '../middleware/validate.js';
+import Waitlist from '../models/Waitlist.js';
+import { rateLimit } from 'express-rate-limit';
+
+const router = express.Router();
+
+// FIXED: Hardcoded launch date — no more drift
+const LAUNCH_DATE = new Date('2026-10-02T00:00:00Z');
+
+// Rate limit: 5 joins per 15 min per IP
+const joinLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  keyGenerator: (req) => req.ip,
+  message: { message: 'Too many join attempts. Please wait a bit.' },
+});
+
+// Extract college details from email (matches pattern in auth.js)
+const extractCollege = (email) => {
+  const domain = email.split('@')[1]?.toLowerCase() || '';
+  const code = domain.split('.')[0];
+  const map = {
+    iitb: 'IIT Bombay', iitd: 'IIT Delhi', iitk: 'IIT Kanpur',
+    iitkgp: 'IIT Kharagpur', iitm: 'IIT Madras', iitr: 'IIT Roorkee',
+    iitg: 'IIT Guwahati', iith: 'IIT Hyderabad', iitbhu: 'IIT BHU',
+  };
+  return { collegeCode: code, college: map[code] || domain };
+};
+
+// Variable-ratio reward engine. The slot machine.
+// Weighted toward small bonuses with rare jackpots.
+const computeReferralBonus = (referrerCurrentCount) => {
+  const roll = Math.random();
+  let bonus;
+  if (roll < 0.50) bonus = 2 + Math.floor(Math.random() * 2);       // 50%: 2-3 spots
+  else if (roll < 0.80) bonus = 4 + Math.floor(Math.random() * 3);  // 30%: 4-6 spots
+  else if (roll < 0.95) bonus = 7 + Math.floor(Math.random() * 4);  // 15%: 7-10 spots
+  else bonus = 11 + Math.floor(Math.random() * 5);                  // 5%: 11-15 spots (JACKPOT)
+
+  // Early evangelist bonus: first 10 referrals get +5 extra
+  if (referrerCurrentCount < 10) bonus += 5;
+  return bonus;
+};
+
+// Proper block-shift: moves everyone in [newPosition, oldPosition) up by 1,
+// then recomputes tiers for the affected block + the referrer.
+const shiftPositionsUp = async (referrerId, oldPosition, newPosition) => {
+  if (newPosition >= oldPosition) return; // No shift needed
+
+  // 1. Shift everyone in the gap up by 1
+  await Waitlist.updateMany(
+    {
+      _id: { $ne: referrerId },
+      position: { $gte: newPosition, $lt: oldPosition },
+    },
+    { $inc: { position: 1 } }
+  );
+
+  // 2. Recompute tiers for the shifted block + the referrer
+  const T = Waitlist.TIER_THRESHOLDS;
+  const affected = await Waitlist.find({
+    position: { $gte: newPosition, $lte: oldPosition },
+  }).lean();
+
+  const ops = affected.map((entry) => {
+    const tier = entry.position <= T.charter ? 'charter'
+               : entry.position <= T.founding ? 'founding'
+               : 'original';
+    return {
+      updateOne: {
+        filter: { _id: entry._id },
+        update: { $set: { tier } },
+      },
+    };
+  });
+  if (ops.length > 0) await Waitlist.bulkWrite(ops);
+};
+
+// ─── JOIN THE WAITLIST ───
+router.post(
+  '/join',
+  joinLimiter,
+  [
+    body('email')
+      .isEmail().withMessage('Valid email required')
+      .custom((value) => {
+        const normalized = value.trim().toLowerCase();
+        if (!normalized.endsWith('@iitb.ac.in')) {
+          throw new Error('Currently only @iitb.ac.in emails are accepted');
+        }
+        return true;
+      }),
+    body('name').optional().isString().trim().isLength({ max: 60 }),
+    body('referralCode').optional().isString().trim().isLength({ min: 6, max: 6 }),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const email = req.body.email.trim().toLowerCase();
+      const { name, referralCode } = req.body;
+
+      // Duplicate check
+      const existing = await Waitlist.findOne({ email });
+      if (existing) {
+        return res.status(409).json({
+          message: 'You are already in the cohort.',
+          position: existing.position,
+          referralCode: existing.referralCode,
+        });
+      }
+
+      // Process referral if provided
+      let referrer = null;
+      let bonusSpots = 0;
+      let oldPosition = null;
+
+      if (referralCode) {
+        referrer = await Waitlist.findOne({ referralCode: referralCode.toUpperCase() });
+        if (referrer) {
+          // Self-referral guard
+          if (referrer.email === email) {
+            return res.status(400).json({ message: 'Nice try. You cannot refer yourself.' });
+          }
+
+          // THE SLOT MACHINE MOMENT
+          bonusSpots = computeReferralBonus(referrer.referralCount);
+          oldPosition = referrer.position;
+          const newPosition = Math.max(1, referrer.position - bonusSpots);
+
+          referrer.position = newPosition;
+          referrer.referralCount += 1;
+          referrer.spotsJumped += bonusSpots;
+          referrer.tier = referrer.computeTier();
+          await referrer.save();
+
+          // Proper block-shift
+          await shiftPositionsUp(referrer._id, oldPosition, newPosition);
+        }
+      }
+
+      // Assign position (end of queue)
+      const totalBefore = await Waitlist.countDocuments();
+      const position = totalBefore + 1;
+      const newReferralCode = await Waitlist.generateReferralCode();
+      const { college, collegeCode } = extractCollege(email);
+
+      const T = Waitlist.TIER_THRESHOLDS;
+      const entry = await Waitlist.create({
+        email,
+        name: name || '',
+        college, collegeCode,
+        referralCode: newReferralCode,
+        referredBy: referrer?._id || null,
+        position,
+        tier: position <= T.charter ? 'charter' : position <= T.founding ? 'founding' : 'original',
+      });
+
+      res.status(201).json({
+        success: true,
+        position: entry.position,
+        referralCode: entry.referralCode,
+        tier: entry.tier,
+        totalWaiting: position,
+        referralBonus: referrer ? {
+          referrerName: referrer.name || 'A fellow IITian',
+          spotsJumped: bonusSpots,
+          newPosition: referrer.position,
+        } : null,
+      });
+    } catch (error) {
+      console.error('Waitlist join error:', error);
+      res.status(500).json({ message: 'The archives encountered an error. Please try again.' });
+    }
+  }
+);
+
+// ─── CHECK STATUS (by referral code — no auth needed) ───
+router.get('/status/:code', async (req, res) => {
+  try {
+    const entry = await Waitlist.findOne({ referralCode: req.params.code.toUpperCase() }).lean();
+    if (!entry) return res.status(404).json({ message: 'Code not found' });
+    const total = await Waitlist.countDocuments();
+    res.json({
+      position: entry.position,
+      tier: entry.tier,
+      totalWaiting: total,
+      ahead: entry.position - 1,
+      referralCount: entry.referralCount,
+      spotsJumped: entry.spotsJumped,
+      spotsToTop100: entry.position > 100 ? entry.position - 100 : 0,
+      spotsToTop50: entry.position > 50 ? entry.position - 50 : 0,
+      status: entry.status,
+      joinedAt: entry.joinedAt,
+      checkInStreak: entry.checkInStreak,
+      name: entry.name,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch status' });
+  }
+});
+
+// ─── PUBLIC STATS (for social proof counter) ───
+router.get('/stats', async (req, res) => {
+  try {
+    const [total, charter, founding, last24h, recentJoins] = await Promise.all([
+      Waitlist.countDocuments(),
+      Waitlist.countDocuments({ position: { $lte: 50 } }),
+      Waitlist.countDocuments({ position: { $gt: 50, $lte: 250 } }),
+      Waitlist.countDocuments({ joinedAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } }),
+      Waitlist.find().sort({ joinedAt: -1 }).limit(12).select('name branch year joinedAt').lean(),
+    ]);
+    res.json({
+      total, charter, founding, last24h,
+      // Real joins for transparent social proof
+      recentJoins: recentJoins.map(j => ({
+        name: j.name || 'An IITian',
+        branch: j.branch || '',
+        year: j.year || '',
+        joinedAt: j.joinedAt,
+      })),
+      // Fixed launch date (move to Setting model later)
+      launchDate: LAUNCH_DATE.toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch stats' });
+  }
+});
+
+// ─── DAILY CHECK-IN (engagement loop) ───
+router.post('/checkin/:code', async (req, res) => {
+  try {
+    const entry = await Waitlist.findOne({ referralCode: req.params.code.toUpperCase() });
+    if (!entry) return res.status(404).json({ message: 'Code not found' });
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    // Already checked in today
+    if (entry.lastCheckIn && new Date(entry.lastCheckIn).setHours(0,0,0,0) >= today.getTime()) {
+      return res.json({ streak: entry.checkInStreak, alreadyCheckedIn: true });
+    }
+
+    // Maintain or reset streak
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const lastCheckInDay = entry.lastCheckIn ? new Date(entry.lastCheckIn).setHours(0,0,0,0) : null;
+    entry.checkInStreak = (lastCheckInDay === yesterday.getTime()) ? entry.checkInStreak + 1 : 1;
+    entry.lastCheckIn = now;
+
+    // Reward: every 3-day streak = jump 2 spots
+    let reward = null;
+    if (entry.checkInStreak > 0 && entry.checkInStreak % 3 === 0) {
+      const jump = 2;
+      const oldPosition = entry.position;
+      const newPosition = Math.max(1, entry.position - jump);
+      entry.position = newPosition;
+      entry.spotsJumped += jump;
+      entry.tier = entry.computeTier();
+      await entry.save();
+      await shiftPositionsUp(entry._id, oldPosition, newPosition);
+      reward = { spotsJumped: jump, newPosition };
+    } else {
+      await entry.save();
+    }
+
+    res.json({ streak: entry.checkInStreak, position: entry.position, reward });
+  } catch (error) {
+    res.status(500).json({ message: 'Check-in failed' });
+  }
+});
+
+export default router;
+```
+
 ### ./server/seedDummies.js
 
 ```
@@ -16694,19 +17539,6 @@ export class AppError extends Error {
     Error.captureStackTrace(this, this.constructor);
   }
 }
-
-```
-
-### ./server/utils/asyncHandler.js
-
-```
-/**
- * Wraps an async Express route handler so rejected promises
- * are forwarded to the next() error handler instead of crashing.
- */
-export const asyncHandler = (fn) => (req, res, next) => {
-  Promise.resolve(fn(req, res, next)).catch(next);
-};
 
 ```
 

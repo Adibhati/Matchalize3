@@ -1,27 +1,30 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { api } from '../utils/api'; 
+import { api } from '../utils/api';
 import socket from '../utils/socket';
 import { theme as design } from '../utils/theme';
 import { triggerHaptic } from '../utils/haptics';
 import { Feather, KeySquare, CheckCircle2 } from 'lucide-react';
 import AccountSuspendedScreen from '../components/AccountSuspendedScreen';
 
-const theme = {
+/* Locked tokens — same family as ProfileCard */
+const t = {
+  desk: '#ece4d4',
   paper: '#fdfbf7',
+  card: '#fffdf8',
   surfaceAlt: '#f4f1ea',
+  lineDark: '#d4c5a9',
   ink: '#1a1a1a',
+  inkSoft: '#4a4a4a',
   inkMuted: '#8c8275',
   accent: '#8b4513',
-  borderDark: '#d4c5a9',
   crimson: '#8b1a1a',
   success: '#2e7d32',
-  shadowWarm: 'rgba(139, 69, 19, 0.12)',
+  fontDisplay: design?.font?.heading || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  fontType: "'Special Elite', 'Courier New', monospace",
+  grain: design?.texture?.grain || '',
 };
-
-const TYPEWRITER_FONT = "'Special Elite', 'Courier New', monospace";
-const HEADER_FONT = design?.font?.heading || "'Playfair Display', serif";
-const LABEL_FONT = design?.font?.body || "'Inter', sans-serif";
 
 const Auth = ({ onSuccess }) => {
   const [step, setStep] = useState('email');
@@ -56,22 +59,22 @@ const Auth = ({ onSuccess }) => {
     setError('');
     setLoading(true);
     triggerHaptic('medium');
-    
+
     // Force blur to close keyboard and fix hitboxes before making API call
     if (document.activeElement) {
       document.activeElement.blur();
     }
-    
+
     try {
       await api.post('/auth/send-otp', { email: email.trim() });
       setStep('otp');
     } catch (err) {
       const exactError = err.response?.data?.message || err.response?.data?.error || err.message;
-      
+
       if (exactError?.includes('Network Error')) {
         setError('The courier was lost. Check your connection.');
       } else {
-        setError(exactError || 'Failed to seal the letter.');
+        setError(exactError || 'Failed to send the code.');
       }
       triggerHaptic('heavy');
     } finally {
@@ -82,7 +85,7 @@ const Auth = ({ onSuccess }) => {
   const handleVerifyOtp = useCallback(async (otpValue) => {
     setError('');
     setLoading(true);
-    
+
     // Force blur to fix hitboxes
     if (document.activeElement) {
       document.activeElement.blur();
@@ -92,19 +95,19 @@ const Auth = ({ onSuccess }) => {
       const data = await api.post('/auth/verify-otp', { email: email.trim(), otp: otpValue });
       // Token is set as httpOnly cookie by the server Set-Cookie header
       localStorage.setItem('matchalize_user', JSON.stringify(data.user));
-      
+
       if (socket && socket.disconnected) socket.connect();
-      
+
       setVerified(true);
       triggerHaptic('heavy');
-      
+
       setTimeout(() => {
         onSuccess();
       }, 1200);
 
     } catch (err) {
       const exactError = err.response?.data?.message || err.response?.data?.error || err.message;
-      
+
       // If this was a suspension, show the lock screen
       try {
         const susData = JSON.parse(localStorage.getItem('matchalize_suspended'));
@@ -114,9 +117,9 @@ const Auth = ({ onSuccess }) => {
       if (exactError?.includes('Network Error')) {
         setError('The courier was lost. Check your connection.');
       } else {
-        setError(exactError || 'Invalid seal code.');
+        setError(exactError || 'Invalid code.');
       }
-      
+
       setOtp(['', '', '', '', '', '']);
       if (inputRefs.current[0]) inputRefs.current[0].focus();
       triggerHaptic('heavy');
@@ -126,19 +129,19 @@ const Auth = ({ onSuccess }) => {
 
   const handleOtpChange = (e, index) => {
     const val = e.target.value;
-    
+
     if (val.length > 1) {
       const pasted = val.replace(/\D/g, '').slice(0, 6).split('');
       const newOtp = [...otp];
       // Fill from current index, not from 0
-      pasted.forEach((char, i) => { 
-        if (index + i < 6) newOtp[index + i] = char; 
+      pasted.forEach((char, i) => {
+        if (index + i < 6) newOtp[index + i] = char;
       });
       setOtp(newOtp);
-      
+
       const nextIndex = Math.min(index + pasted.length, 5);
       inputRefs.current[nextIndex].focus();
-      
+
       if (newOtp.every(d => d !== '')) {
         handleVerifyOtp(newOtp.join(''));
       }
@@ -146,7 +149,7 @@ const Auth = ({ onSuccess }) => {
     }
 
     if (isNaN(val)) return;
-    
+
     const newOtp = [...otp.map((v, i) => (i === index ? val : v))];
     setOtp(newOtp);
     triggerHaptic('light');
@@ -176,207 +179,289 @@ const Auth = ({ onSuccess }) => {
       minHeight: '100dvh', // Dynamic Viewport Height
       width: '100%',
       display: 'flex',
-      flexDirection: 'column',
-      backgroundColor: theme.surfaceAlt,
-      paddingTop: 'max(80px, env(safe-area-inset-top))',
-      paddingBottom: 'max(40px, env(safe-area-inset-bottom))',
-      paddingLeft: '32px',
-      paddingRight: '32px',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: t.desk,
+      padding: 'max(24px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom))',
+      boxSizing: 'border-box',
       position: 'relative',
       // CHANGED: From 'hidden' to 'auto' to allow native scrolling and fix the Phantom Hitbox
       overflowX: 'hidden',
-      overflowY: 'auto', 
-      WebkitOverflowScrolling: 'touch'
+      overflowY: 'auto',
+      WebkitOverflowScrolling: 'touch',
     }}>
 
       <style>{`
         * { -webkit-tap-highlight-color: transparent; }
-        
-        .auth-btn { transition: transform 0.15s ease-out, box-shadow 0.15s ease-out, background-color 0.3s ease; }
-        @media (hover: hover) { .auth-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(139, 26, 26, 0.3); } }
-        .auth-btn:active:not(:disabled) { transform: scale(0.97) !important; box-shadow: 0 4px 12px rgba(139, 26, 26, 0.2) !important; transition: transform 0.05s ease-out !important; }
-        
-        .email-input::placeholder { color: ${theme.inkMuted}; opacity: 0.5; font-family: ${TYPEWRITER_FONT}; font-size: 16px; letter-spacing: 0px; }
-        
-        .stamp-box { transition: all 0.2s ease; border-bottom: 3px solid ${theme.borderDark}; }
-        .stamp-box:focus { border-bottom: 3px solid ${theme.crimson}; background-color: #fff; transform: translateY(-2px); box-shadow: 0 8px 16px ${theme.shadowWarm}; }
-        .stamp-box.filled { border-bottom: 3px solid ${theme.ink}; }
-        .stamp-box.success { border-color: ${theme.success}; background-color: ${theme.success}; color: #fff; transform: scale(1.05); }
+
+        .auth-btn { transition: transform 0.15s ease-out, box-shadow 0.15s ease-out; will-change: transform; }
+        @media (hover: hover) { .auth-btn:hover:not(:disabled) { transform: translateY(-1px); } }
+        .auth-btn:active:not(:disabled) { transform: scale(0.96) !important; }
+
+        .email-input::placeholder { color: ${t.inkMuted}; opacity: 0.5; font-family: ${t.fontType}; font-size: 16px; letter-spacing: 0px; }
+
+        .stamp-box { transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease; border-bottom: 2.5px solid ${t.lineDark}; }
+        .stamp-box:focus { border-bottom-color: ${t.crimson}; background-color: #fff; }
+        .stamp-box.filled { border-bottom-color: ${t.ink}; }
+        .stamp-box.success { border-bottom-color: ${t.success}; background-color: ${t.success}; color: #fff; transform: translateY(-3px); }
       `}</style>
 
-      <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${design?.texture?.grain || ''}")`, mixBlendMode: 'multiply', opacity: 0.6, pointerEvents: 'none', zIndex: 1 }} />
+      {/* Grain film — same strength as every surface */}
+      <div aria-hidden="true" style={{ position: 'fixed', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 1 }} />
 
-      <AnimatePresence mode="wait">
-        {step === 'email' ? (
-          <motion.div
-            key="email-step"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -40, scale: 0.95, filter: 'blur(4px)' }}
-            transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-            style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', position: 'relative', zIndex: 10 }}
-          >
-            <div style={{ marginBottom: '40px' }}>
-              <Feather size={32} color={theme.accent} strokeWidth={1.5} style={{ marginBottom: '16px' }} />
-              <h2 style={{ fontFamily: HEADER_FONT, fontSize: '38px', fontWeight: '900', color: theme.ink, margin: '0 0 12px 0', letterSpacing: '-0.02em', lineHeight: 1.1 }}>
+      {/* The floating paper panel */}
+      <div style={{
+        width: '100%',
+        maxWidth: 400,
+        backgroundColor: t.paper,
+        border: '1px solid rgba(212,197,169,0.7)',
+        borderRadius: 18,
+        boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)',
+        padding: '36px 28px 32px',
+        boxSizing: 'border-box',
+        position: 'relative',
+        zIndex: 2,
+      }}>
+
+        <AnimatePresence mode="wait">
+          {step === 'email' ? (
+            <motion.div
+              key="email-step"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -16 }}
+              transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+            >
+              {/* Standard icon tile */}
+              <div style={{
+                width: 48,
+                height: 48,
+                borderRadius: 12,
+                backgroundColor: t.surfaceAlt,
+                border: '1px solid rgba(212,197,169,0.7)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginBottom: 20,
+              }}>
+                <Feather size={20} color={t.accent} strokeWidth={1.75} />
+              </div>
+
+              <h2 style={{ fontFamily: t.fontDisplay, fontSize: 32, fontWeight: 800, color: t.ink, margin: '0 0 10px 0', letterSpacing: '-0.02em', lineHeight: 1.1 }}>
                 Identify yourself.
               </h2>
-              <p style={{ fontFamily: LABEL_FONT, fontSize: '15px', color: theme.inkMuted, margin: 0, lineHeight: '1.5', fontWeight: 500 }}>
+              <p style={{ fontFamily: t.fontBody, fontSize: 14, fontWeight: 450, color: t.inkMuted, margin: '0 0 32px 0', lineHeight: 1.55 }}>
                 Enter your university email to pull your records from the Archives.
               </p>
-            </div>
 
-            <form onSubmit={handleSendOtp} style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-              <div style={{ position: 'relative' }}>
-                    <input
-                      type="email"
-                      inputMode="email"
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck="false"
-                      className="email-input"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="name@university.edu"
-                      required
-                      style={{
-                        width: '100%',
-                        backgroundColor: 'transparent',
-                        border: 'none',
-                        borderBottom: `2px solid ${theme.ink}`,
-                        padding: '12px 4px',
-                        fontSize: '22px',
-                        color: theme.ink,
-                        fontFamily: TYPEWRITER_FONT,
-                        outline: 'none',
-                        borderRadius: 0,
-                        WebkitAppearance: 'none'
-                      }}
-                    />
-                
-                <AnimatePresence>
-                  {error && (
-                    <motion.div 
-                      initial={{ opacity: 0, height: 0 }} 
-                      animate={{ opacity: 1, height: 'auto' }} 
-                      exit={{ opacity: 0, height: 0 }}
-                      style={{ overflow: 'hidden' }}
-                    >
-                      <p style={{ color: theme.crimson, fontSize: '13px', fontFamily: LABEL_FONT, fontWeight: 600, margin: '16px 0 0 0' }}>
-                        {error}
-                      </p>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
+              <form onSubmit={handleSendOtp} style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type="email"
+                    inputMode="email"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck="false"
+                    className="email-input"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="name@university.edu"
+                    required
+                    style={{
+                      width: '100%',
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      borderBottom: `2px solid ${t.ink}`,
+                      padding: '10px 4px',
+                      fontSize: 20,
+                      color: t.ink,
+                      fontFamily: t.fontType,
+                      outline: 'none',
+                      borderRadius: 0,
+                      WebkitAppearance: 'none',
+                      boxSizing: 'border-box',
+                    }}
+                  />
 
-              <button
-                type="submit"
-                disabled={loading || !email.trim()}
-                className="auth-btn"
-                style={{
-                  width: '100%', padding: '22px',
-                  backgroundColor: theme.crimson, color: '#fff',
-                  border: 'none', borderRadius: '14px',
-                  fontFamily: LABEL_FONT, fontSize: '15px', fontWeight: '800', letterSpacing: '2px', textTransform: 'uppercase',
-                  cursor: (!email.trim() || loading) ? 'not-allowed' : 'pointer',
-                  boxShadow: `0 8px 24px rgba(139, 26, 26, 0.25)`,
-                  opacity: (!email.trim() || loading) ? 0.7 : 1,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px',
-                }}
-              >
-                {loading ? 'Consulting Ledger...' : 'Request Ledger Access'}
-              </button>
-            </form>
-          </motion.div>
-        ) : (
-          <motion.div
-            key="otp-step"
-            initial={{ opacity: 0, y: 40 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1], delay: 0.1 }}
-            style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', position: 'relative', zIndex: 10 }}
-          >
-            <div style={{ backgroundColor: '#fff', padding: '16px', borderRadius: '12px', border: `1px solid ${theme.borderDark}`, boxShadow: `0 8px 16px ${theme.shadowWarm}`, display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '40px' }}>
-              <KeySquare size={24} color={theme.accent} strokeWidth={1.5} />
-              <div style={{ flex: 1, overflow: 'hidden' }}>
-                <p style={{ fontFamily: LABEL_FONT, fontSize: '10px', fontWeight: 800, color: theme.inkMuted, textTransform: 'uppercase', letterSpacing: '1px', margin: '0 0 4px 0' }}>Dispatched To</p>
-                <p style={{ fontFamily: TYPEWRITER_FONT, fontSize: '14px', color: theme.ink, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 700 }}>{email}</p>
-              </div>
-            </div>
+                  <AnimatePresence>
+                    {error && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        style={{ overflow: 'hidden' }}
+                      >
+                        <p style={{ color: t.crimson, fontSize: 13, fontFamily: t.fontBody, fontWeight: 600, margin: '14px 0 0 0' }}>
+                          {error}
+                        </p>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
 
-            <div>
-              <h3 style={{ fontFamily: HEADER_FONT, fontSize: '28px', color: theme.ink, margin: '0 0 12px 0', fontWeight: 800 }}>Break the Seal.</h3>
-              <p style={{ fontFamily: LABEL_FONT, fontSize: '14px', color: theme.inkMuted, margin: '0 0 32px 0', lineHeight: 1.5 }}>
-                A sealed 6-digit code has been sent to your inbox.
-              </p>
-            </div>
-
-            <AnimatePresence>
-              {error && (
-                <motion.div 
-                  initial={{ opacity: 0, height: 0 }} 
-                  animate={{ opacity: 1, height: 'auto' }} 
-                  exit={{ opacity: 0, height: 0 }}
-                  style={{ overflow: 'hidden' }}
-                >
-                  <p style={{ color: theme.crimson, fontSize: '13px', fontFamily: LABEL_FONT, fontWeight: 600, margin: '0 0 24px 0' }}>
-                    {error}
-                  </p>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '32px' }}>
-              {otp.map((data, index) => (
-                <input
-                  key={index}
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  maxLength={6} 
-                  value={data}
-                  ref={(el) => (inputRefs.current[index] = el)}
-                  onChange={(e) => handleOtpChange(e, index)}
-                  onKeyDown={(e) => handleOtpKeyDown(e, index)}
-                  className={`stamp-box ${data ? 'filled' : ''} ${verified ? 'success' : ''}`}
-                  disabled={verified || loading}
-                  style={{
-                    width: '100%', aspectRatio: '1/1.2',
-                    textAlign: 'center', fontSize: '28px', fontWeight: '700',
-                    fontFamily: TYPEWRITER_FONT,
-                    color: verified ? '#fff' : theme.ink,
-                    backgroundColor: 'rgba(255,255,255,0.4)',
-                    borderTop: 'none', borderLeft: 'none', borderRight: 'none',
-                    outline: 'none', borderRadius: '8px 8px 0 0',
-                    caretColor: theme.crimson,
-                    WebkitAppearance: 'none'
-                  }}
-                />
-              ))}
-            </div>
-
-            <div>
-              {verified ? (
-                <motion.button
-                  initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                  style={{ width: '100%', padding: '22px', backgroundColor: theme.success, color: '#fff', border: 'none', borderRadius: '14px', fontFamily: LABEL_FONT, fontSize: '16px', fontWeight: '900', letterSpacing: '2px', textTransform: 'uppercase', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', boxShadow: `0 8px 24px rgba(46, 125, 50, 0.4)` }}
-                >
-                  <CheckCircle2 size={24} /> Access Granted
-                </motion.button>
-              ) : (
                 <button
-                  onClick={() => { triggerHaptic('light'); setStep('email'); setError(''); setOtp(['', '', '', '', '', '']); }}
-                  disabled={loading}
-                  style={{ width: '100%', background: 'none', border: 'none', color: theme.accent, fontSize: '13px', fontFamily: LABEL_FONT, fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer', textAlign: 'center', textDecoration: 'underline', textUnderlineOffset: '4px', opacity: loading ? 0.5 : 0.8, WebkitTapHighlightColor: 'transparent' }}
+                  type="submit"
+                  disabled={loading || !email.trim()}
+                  className="auth-btn"
+                  style={{
+                    width: '100%',
+                    padding: '17px',
+                    backgroundColor: t.crimson,
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 999,
+                    fontFamily: t.fontBody,
+                    fontSize: 11.5,
+                    fontWeight: 800,
+                    letterSpacing: '1.8px',
+                    textTransform: 'uppercase',
+                    cursor: (!email.trim() || loading) ? 'not-allowed' : 'pointer',
+                    boxShadow: '0 6px 18px rgba(139, 26, 26, 0.28)',
+                    opacity: (!email.trim() || loading) ? 0.4 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 10,
+                  }}
                 >
-                  Wrong address? Go back
+                  {loading ? 'Sending...' : 'Send Code'}
                 </button>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              </form>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="otp-step"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+            >
+              {/* Dispatched-to card — box tier */}
+              <div style={{
+                backgroundColor: t.card,
+                padding: '14px 16px',
+                borderRadius: 6,
+                border: '1px solid rgba(212,197,169,0.7)',
+                boxShadow: '0 4px 12px rgba(88,63,30,0.1)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                marginBottom: 30,
+              }}>
+                <div style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 12,
+                  backgroundColor: t.surfaceAlt,
+                  border: '1px solid rgba(212,197,169,0.7)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}>
+                  <KeySquare size={16} color={t.accent} strokeWidth={2} />
+                </div>
+                <div style={{ flex: 1, overflow: 'hidden' }}>
+                  <p style={{ fontFamily: t.fontBody, fontSize: 9.5, fontWeight: 800, color: t.inkMuted, textTransform: 'uppercase', letterSpacing: '1.5px', margin: '0 0 3px 0' }}>Dispatched To</p>
+                  <p style={{ fontFamily: t.fontType, fontSize: 13.5, color: t.ink, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{email}</p>
+                </div>
+              </div>
+
+              <h3 style={{ fontFamily: t.fontDisplay, fontSize: 26, color: t.ink, margin: '0 0 8px 0', fontWeight: 800, letterSpacing: '-0.02em' }}>Break the Seal.</h3>
+              <p style={{ fontFamily: t.fontBody, fontSize: 14, fontWeight: 450, color: t.inkMuted, margin: '0 0 28px 0', lineHeight: 1.55 }}>
+                A 6-digit code has been sent to your inbox.
+              </p>
+
+              <AnimatePresence>
+                {error && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    style={{ overflow: 'hidden' }}
+                  >
+                    <p style={{ color: t.crimson, fontSize: 13, fontFamily: t.fontBody, fontWeight: 600, margin: '0 0 22px 0' }}>
+                      {error}
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 28 }}>
+                {otp.map((data, index) => (
+                  <input
+                    key={index}
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    value={data}
+                    ref={(el) => (inputRefs.current[index] = el)}
+                    onChange={(e) => handleOtpChange(e, index)}
+                    onKeyDown={(e) => handleOtpKeyDown(e, index)}
+                    className={`stamp-box ${data ? 'filled' : ''} ${verified ? 'success' : ''}`}
+                    disabled={verified || loading}
+                    style={{
+                      width: '100%',
+                      aspectRatio: '1 / 1.15',
+                      textAlign: 'center',
+                      fontSize: 26,
+                      fontWeight: 700,
+                      fontFamily: t.fontType,
+                      color: verified ? '#fff' : t.ink,
+                      backgroundColor: 'rgba(255,255,255,0.55)',
+                      border: 'none',
+                      borderBottom: `2.5px solid ${t.lineDark}`,
+                      outline: 'none',
+                      borderRadius: 4,
+                      caretColor: t.crimson,
+                      WebkitAppearance: 'none',
+                    }}
+                  />
+                ))}
+              </div>
+
+              <div>
+                {verified ? (
+                  <motion.div
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+                    style={{
+                      width: '100%',
+                      padding: '17px',
+                      backgroundColor: t.success,
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 999,
+                      fontFamily: t.fontBody,
+                      fontSize: 11.5,
+                      fontWeight: 800,
+                      letterSpacing: '1.8px',
+                      textTransform: 'uppercase',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 10,
+                      boxShadow: '0 6px 18px rgba(46, 125, 50, 0.3)',
+                      boxSizing: 'border-box',
+                    }}
+                  >
+                    <CheckCircle2 size={16} strokeWidth={2.5} /> Access Granted
+                  </motion.div>
+                ) : (
+                  <button
+                    onClick={() => { triggerHaptic('light'); setStep('email'); setError(''); setOtp(['', '', '', '', '', '']); }}
+                    disabled={loading}
+                    style={{ width: '100%', background: 'none', border: 'none', color: t.accent, fontSize: 13, fontFamily: t.fontBody, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', textAlign: 'center', textDecoration: 'underline', textUnderlineOffset: '4px', opacity: loading ? 0.5 : 0.8, WebkitTapHighlightColor: 'transparent' }}
+                  >
+                    Wrong address? Go back
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 };

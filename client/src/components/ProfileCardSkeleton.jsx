@@ -3,24 +3,29 @@ import { theme as design } from '../utils/theme';
 
 const theme = {
   paper: '#fdfbf7',
+  card: '#fffdf8',
   surfaceAlt: '#f4f1ea',
-  borderDark: '#d4c5a9',
-  shadowWarm: 'rgba(139, 69, 19, 0.12)',
+  lineDark: '#d4c5a9',
+  desk: '#ece4d4',
 };
 
-// Deterministic variable-tooth deckle edge (Matches ProfileCard exactly)
-function buildTornEdge(teeth = 64) {
-  const heights = [0, 18, 4, 22, 8, 16, 2, 24, 6, 14, 10, 20];
-  const pts = ['0% 100%'];
-  for (let i = 0; i <= teeth; i++) {
-    const x = ((i / teeth) * 100).toFixed(2);
-    const y = heights[i % heights.length];
-    pts.push(`${x}% ${y}%`);
-  }
-  pts.push('100% 100%');
-  return `polygon(${pts.join(',')})`;
-}
-const TORN_EDGE_CLIP = buildTornEdge();
+/* One skeleton primitive — every placeholder is a shimmering bar */
+const Bar = ({ w = '100%', h = 12, r = 6, style }) => (
+  <div
+    className="pc-skeleton-shimmer"
+    style={{ width: w, height: h, borderRadius: r, backgroundColor: theme.surfaceAlt, position: 'relative', overflow: 'hidden', flexShrink: 0, ...style }}
+  />
+);
+
+/* Matches the Panel primitive in ProfileCard exactly */
+const panelStyle = {
+  backgroundColor: theme.paper,
+  border: '1px solid rgba(212,197,169,0.7)',
+  borderRadius: 18,
+  boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)',
+  position: 'relative',
+  overflow: 'hidden',
+};
 
 const ProfileCardSkeleton = () => {
   return (
@@ -30,86 +35,105 @@ const ProfileCardSkeleton = () => {
         width: '100%',
         height: '100%',
         minHeight: 0,
-        backgroundColor: theme.paper,
+        backgroundColor: theme.desk,
         display: 'flex',
         flexDirection: 'column',
+        gap: 18,
+        padding: '16px 14px 44px 14px',
         position: 'relative',
-        borderRadius: '0 16px 16px 0',
         overflow: 'hidden',
-        boxShadow: `-15px 0 40px ${theme.shadowWarm}`,
         contain: 'paint layout style',
+        boxSizing: 'border-box',
       }}
     >
-      {/* Cinematic Film Grain Overlay */}
+      {/* Grain film — same layer as the real card */}
       <div
         style={{
           position: 'absolute',
           inset: 0,
           backgroundImage: `url("${design?.texture?.grain || ''}")`,
           mixBlendMode: 'multiply',
-          opacity: 0.85,
+          opacity: 0.3,
           pointerEvents: 'none',
-          zIndex: 15,
+          zIndex: 2,
         }}
       />
 
-      {/* Hero Photo Skeleton */}
-      <div 
+      {/* HERO PANEL — exact height of the real hero so swap-in is seamless */}
+      <div
         className="pc-skeleton-shimmer"
-        style={{ 
-          width: '100%', 
-          aspectRatio: '4/5.8', 
+        style={{
+          ...panelStyle,
+          width: '100%',
+          height: 'calc(100dvh - 130px)',
           flexShrink: 0,
-          position: 'relative',
-          overflow: 'hidden',
           backgroundColor: theme.surfaceAlt,
         }}
       />
 
-      {/* Torn Deckle Edge */}
-      <div 
-        style={{ 
-          width: '100%', 
-          height: '24px', 
-          backgroundColor: theme.paper, 
-          clipPath: TORN_EDGE_CLIP, 
-          marginTop: '-14px', 
-          position: 'relative', 
-          zIndex: 3,
-          filter: 'drop-shadow(0 -3px 3px rgba(0,0,0,0.12))'
-        }} 
-      />
+      {/* COMPATIBILITY PANEL — stamp + status + findings box */}
+      <div style={{ ...panelStyle, padding: '22px 20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginBottom: 16 }}>
+          <Bar w={88} h={88} r="50%" />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <Bar w={130} h={16} />
+            <Bar w={170} h={10} />
+          </div>
+        </div>
+        <div style={{ border: `1px solid rgba(139,69,19,0.3)`, borderRadius: 6, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <Bar w="85%" h={10} />
+          <Bar w="65%" h={10} />
+        </div>
+      </div>
 
-      {/* Structural Placeholders (Prevents layout snapping on load) */}
-      <div style={{ padding: '24px 24px 0 24px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-        
-        {/* Vitals Mockup */}
+      {/* VITALS PANEL — 2x2 field cells: label bar + dotted-value bar */}
+      <div style={{ ...panelStyle, padding: '22px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 14px' }}>
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i}>
+            <Bar w={52} h={9} r={3} style={{ marginBottom: 8 }} />
+            <Bar w="80%" h={13} r={4} style={{ borderBottom: '1.5px dotted rgba(139,69,19,0.25)', paddingBottom: 5, borderRadius: '4px 4px 0 0' }} />
+          </div>
+        ))}
+      </div>
+
+      {/* BIO — loose index card artifact */}
+      <div style={{ ...panelStyle, borderRadius: 6, border: '1px solid rgba(139,69,19,0.25)', backgroundColor: theme.card, boxShadow: '0 8px 20px rgba(88,63,30,0.16)', minHeight: 120, padding: '20px 16px 16px 34px', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 10 }}>
+        <Bar w="30%" h={18} r={4} />
+        <Bar w="90%" h={10} />
+        <Bar w="70%" h={10} />
+      </div>
+
+      {/* SEEKING PANEL — two headed chip groups */}
+      <div style={{ ...panelStyle, padding: 20, display: 'flex', flexDirection: 'column', gap: 18 }}>
         <div>
-          <div className="pc-skeleton-shimmer" style={{ width: '64px', height: '12px', borderRadius: '4px', marginBottom: '12px', position: 'relative', overflow: 'hidden', backgroundColor: theme.surfaceAlt }} />
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <div className="pc-skeleton-shimmer" style={{ width: '48px', height: '28px', borderRadius: '4px', position: 'relative', overflow: 'hidden', backgroundColor: theme.surfaceAlt }} />
-            <div className="pc-skeleton-shimmer" style={{ width: '72px', height: '28px', borderRadius: '4px', position: 'relative', overflow: 'hidden', backgroundColor: theme.surfaceAlt }} />
-            <div className="pc-skeleton-shimmer" style={{ width: '88px', height: '28px', borderRadius: '4px', position: 'relative', overflow: 'hidden', backgroundColor: theme.surfaceAlt }} />
+          <Bar w={58} h={9} r={3} style={{ marginBottom: 12 }} />
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Bar w={72} h={28} r={4} />
+            <Bar w={64} h={28} r={4} />
           </div>
         </div>
-
-        {/* Scan / Badge Mockup */}
-        <div style={{ 
-          height: '112px', 
-          borderRadius: '16px', 
-          border: `1px solid ${theme.borderDark}`,
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 24px',
-          justifyContent: 'space-between'
-        }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <div className="pc-skeleton-shimmer" style={{ width: '120px', height: '10px', borderRadius: '4px', position: 'relative', overflow: 'hidden', backgroundColor: theme.surfaceAlt }} />
-            <div className="pc-skeleton-shimmer" style={{ width: '180px', height: '24px', borderRadius: '4px', position: 'relative', overflow: 'hidden', backgroundColor: theme.surfaceAlt }} />
+        <div>
+          <Bar w={64} h={9} r={3} style={{ marginBottom: 12 }} />
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <Bar w={78} h={30} r={4} />
+            <Bar w={90} h={30} r={4} />
+            <Bar w={56} h={30} r={4} />
           </div>
-          <div className="pc-skeleton-shimmer" style={{ width: '72px', height: '72px', borderRadius: '50%', position: 'relative', overflow: 'hidden', backgroundColor: theme.surfaceAlt }} />
         </div>
+      </div>
 
+      {/* EXHIBITS — 2-col artifact grid: card, photo, photo, card */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px 16px', alignItems: 'center', paddingTop: 4 }}>
+        <div style={{ ...panelStyle, borderRadius: 6, border: '1px solid rgba(139,69,19,0.25)', backgroundColor: theme.card, boxShadow: '0 8px 20px rgba(88,63,30,0.16)', minHeight: 130, padding: 16, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 9 }}>
+          <Bar w="80%" h={9} />
+          <Bar w="55%" h={9} />
+        </div>
+        <div className="pc-skeleton-shimmer" style={{ ...panelStyle, aspectRatio: '1 / 1', backgroundColor: theme.surfaceAlt }} />
+        <div className="pc-skeleton-shimmer" style={{ ...panelStyle, aspectRatio: '1 / 1', backgroundColor: theme.surfaceAlt }} />
+        <div style={{ ...panelStyle, borderRadius: 6, border: '1px solid rgba(139,69,19,0.25)', backgroundColor: theme.card, boxShadow: '0 8px 20px rgba(88,63,30,0.16)', minHeight: 130, padding: 16, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 9 }}>
+          <Bar w="70%" h={9} />
+          <Bar w="60%" h={9} />
+        </div>
       </div>
     </div>
   );

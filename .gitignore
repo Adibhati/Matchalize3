@@ -9,7 +9,16 @@ node_modules/
 .env.development.local
 .env.test.local
 .env.production.local
+.env.qa
 /server/.env
+/server/.env.test
+
+# QA artifacts (videos, theater, photos, logs)
+/server/tests/qa/videos/
+/server/tests/qa/media/
+/server/tests/qa/report/
+/server/tests/.scratch/
+/server/uploads/qa/
 
 # OS Metadata
 .DS_Store

@@ -4,33 +4,28 @@ import { triggerHaptic } from '../utils/haptics';
 import { theme as design } from '../utils/theme';
 import { Compass, Heart, User } from 'lucide-react';
 
-/* ==================================================================
-   MUSEUM-GRADE ARCHIVAL CONSTANTS
-================================================================== */
-const theme = {
+/* Locked tokens — same family as ProfileCard */
+const t = {
   paper: '#fdfbf7',
-  surface: '#ffffff',
-  surfaceAlt: '#f4f1ea',
-  border: '#e0d8c8',
-  borderDark: '#d4c5a9',
+  lineDark: '#d4c5a9',
   ink: '#1a1a1a',
   inkMuted: '#8c8275',
-  accent: '#8b4513',
   crimson: '#8b1a1a',
-  shadowWarm: 'rgba(139, 69, 19, 0.12)',
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  grain: design?.texture?.grain || '',
 };
 
 const tabs = [
-  { key: 'discover', label: 'Discover', Icon: Compass, subtext: 'Archive' },
-  { key: 'matches', label: 'Matches', Icon: Heart, subtext: 'Synergy' },
-  { key: 'profile', label: 'Profile', Icon: User, subtext: 'Subject' },
+  { key: 'discover', label: 'Discover', Icon: Compass },
+  { key: 'matches', label: 'Matches', Icon: Heart },
+  { key: 'profile', label: 'Profile', Icon: User },
 ];
 
 /* ==================================================================
    MAIN NAVBAR COMPONENT
 ================================================================== */
 const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
-  
+
   const handleTabClick = (key) => {
     if (activeTab !== key) {
       triggerHaptic('light');
@@ -40,12 +35,8 @@ const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
 
   return (
     <div style={styles.navContainer}>
-      {/* Physical Archival Cotton-Rag Grain */}
-      <div aria-hidden="true" style={styles.paperGrain} />
-      
-      {/* Dual Archival Binding Seam (Top Border + Stitching) */}
-      <div aria-hidden="true" style={styles.topBorder} />
-      <div aria-hidden="true" style={styles.stitchSeam} />
+      {/* Grain film — same strength as every surface */}
+      <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 1 }} />
 
       <div style={styles.tabGrid}>
         {tabs.map((tab) => {
@@ -56,52 +47,46 @@ const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
             <motion.button
               key={tab.key}
               onClick={() => handleTabClick(tab.key)}
-              whileTap={{ scale: 0.92 }}
-              transition={{ type: 'spring', damping: 15, stiffness: 400 }}
+              whileTap={{ scale: 0.96 }}
+              transition={{ duration: 0.15, ease: 'easeOut' }}
               style={styles.tabButton}
               aria-label={tab.label}
               aria-current={isActive ? 'page' : undefined}
             >
-              {/* Sliding Archival Brass Bracket (Active Indicator) */}
+              {/* Active indicator — one sliding crimson bar */}
               {isActive && (
                 <motion.div
-                  layoutId="activeTabBracket"
+                  layoutId="navActiveIndicator"
                   transition={{ type: 'spring', damping: 28, stiffness: 350 }}
-                  style={styles.activeBracket}
-                >
-                  {/* Miniature Brass Rivets */}
-                  <span style={{ ...styles.rivet, left: '6px' }} />
-                  <span style={{ ...styles.rivet, right: '6px' }} />
-                  <div style={styles.bracketLine} />
-                </motion.div>
+                  style={styles.activeBar}
+                />
               )}
 
-              {/* Icon & Wax Seal Badge Container */}
+              {/* Icon & badge */}
               <div style={styles.iconContainer}>
                 <motion.div
                   initial={false}
                   animate={{
-                    scale: isActive ? 1.15 : 1,
-                    color: isActive ? theme.crimson : theme.inkMuted,
+                    scale: isActive ? 1.1 : 1,
+                    color: isActive ? t.crimson : t.inkMuted,
                   }}
-                  transition={{ duration: 0.2, ease: "easeOut" }}
+                  transition={{ duration: 0.2, ease: 'easeOut' }}
                   style={styles.icon}
                 >
-                  <tab.Icon size={24} color="currentColor" strokeWidth={2} />
+                  <tab.Icon size={18} color="currentColor" strokeWidth={isActive ? 2.5 : 2} />
                 </motion.div>
 
-                {/* Hot-Stamped Wax Seal Notification Badge */}
                 <AnimatePresence>
                   {showBadge && (
                     <motion.div
-                      initial={{ scale: 0, rotate: -20 }}
-                      animate={{ scale: [1, 1.08, 1], rotate: 0 }}
+                      initial={{ scale: 0 }}
+                      animate={{ scale: [1, 1.08, 1] }}
                       exit={{ scale: 0, opacity: 0 }}
                       transition={{
                         scale: { repeat: Infinity, duration: 3, ease: 'easeInOut' },
-                        default: { type: 'spring', damping: 12, stiffness: 300 }
+                        default: { type: 'spring', damping: 12, stiffness: 300 },
                       }}
-                      style={styles.waxSealBadge}
+                      style={styles.badge}
                     >
                       <span style={styles.badgeText}>
                         {matchBadge > 99 ? '99+' : matchBadge}
@@ -111,27 +96,15 @@ const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
                 </AnimatePresence>
               </div>
 
-              {/* Text Hierarchy */}
-              <div style={styles.textWrapper}>
-                <span
-                  style={{
-                    ...styles.label,
-                    color: isActive ? theme.crimson : theme.inkMuted,
-                    fontWeight: isActive ? 700 : 500,
-                  }}
-                >
-                  {tab.label}
-                </span>
-                <span
-                  style={{
-                    ...styles.subtext,
-                    opacity: isActive ? 0.8 : 0.4,
-                    color: isActive ? theme.accent : theme.inkMuted,
-                  }}
-                >
-                  {tab.subtext}
-                </span>
-              </div>
+              <span
+                style={{
+                  ...styles.label,
+                  color: isActive ? t.crimson : t.inkMuted,
+                  fontWeight: isActive ? 800 : 600,
+                }}
+              >
+                {tab.label}
+              </span>
             </motion.button>
           );
         })}
@@ -141,53 +114,26 @@ const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
 };
 
 /* ==================================================================
-   ARCHIVAL STYLING SYSTEM
+   STYLES
 ================================================================== */
 const styles = {
   navContainer: {
-    marginTop: 'auto', // Flexbox silver bullet: forces navbar to the bottom
+    marginTop: 'auto', // Flexbox: forces navbar to the bottom
     flexShrink: 0,
-    backgroundColor: theme.paper,
+    backgroundColor: t.paper,
+    borderTop: '1px solid rgba(212,197,169,0.7)',
     zIndex: 10,
-    boxShadow: `0 -8px 24px ${theme.shadowWarm}`,
-    paddingBottom: 'max(8px, env(safe-area-inset-bottom))',
+    boxShadow: '0 -4px 16px rgba(88,63,30,0.1)',
+    paddingBottom: 'max(6px, env(safe-area-inset-bottom))',
     userSelect: 'none',
     WebkitUserSelect: 'none',
     contain: 'layout style',
-  },
-  paperGrain: {
-    position: 'absolute',
-    inset: 0,
-    backgroundImage: `url("${design?.texture?.grain || ''}")`,
-    mixBlendMode: 'multiply',
-    opacity: 0.85,
-    pointerEvents: 'none',
-    zIndex: 1,
-  },
-  topBorder: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: '1px',
-    backgroundColor: theme.borderDark,
-    zIndex: 2,
-  },
-  stitchSeam: {
-    position: 'absolute',
-    top: '3px',
-    left: 0,
-    right: 0,
-    height: '1px',
-    backgroundImage: `repeating-linear-gradient(90deg, ${theme.borderDark} 0px, ${theme.borderDark} 6px, transparent 6px, transparent 12px)`,
-    opacity: 0.6,
-    zIndex: 2,
   },
   tabGrid: {
     display: 'flex',
     position: 'relative',
     zIndex: 3,
-    paddingTop: '6px',
+    paddingTop: '2px',
   },
   tabButton: {
     flex: 1,
@@ -195,10 +141,10 @@ const styles = {
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '3px',
+    gap: '2px',
     background: 'none',
     border: 'none',
-    padding: '8px 0 4px',
+    padding: '7px 0 3px',
     cursor: 'pointer',
     position: 'relative',
     outline: 'none',
@@ -209,88 +155,59 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    height: '24px',
+    height: '22px',
     width: '32px',
   },
   icon: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    willChange: 'transform, color', // GPU acceleration for the scale animation
+    willChange: 'transform, color',
   },
-  waxSealBadge: {
+  badge: {
     position: 'absolute',
     top: '-4px',
     right: '-4px',
     minWidth: '18px',
     height: '18px',
     padding: '0 4px',
-    borderRadius: '10px',
-    backgroundColor: theme.crimson,
-    border: `1.5px solid ${theme.paper}`,
-    boxShadow: '0 2px 6px rgba(139, 26, 26, 0.4), inset 0 1px 2px rgba(255, 255, 255, 0.25)',
+    borderRadius: '999px',
+    backgroundColor: t.crimson,
+    border: `1.5px solid ${t.paper}`,
+    boxShadow: '0 2px 6px rgba(139, 26, 26, 0.3)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 5,
     willChange: 'transform',
+    boxSizing: 'border-box',
   },
   badgeText: {
-    fontFamily: "'Inter', sans-serif",
+    fontFamily: t.fontBody,
     fontSize: '9px',
     fontWeight: 800,
     color: '#ffffff',
     letterSpacing: '0.3px',
     lineHeight: 1,
-  },
-  textWrapper: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '1px',
+    fontVariantNumeric: 'tabular-nums',
   },
   label: {
-    fontFamily: "'Inter', sans-serif",
+    fontFamily: t.fontBody,
     fontSize: '10px',
     letterSpacing: '1px',
     textTransform: 'uppercase',
     transition: 'color 0.2s ease',
   },
-  subtext: {
-    fontFamily: "'Playfair Display', serif",
-    fontSize: '8px',
-    fontStyle: 'italic',
-    letterSpacing: '0.5px',
-    transition: 'all 0.2s ease',
-  },
-  
-  // Active Bracket Indicator
-  activeBracket: {
+  activeBar: {
     position: 'absolute',
-    top: '-6px',
-    width: '48px',
-    height: '6px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    pointerEvents: 'none',
-    willChange: 'transform',
-  },
-  bracketLine: {
-    width: '100%',
+    top: 0,
+    left: '50%',
+    marginLeft: '-16px',
+    width: '32px',
     height: '2.5px',
-    backgroundColor: theme.crimson,
-    borderRadius: '2px',
-    boxShadow: '0 1px 4px rgba(139, 26, 26, 0.3)',
-  },
-  rivet: {
-    position: 'absolute',
-    top: '1px',
-    width: '3.5px',
-    height: '3.5px',
-    borderRadius: design?.radius?.sm || '2px',
-    backgroundColor: theme.accent,
-    border: '0.5px solid #d4c5a9',
+    backgroundColor: t.crimson,
+    borderRadius: '999px',
+    pointerEvents: 'none',
   },
 };
 

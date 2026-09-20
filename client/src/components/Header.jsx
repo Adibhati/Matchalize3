@@ -8,6 +8,23 @@ import { theme as design } from '../utils/theme';
 import { Bell } from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
 
+/* Locked tokens — same family as ProfileCard */
+const t = {
+  paper: '#fdfbf7',
+  card: '#fffdf8',
+  surfaceAlt: '#f4f1ea',
+  lineDark: '#d4c5a9',
+  ink: '#1a1a1a',
+  inkSoft: '#4a4a4a',
+  inkMuted: '#8c8275',
+  accent: '#8b4513',
+  crimson: '#8b1a1a',
+  shadowWarm: 'rgba(88,63,30,0.16)',
+  fontDisplay: design?.font?.heading || design?.font?.display || "'Playfair Display', Georgia, serif",
+  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
+  grain: design?.texture?.grain || '',
+};
+
 const Header = ({ onNavigate, onSelectMatch, title }) => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [toast, setToast] = useState(null);
@@ -34,7 +51,7 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
         ...(old || {}),
         count: (old?.count || 0) + 1,
       }));
-      
+
       triggerHaptic('heavy');
       setToast(`${data?.senderName || 'An anonymous subject'} sent you a letter.`);
     };
@@ -46,8 +63,8 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
   // Auto-dismiss toast
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(null), 4000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(timer);
   }, [toast]);
 
   const toggleDrawer = () => {
@@ -66,47 +83,46 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
 
   return (
     <>
-      {/* GPU Promoted Tactile Physics */}
       <style>{`
-        .tactile-btn { transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.2s ease, opacity 0.2s ease; will-change: transform; }
-        @media (hover: hover) { .tactile-btn:hover { transform: translate3d(0, -2px, 0) scale3d(1.04, 1.04, 1); } }
-        .tactile-btn:active { transform: scale3d(0.92, 0.92, 1) translate3d(0, 0, 0) !important; transition: transform 0.08s cubic-bezier(0, 0, 0.2, 1) !important; }
+        .tactile-btn { transition: transform 0.15s ease-out; will-change: transform; }
+        @media (hover: hover) { .tactile-btn:hover { transform: translateY(-1px); } }
+        .tactile-btn:active { transform: scale(0.96) !important; }
       `}</style>
 
-      {/* Floating Archival Toast Notification */}
+      {/* Floating paper toast — mini panel with the single crimson spine */}
       <AnimatePresence>
         {toast && (
           <motion.div
-            initial={{ y: -100, opacity: 0, scale: 0.95 }}
-            animate={{ y: 0, opacity: 1, scale: 1 }}
-            exit={{ y: -100, opacity: 0, scale: 0.95 }}
-            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+            initial={{ y: -80, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -80, opacity: 0 }}
+            transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
             style={{
               position: 'fixed',
               top: 'max(16px, env(safe-area-inset-top))',
               left: '16px',
               right: '16px',
               zIndex: 1100,
-              backgroundColor: design.color.surface,
-              backgroundImage: `url("${design?.texture?.grain || ''}")`,
-              border: `1.5px solid ${design.color.borderDark}`,
-              borderRadius: design?.radius?.md || '12px',
-              boxShadow: `0 12px 32px ${design.color.shadowWarm}`,
-              padding: '16px',
+              backgroundColor: t.paper,
+              border: '1px solid rgba(212,197,169,0.7)',
+              borderRadius: 12,
+              boxShadow: `0 14px 34px ${t.shadowWarm}, 0 3px 8px rgba(88,63,30,0.08)`,
+              padding: '14px 16px 14px 20px',
               display: 'flex',
               alignItems: 'center',
-              gap: '12px',
+              gap: 12,
+              overflow: 'hidden',
               pointerEvents: 'none', // Prevents blocking touches to the header below
             }}
           >
-            <div style={{
-              width: '4px', height: '100%', position: 'absolute', left: 0, top: 0, bottom: 0,
-              backgroundColor: design.color.crimson, borderRadius: '12px 0 0 12px'
-            }} />
-            <Bell size={20} color={design.color.crimson} style={{ flexShrink: 0, marginLeft: '8px' }} />
+            {/* Grain film */}
+            <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none' }} />
+            {/* Crimson spine — clipped by overflow, no manual corner math */}
+            <div aria-hidden="true" style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, backgroundColor: t.crimson }} />
+            <Bell size={18} color={t.crimson} strokeWidth={2} style={{ flexShrink: 0, position: 'relative' }} />
             <p style={{
-              margin: 0, fontFamily: design.font.body, fontSize: '13px', fontWeight: 600,
-              color: design.color.ink, lineHeight: 1.4,
+              margin: 0, fontFamily: t.fontBody, fontSize: 13, fontWeight: 600,
+              color: t.ink, lineHeight: 1.5, position: 'relative',
             }}>
               {toast}
             </p>
@@ -115,8 +131,8 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
       </AnimatePresence>
 
       <header style={styles.header}>
-        {/* Subtle Paper Grain Overlay */}
-        <div aria-hidden="true" style={styles.paperGrain} />
+        {/* Grain film — same strength as every surface */}
+        <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 1 }} />
 
         <div style={{ position: 'relative', zIndex: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
           {isDiscover ? (
@@ -136,18 +152,18 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
                 aria-label="View notifications"
                 title="Letters Received"
               >
-                <Bell size={17} color={design.color.inkSoft || '#4a4a4a'} strokeWidth={2.5} />
+                <Bell size={18} color={t.inkSoft} strokeWidth={2} />
 
-                {/* Animated Crimson Wax-Seal Badge */}
+                {/* Crimson seal badge — pill, paper-bordered */}
                 <AnimatePresence>
                   {unreadCount > 0 && (
                     <motion.div
-                      initial={{ scale: 0, rotate: -20 }}
-                      animate={{ scale: [1, 1.1, 1], rotate: 0 }}
+                      initial={{ scale: 0 }}
+                      animate={{ scale: [1, 1.1, 1] }}
                       exit={{ scale: 0, opacity: 0 }}
                       transition={{
                         scale: { repeat: Infinity, duration: 3, ease: 'easeInOut' },
-                        default: { type: 'spring', damping: 12, stiffness: 300 }
+                        default: { type: 'spring', damping: 12, stiffness: 300 },
                       }}
                       style={styles.unreadBadge}
                     >
@@ -162,9 +178,6 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
           )}
         </div>
       </header>
-
-      {/* Archival Stitch Seam Divider */}
-      <div aria-hidden="true" style={styles.stitchSeam} />
 
       {/* Full-Screen Notification Drawer Overlay */}
       <AnimatePresence>
@@ -191,24 +204,16 @@ const Header = ({ onNavigate, onSelectMatch, title }) => {
 ================================================================== */
 const styles = {
   header: {
-    height: '45px',
+    height: '56px',
     boxSizing: 'border-box',
-    padding: '0 20px',
-    backgroundColor: design.color.paper,
+    padding: '0 16px',
+    backgroundColor: t.paper,
+    borderBottom: '1px solid rgba(212,197,169,0.7)',
     position: 'sticky',
     top: 0,
     zIndex: 500,
-    boxShadow: `0 4px 16px ${design.color.shadowWarm}`,
+    boxShadow: `0 4px 16px ${t.shadowWarm}`,
     contain: 'layout style', // Isolates layout rendering
-  },
-  paperGrain: {
-    position: 'absolute',
-    inset: 0,
-    backgroundImage: `url("${design?.texture?.grain || ''}")`,
-    mixBlendMode: 'multiply',
-    opacity: 0.85,
-    pointerEvents: 'none',
-    zIndex: 1,
   },
   logoContainer: {
     display: 'flex',
@@ -220,20 +225,20 @@ const styles = {
     margin: '-4px', // expands touch target
   },
   logoWordmark: {
-    fontFamily: design?.font?.display || "'Playfair Display', serif",
+    fontFamily: t.fontDisplay,
     fontSize: '20px',
     fontWeight: 900,
-    color: design.color.ink,
-    letterSpacing: '-0.03em',
+    color: t.ink,
+    letterSpacing: '-0.02em',
     margin: 0,
     lineHeight: 1,
     textTransform: 'lowercase', // Aligned with the Splash screen style
   },
   pageTitle: {
-    fontFamily: design?.font?.display || "'Playfair Display', serif",
+    fontFamily: t.fontDisplay,
     fontSize: '20px',
     fontWeight: 800,
-    color: design.color.ink,
+    color: t.ink,
     letterSpacing: '-0.02em',
     margin: 0,
   },
@@ -244,48 +249,42 @@ const styles = {
   },
   bellButton: {
     position: 'relative',
-    backgroundColor: design.color.surface,
-    border: `1.5px solid ${design.color.borderDark}`,
-    borderRadius: design?.radius?.sm || '8px',
-    width: '32px',
-    height: '32px',
+    backgroundColor: t.surfaceAlt,
+    border: '1px solid rgba(212,197,169,0.7)',
+    borderRadius: '12px',
+    width: '40px',
+    height: '40px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
-    boxShadow: `0 2px 8px ${design.color.shadowWarm}`,
+    boxShadow: '0 4px 12px rgba(88,63,30,0.12)',
   },
   unreadBadge: {
     position: 'absolute',
     top: '-5px',
     right: '-5px',
-    backgroundColor: design.color.crimson,
-    minWidth: '17px',
-    height: '17px',
-    borderRadius: '9px',
+    backgroundColor: t.crimson,
+    minWidth: '18px',
+    height: '18px',
+    borderRadius: '999px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: '0 3px',
-    border: `1.5px solid ${design.color.paper}`,
-    boxShadow: '0 2px 6px rgba(139, 26, 26, 0.4), inset 0 1px 2px rgba(255, 255, 255, 0.25)',
+    padding: '0 4px',
+    border: `1.5px solid ${t.paper}`,
+    boxShadow: '0 2px 6px rgba(139, 26, 26, 0.3)',
     willChange: 'transform',
     zIndex: 5,
   },
   badgeText: {
-    fontFamily: "'Inter', sans-serif",
+    fontFamily: t.fontBody,
     fontSize: '9px',
     fontWeight: 800,
     color: '#ffffff',
     letterSpacing: '0.3px',
     lineHeight: 1,
-  },
-  stitchSeam: {
-    position: 'relative',
-    zIndex: 499,
-    height: '1px',
-    backgroundImage: `repeating-linear-gradient(90deg, ${design.color.borderDark} 0px, ${design.color.borderDark} 6px, transparent 6px, transparent 12px)`,
-    opacity: 0.6,
+    fontVariantNumeric: 'tabular-nums',
   },
 };
 

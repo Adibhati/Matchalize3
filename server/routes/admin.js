@@ -129,6 +129,29 @@ router.get('/reports', async (req, res) => {
   }
 });
 
+router.put('/reports/bulk', async (req, res) => {
+  try {
+    const { ids, status } = req.body;
+    if (!Array.isArray(ids) || !ids.length || !status) {
+      return res.status(400).json({ message: 'ids (array) and status required' });
+    }
+    if (ids.some(id => !mongoose.Types.ObjectId.isValid(id))) {
+      return res.status(400).json({ message: 'One or more invalid report IDs' });
+    }
+    if (!VALID_REPORT_STATUSES.includes(status)) {
+      return res.status(400).json({ message: `Invalid status. Must be one of: ${VALID_REPORT_STATUSES.join(', ')}` });
+    }
+    await Report.updateMany(
+      { _id: { $in: ids } },
+      { $set: { status } }
+    );
+    res.json({ message: `${ids.length} reports updated to ${status}` });
+  } catch (err) {
+    console.error('Admin bulk update error:', err);
+    res.status(500).json({ message: 'Failed to bulk update' });
+  }
+});
+
 router.put('/reports/:id', async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
@@ -150,29 +173,6 @@ router.put('/reports/:id', async (req, res) => {
   } catch (err) {
     console.error('Admin report update error:', err);
     res.status(500).json({ message: 'Failed to update report' });
-  }
-});
-
-router.put('/reports/bulk', async (req, res) => {
-  try {
-    const { ids, status } = req.body;
-    if (!Array.isArray(ids) || !ids.length || !status) {
-      return res.status(400).json({ message: 'ids (array) and status required' });
-    }
-    if (ids.some(id => !mongoose.Types.ObjectId.isValid(id))) {
-      return res.status(400).json({ message: 'One or more invalid report IDs' });
-    }
-    if (!VALID_REPORT_STATUSES.includes(status)) {
-      return res.status(400).json({ message: `Invalid status. Must be one of: ${VALID_REPORT_STATUSES.join(', ')}` });
-    }
-    await Report.updateMany(
-      { _id: { $in: ids } },
-      { $set: { status } }
-    );
-    res.json({ message: `${ids.length} reports updated to ${status}` });
-  } catch (err) {
-    console.error('Admin bulk update error:', err);
-    res.status(500).json({ message: 'Failed to bulk update' });
   }
 });
 
