@@ -8,5 +8,9 @@ const blockSchema = new mongoose.Schema({
 
 blockSchema.index({ blocker: 1, blocked: 1 }, { unique: true });
 
+// Fast lookup: "everyone who blocked ME" (used to filter the swipe deck).
+// Without this, that half of the query reads the entire blocks table.
+blockSchema.index({ blocked: 1 });
+
 const Block = mongoose.model('Block', blockSchema);
 export default Block;

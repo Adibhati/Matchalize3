@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { api } from './api';
-import { theme as design } from './theme';
+import neu from '../styles/neu';
+
+const design = neu;
 
 const AppConfigContext = createContext(null);
 

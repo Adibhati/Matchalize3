@@ -2,21 +2,11 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
-import { theme as design } from '../../utils/theme';
+import neu from '../../styles/neu';
 
 const REACTION_EMOJIS = ['❤️', '😂', '🔥', '👍', '😲', '😢'];
 
-/* ==================================================================
-   ARCHIVAL THEME CONSTANTS
-================================================================== */
-const theme = {
-  paper: '#fdfbf7',
-  borderDark: '#d4c5a9',
-  ink: '#1a1a1a',
-  crimson: '#8b1a1a',
-  shadowWarm: 'rgba(139, 69, 19, 0.15)',
-  shadowDark: 'rgba(26, 26, 26, 0.25)',
-};
+const t = neu;
 
 const EmojiPicker = ({ anchorRect, onSelect, onClose }) => {
   if (!anchorRect) return null;
@@ -79,7 +69,7 @@ const EmojiPicker = ({ anchorRect, onSelect, onClose }) => {
         style={{
           position: 'fixed',
           inset: 0,
-          backgroundColor: 'rgba(20, 15, 10, 0.4)',
+          backgroundColor: 'rgba(25, 25, 25, 0.4)',
           backdropFilter: 'blur(2px)', // Subtle focus pull
           zIndex: 9996,
         }}
@@ -98,11 +88,10 @@ const EmojiPicker = ({ anchorRect, onSelect, onClose }) => {
           left,
           width: pickerWidth,
           height: pickerHeight,
-          backgroundColor: theme.paper,
-          backgroundImage: `url("${design?.texture?.grain || ''}")`,
-          border: `1.5px solid ${theme.borderDark}`,
+          backgroundColor: t.paper,
+          backgroundImage: `url("${t.grain || ''}")`,
+          border: `2px solid ${t.ink}`,
           borderRadius: '32px', // Pill shape for reaction menus
-          boxShadow: `0 16px 40px ${theme.shadowDark}, 0 4px 12px ${theme.shadowWarm}`,
           zIndex: 9997,
           padding: '0 16px',
           display: 'flex',

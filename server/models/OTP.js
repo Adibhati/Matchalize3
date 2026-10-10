@@ -8,9 +8,25 @@ const otpSchema = new mongoose.Schema(
       trim: true,
       lowercase: true,
     },
-    otp: {
+    // HMAC-SHA256 fingerprint of the code — NOT the code itself.
+    // See utils/otpHash.js. The plaintext code only ever exists in memory
+    // long enough to be emailed.
+    otpHash: {
       type: String,
       required: true,
+    },
+    // The college the user PICKED before requesting the code.
+    //
+    // ⚠️ This is the binding between step 1 (pick your college) and step 3
+    // (enter the code). It lives server-side so the client cannot re-assert a
+    // different college at verification time — otherwise the picker would be
+    // advisory only, since anyone could send a code request for IIT Bombay and
+    // verify against whichever college they actually wanted.
+    collegeCode: {
+      type: String,
+      default: '',
+      trim: true,
+      lowercase: true,
     },
     expiresAt: {
       type: Date,

@@ -1,5 +1,21 @@
 import { CAST, CAST_ORDER } from './cast.mjs';
 import { personaImage } from './art.mjs';
+import { computeAgeFromDob } from '../../utils/age.js';
+
+// A dob that resolves to exactly `spec.age` today — age is derived from dob at
+// read time (utils/age.js), so personas need both to agree.
+const dobForAge = (age) => {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - age);
+  d.setDate(d.getDate() - 5);
+  return d;
+};
+
+// Self-check: personas drive the QA harness, and an off-by-one here would make
+// every QA screenshot show a plausible-but-wrong age.
+if (computeAgeFromDob(dobForAge(21)) !== 21) {
+  throw new Error('dobForAge() does not round-trip through computeAgeFromDob()');
+}
 
 // Deterministic name pool for the filler society (balance ~ 24M / 16F)
 const PERSONA_NAMES = [
@@ -86,45 +102,14 @@ function buildFiller(cfg) {
     interestedIn: normInterested(sex === 'M' ? ['female'] : ['male']),
     intent: ['Dating', 'Friends'],
     age,
-    compat: 'plain',
     role: null,
     seed,
     _fillIdx: idx,
   };
 }
 
-// Signature answers = the option key chosen for every question, same for drishti & arjun.
-const SIGNATURE_KEY_BY_Q = {
-  group_project: 'carry',
-  weekend: 'out',
-  conflict: 'talk',
-  first_date: 'walk',
-  social: 'very',
-  comm_style: 'deep',
-  looking_for: 'see',
-};
-
-// Plain users pick a deterministic key per question that never matches the signature keys.
-const DIFFERENT_KEY_BY_Q = {
-  group_project: 'wing',
-  weekend: 'study',
-  conflict: 'loud',
-  first_date: 'movie',
-  social: 'home',
-  comm_style: 'meme',
-  looking_for: 'unsure',
-};
-
-export function buildCompatAnswers(qid, role) {
-  return {
-    question: qid,
-    answer: role === 'signature' ? SIGNATURE_KEY_BY_Q[qid] : DIFFERENT_KEY_BY_Q[qid],
-  };
-}
-
 export function buildPersonas(cfg) {
   fillerIdx = 0;
-  const questions = (cfg.compatQuestions || []).map((q) => q.id);
   const prompts = cfg.prompts || ['A shower thought I recently had...', 'My ideal weekend looks like...', 'Two truths and a lie...'];
   const interests = cfg.interests || [];
   const branches = cfg.branches || BRANCH_POOL;
@@ -132,20 +117,18 @@ export function buildPersonas(cfg) {
 
   const buildUser = (spec, role) => {
     const seed = spec.email;
-    const compatRole = spec.compat || 'plain';
     const photos = [
       personaImage(seed + ':p0', 'portrait'),
       personaImage(seed + ':p1', 'square'),
       personaImage(seed + ':p2', 'square'),
       personaImage(seed + ':p3', 'land'),
     ];
-    const usedQs = questions.slice(0, 3);
-    const promptSlots = usedQs.map((qid, i) => ({
+    // Three prompt slots, filled from the prompt bank.
+    const promptSlots = [0, 1, 2].map((_, i) => ({
       question: prompts[i % prompts.length] || `A shower thought I recently had...`,
       answer: pick(ANSWER_POOL, hashNum(seed + 'a' + i)),
       photoUrl: i === 0 ? photos[2] : '',
     }));
-    const compatAnswers = questions.map((qid) => buildCompatAnswers(qid, compatRole));
     const gender = normGender(spec.gender) || 'Female';
     return {
       email: spec.email,
@@ -155,6 +138,7 @@ export function buildPersonas(cfg) {
       isOnboarded: !spec.fresh,
       name: spec.name,
       age: spec.age,
+      dob: dobForAge(spec.age),
       gender,
       pronouns: gender === 'Male' ? 'he/him' : gender === 'Female' ? 'she/her' : 'they/them',
       branch: spec.branch || pick(branches, hashNum(seed)),
@@ -165,9 +149,7 @@ export function buildPersonas(cfg) {
       prompts: promptSlots,
       intent: spec.intent || ['Dating'],
       interestedIn: normInterested(spec.interestedIn),
-      ageRange: { min: 18, max: 30 },
       interests: [pick(interests, hashNum(seed + 'i1')), pick(interests, hashNum(seed + 'i2')), pick(interests, hashNum(seed + 'i3'))].filter((v, i, a) => a.indexOf(v) === i),
-      compatAnswers,
       onboardingStep: 8,
       role,
     };

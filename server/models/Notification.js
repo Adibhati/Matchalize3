@@ -14,7 +14,13 @@ const notificationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['new_letter', 'priority_seal'],
+      /* 'new_letter' and 'priority_telegram' are RETIRED as writers — the deck
+         now emits 'new_align' for every expression of interest. They stay in the
+         enum because unread rows carrying them remain in users' drawers and must
+         still validate. Anything missing from this list is REJECTED by Mongoose,
+         which is a 500 on the Align route — the single most important entry
+         here is 'new_align'. */
+      enum: ['new_letter', 'priority_telegram', 'new_align'],
       required: true,
     },
     interactionRef: {

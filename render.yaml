@@ -1,0 +1,154 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# RENDER BLUEPRINT — Matchalize server
+#
+# Deploy with:  New → Blueprint → point at this repo → Apply
+#
+# ⚠️ SECRETS ARE NOT IN THIS FILE, BY DESIGN.
+# A blueprint is committed to git. Everything under `envVar:` with
+# `sync: false` is a SYNC-ON toggle: the KEY gets created and shown in the
+# Render dashboard as empty, and you paste the real value there once.
+# Render never writes your secret back into this file.
+#
+# The values to paste are listed in server/.env.example. Nothing is hardcoded.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  - type: web
+    name: huh-server
+    runtime: node
+    plan: free
+    region: singapore
+    # Render free tier. `free` spins down after 15 min idle with a ~60s cold
+    # start. Acceptable for a text-first waitlist launch; see the note at the
+    # bottom of this file before enabling live presence.
+    #
+    # Left on `free` deliberately. Upgrade to `starter` when the roulette
+    # online-presence queue ships — an asleep server cannot tell "quiet
+    # chamber" apart from "no chamber", and Socket.IO chat gaps for a minute
+    # on every reconnect.
+    autoDeploy: true
+    branch: main
+
+    # ⚠️ `--include=dev` IS NOT OPTIONAL HERE.
+    #
+    # NODE_ENV is set to production below, and npm reads NODE_ENV to decide
+    # whether to install devDependencies. But Vite — the thing that builds the
+    # client — is a DEV dependency of client/package.json. So the obvious
+    # `npm install --prefix client` silently omits Vite and `npm run build`
+    # fails with "vite: not found" on the very first deploy.
+    #
+    # --include=dev overrides that for the build step. It does NOT mean
+    # devDependencies are kept at runtime in any meaningful sense — the server
+    # imports only production packages, and Render prunes the build cache.
+    buildCommand: npm install --include=dev --prefix client && npm install --prefix server && npm run build --prefix client
+
+    # Deliberately NOT `npm start` from the repo root: that script is
+    # `npm run build && npm start --prefix server`, which rebuilds the client on
+    # every single boot. The build already happened at build time, so a restart
+    # or a cold start should not pay for it — on the free tier that is real
+    # downtime added to every wake-up.
+    startCommand: npm start --prefix server
+
+    healthCheckPath: /health
+
+    envVars:
+      # ── Injected by Render. Leave as-is. ──────────────────────────────────
+      - key: NODE_VERSION
+        value: "22"
+
+      # ── Set this yourself. There is no safe default; the server refuses to
+      #    boot without it, because an unset NODE_ENV silently enables the
+      #    permissive branch in the cookie Secure flag, the CORS LAN allowlist,
+      #    the OTP console-log, and the https:// photo-URL check.
+      - key: NODE_ENV
+        value: production
+
+      # ── The client URL, scheme included, NO trailing slash. This single
+      #    value drives the CORS allowlist AND the CSP connect-src list.
+      #    Change the domain and this is the only place to update it.
+      - key: FRONTEND_URL
+        sync: false
+
+      # ── MongoDB Atlas SRV string. Password must be urlencoded, and the
+      #    literal "<password>" placeholder must be replaced.
+      - key: MONGODB_URI
+        sync: false
+
+      # ── openssl rand -base64 48
+      #    Rotating JWT_SECRET logs every user out at once.
+      - key: JWT_SECRET
+        generateValue: true
+
+      # ── Separate from JWT_SECRET so rotating sessions does not also rotate
+      #    OTP hashes. Falls back to JWT_SECRET if left empty (server warns).
+      - key: OTP_HASH_SECRET
+        generateValue: true
+
+      # ── Without this the server boots but PRINTS OTP codes to stdout
+      #    instead of emailing them. No user can onboard. Resend → API Keys.
+      - key: RESEND_API_KEY
+        sync: false
+
+      # ── MUST be a verified sending domain. The default
+      #    "onboarding@resend.dev" only delivers to your own Resend account
+      #    address, so real students would receive nothing. Resend → Domains.
+      - key: RESEND_SENDER_EMAIL
+        sync: false
+      - key: RESEND_SENDER_NAME
+        value: huh?
+
+      # ── Cloudinary → Dashboard. Without these, photo uploads fail.
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+
+      # ── npx web-push generate-vapid-keys. Both or neither; regenerating
+      #    invalidates every existing subscription, so all users must
+      #    re-enable notifications.
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+
+      # ── Optional. Sentry only initialises when this is set.
+      - key: SENTRY_DSN
+        sync: false
+
+      # ── 🚪 THE PILOT GATE. Set to `iitb` to run an IIT-Bombay-only pilot.
+      #
+      #    Comma-separated college codes. EMPTY = no gate, every active college
+      #    can sign up. Enforced server-side at signup, so it cannot be bypassed
+      #    by posting a collegeCode directly. Gated-out campuses are also hidden
+      #    from the picker.
+      #
+      #    Deliberately separate from College.active in the database: that is
+      #    mutable at runtime from /admin, and a gate an admin click can switch
+      #    off is not a gate. This one only changes on redeploy.
+      - key: ALLOWED_COLLEGES
+        value: iitb
+
+      # ── The only email allowed to reach /api/admin.
+      - key: ADMIN_EMAIL
+        sync: false
+
+    # ─────────────────────────────────────────────────────────────────────
+    # AFTER FIRST DEPLOY, DO THESE TWO THINGS.
+    #
+    # 1. Frontend. This service serves the built client from ../client/dist
+    #    (see the express.static mount in server/index.js), so if you want the
+    #    client on its own Render static site instead, deploy it separately
+    #    and point FRONTEND_URL at that origin.
+    #
+    # 2. Keep-alive. If you stay on the free plan, ping /health — NOT
+    #    /robots.txt. While a free service is asleep Render answers that path
+    #    itself and never forwards it, so a monitor pointed there reports
+    #    green on a sleeping service. /health is a real route on this app.
+    #
+    #    Note this does NOT buy you free uptime: the ping costs the same 750
+    #    instance-hours/month that simply running costs, and a month only has
+    #    720–744 hours. Keeping one service awake consumes the entire
+    #    allowance.
+    # ─────────────────────────────────────────────────────────────────────

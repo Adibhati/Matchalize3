@@ -1,52 +1,70 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
-import { theme as design } from '../../utils/theme';
+import { api } from '../../utils/api';
+import neu from '../../styles/neu';
 import { ChevronLeft, Search, XCircle } from 'lucide-react';
 
-/* ==================================================================
-   ARCHIVAL THEME CONSTANTS
-================================================================== */
-const theme = {
-  paper: '#fdfbf7',
-  surface: '#ffffff',
-  surfaceAlt: '#f4f1ea',
-  border: '#e0d8c8',
-  borderDark: '#d4c5a9',
-  ink: '#1a1a1a',
-  inkMuted: '#8c8275',
-  accent: '#8b4513',
-  crimson: '#8b1a1a',
-  shadowWarm: 'rgba(139, 69, 19, 0.12)',
-};
+const t = neu;
 
-const SearchOverlay = ({ messages, myId, onClose, onJumpTo }) => {
+const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
   const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const debounceRef = useRef(null);
 
-  // Memoized Search Engine
-  const results = useMemo(() => {
-    if (!query.trim()) return [];
-    const q = query.toLowerCase();
-    return messages
-      .filter((m) => !m.deleted && m.text && m.text.toLowerCase().includes(q))
-      .slice(-50) // Cap at 50 results for optimal render performance
-      .reverse(); // Show most recent matches first
-  }, [query, messages]);
+  // Debounced server-side search — covers the FULL history, not just loaded pages
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!query.trim() || !alignmentId) {
+      setResults([]);
+      setIsSearching(false);
+      return;
+    }
+    setIsSearching(true);
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const data = await api.get(`/messages/${alignmentId}/search?q=${encodeURIComponent(query.trim())}`);
+        setResults(data?.results || []);
+      } catch (e) {
+        console.error('Search failed:', e);
+        setResults([]);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(debounceRef.current);
+  }, [query, alignmentId]);
+
+  // Escape regex metacharacters before building a RegExp.
+  //
+  // This used to interpolate `highlight` straight into `new RegExp(...)`, so
+  // typing `(` threw `SyntaxError: Unterminated group` DURING RENDER. It is
+  // caught by the root ErrorBoundary, which replaces the entire UI with the
+  // "Ink Spilled" screen until a manual reload — one character typed into the
+  // search box took the whole app down. `( ) [ ] { } * + ? ^ $ . | \` all break
+  // or mis-highlight. The server already escapes its `$regex` (messages.js:56);
+  // this is the same escaping applied client-side.
+  const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
   // Utility to safely highlight ALL occurrences of the search query
   const highlightText = (text, highlight) => {
     if (!highlight.trim()) return text;
-    const parts = text.split(new RegExp(`(${highlight})`, 'gi'));
+    let parts;
+    try {
+      parts = text.split(new RegExp(`(${escapeRegex(highlight)})`, 'gi'));
+    } catch {
+      return text; // Defensive: never let highlighting break the render
+    }
     return parts.map((part, i) =>
       part.toLowerCase() === highlight.toLowerCase() ? (
         <mark
           key={i}
           style={{
-            backgroundColor: 'rgba(212, 175, 55, 0.35)', // Archival highlighter
-            color: theme.ink,
+            backgroundColor: 'var(--n-yellow-deep)', // Archival highlighter
+            color: t.ink,
             padding: '0 2px',
             borderRadius: '2px',
-            boxShadow: '0 1px 2px rgba(212, 175, 55, 0.2)',
           }}
         >
           {part}
@@ -66,7 +84,7 @@ const SearchOverlay = ({ messages, myId, onClose, onJumpTo }) => {
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: theme.paper,
+        backgroundColor: t.paper,
         zIndex: 1000,
         display: 'flex',
         flexDirection: 'column',
@@ -76,25 +94,23 @@ const SearchOverlay = ({ messages, myId, onClose, onJumpTo }) => {
       {/* GPU Promoted Tactile Physics */}
       <style>{`
         .tactile-result-btn {
-          transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.2s ease, border-color 0.2s ease;
+          transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.2s ease;
           will-change: transform;
         }
         @media (hover: hover) {
           .tactile-result-btn:hover {
             transform: translate3d(0, -2px, 0) scale3d(1.01, 1.01, 1);
-            box-shadow: 0 6px 16px ${theme.shadowWarm} !important;
-            border-color: ${theme.borderDark} !important;
+            border-color: ${t.ink} !important;
           }
         }
         .tactile-result-btn:active {
           transform: scale3d(0.98, 0.98, 1) translate3d(0, 0, 0) !important;
           transition: transform 0.08s cubic-bezier(0, 0, 0.2, 1) !important;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.06) !important;
         }
 
         .archival-scrollbar::-webkit-scrollbar { width: 4px; }
         .archival-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .archival-scrollbar::-webkit-scrollbar-thumb { background: ${theme.borderDark}; border-radius: 4px; }
+        .archival-scrollbar::-webkit-scrollbar-thumb { background: ${t.ink}; border-radius: 4px; }
       `}</style>
 
       {/* Cinematic Film Grain Overlay */}
@@ -102,7 +118,7 @@ const SearchOverlay = ({ messages, myId, onClose, onJumpTo }) => {
         aria-hidden="true" 
         style={{ 
           position: 'absolute', inset: 0, 
-          backgroundImage: `url("${design?.texture?.grain || ''}")`, 
+          backgroundImage: `url("${t.grain || ''}")`, 
           mixBlendMode: 'multiply', opacity: 0.7, pointerEvents: 'none', zIndex: 0 
         }} 
       />
@@ -111,9 +127,8 @@ const SearchOverlay = ({ messages, myId, onClose, onJumpTo }) => {
       <div
         style={{
           padding: 'max(12px, env(safe-area-inset-top)) 16px 12px',
-          backgroundColor: theme.surface,
-          borderBottom: `1px solid ${theme.borderDark}`,
-          boxShadow: `0 4px 16px ${theme.shadowWarm}`,
+          backgroundColor: t.paper,
+          borderBottom: `1px solid ${t.ink}`,
           display: 'flex',
           alignItems: 'center',
           gap: '12px',
@@ -130,9 +145,9 @@ const SearchOverlay = ({ messages, myId, onClose, onJumpTo }) => {
           style={{
             background: 'none',
             border: 'none',
-            color: theme.inkMuted,
+            color: t.ink2,
             fontSize: '11px',
-            fontFamily: "'Inter', sans-serif",
+            fontFamily: t.fontBody,
             fontWeight: 800,
             textTransform: 'uppercase',
             letterSpacing: '1px',
@@ -149,25 +164,25 @@ const SearchOverlay = ({ messages, myId, onClose, onJumpTo }) => {
           flex: 1,
           display: 'flex',
           alignItems: 'center',
-          backgroundColor: theme.surfaceAlt,
-          border: `1.5px solid ${theme.border}`,
-          borderRadius: '12px',
+          backgroundColor: t.card,
+          border: `2px solid ${t.ink}`,
+          borderRadius: t.radius.md,
           padding: '6px 12px',
           gap: '8px',
         }}>
-          <Search size={16} color={theme.inkMuted} strokeWidth={2.5} />
+          <Search size={16} color={t.ink2} strokeWidth={2.5} />
           <input
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search archival logs..."
+            placeholder="Search messages..."
             style={{
               flex: 1,
               backgroundColor: 'transparent',
               border: 'none',
               fontSize: '15px',
-              fontFamily: "'Special Elite', 'Courier New', monospace",
-              color: theme.ink,
+              fontFamily: t.fontMono,
+              color: t.ink,
               outline: 'none',
               WebkitAppearance: 'none', // Strip iOS native input styling
             }}
@@ -184,7 +199,7 @@ const SearchOverlay = ({ messages, myId, onClose, onJumpTo }) => {
                 }}
                 style={{
                   background: 'none', border: 'none', padding: 0,
-                  color: theme.inkMuted, cursor: 'pointer', display: 'flex'
+                  color: t.ink2, cursor: 'pointer', display: 'flex'
                 }}
               >
                 <XCircle size={16} color="currentColor" />
@@ -206,22 +221,39 @@ const SearchOverlay = ({ messages, myId, onClose, onJumpTo }) => {
           contain: 'layout style paint',
         }}
       >
-        {query.trim() && results.length === 0 && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            style={{
-              textAlign: 'center',
-              padding: '60px 20px',
-              color: theme.inkMuted,
-              fontFamily: "'Playfair Display', serif",
-              fontStyle: 'italic',
-              fontSize: '16px',
-            }}
-          >
-            No artifacts found matching "{query}"
-          </motion.div>
-        )}
+{query.trim() && isSearching && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              style={{
+                textAlign: 'center',
+                padding: '60px 20px',
+                color: t.ink2,
+                fontFamily: t.fontHeavy,
+                fontStyle: 'italic',
+                fontSize: '16px',
+              }}
+            >
+              Consulting the archives...
+            </motion.div>
+          )}
+
+          {query.trim() && !isSearching && results.length === 0 && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              style={{
+                textAlign: 'center',
+                padding: '60px 20px',
+                color: t.ink2,
+                fontFamily: t.fontHeavy,
+                fontStyle: 'italic',
+                fontSize: '16px',
+              }}
+            >
+              No artifacts found matching "{query}"
+            </motion.div>
+          )}
 
         {results.map((m) => {
           const isMine = String(m.senderId || m.sender) === String(myId);
@@ -249,38 +281,37 @@ const SearchOverlay = ({ messages, myId, onClose, onJumpTo }) => {
                 textAlign: 'left',
                 padding: '16px',
                 marginBottom: '12px',
-                backgroundColor: theme.surface,
-                border: `1px solid ${theme.border}`,
-                borderLeft: `3px solid ${isMine ? theme.accent : theme.crimson}`,
-                borderRadius: '12px',
+                backgroundColor: t.card,
+                border: `2px solid ${t.ink}`,
+                borderLeft: `4px solid ${isMine ? t.yellow : t.coral}`,
+                borderRadius: t.radius.md,
                 cursor: 'pointer',
-                boxShadow: `0 2px 8px ${theme.shadowWarm}`,
                 outline: 'none',
                 WebkitTapHighlightColor: 'transparent',
               }}
             >
               <div
                 style={{
-                  fontFamily: "'Inter', sans-serif",
+                  fontFamily: t.fontBody,
                   fontSize: '10px',
                   fontWeight: 800,
                   letterSpacing: '1px',
                   textTransform: 'uppercase',
-                  color: theme.inkMuted,
+                  color: t.ink2,
                   marginBottom: '8px',
                   display: 'flex',
                   justifyContent: 'space-between'
                 }}
               >
-                <span>{isMine ? 'Your Log' : 'Their Log'}</span>
-                <span>{time}</span>
+                <span>{isMine ? 'Your messages' : 'Their messages'}</span>
+                <span style={{ fontFamily: t.fontMono }}>{time}</span>
               </div>
               
               <div
                 style={{
-                  fontFamily: "'Special Elite', 'Courier New', monospace",
+                  fontFamily: t.fontMono,
                   fontSize: '14px',
-                  color: theme.ink,
+                  color: t.ink,
                   lineHeight: 1.5,
                   wordBreak: 'break-word',
                 }}

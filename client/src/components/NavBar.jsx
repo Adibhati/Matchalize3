@@ -1,214 +1,265 @@
-import React from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { triggerHaptic } from '../utils/haptics';
-import { theme as design } from '../utils/theme';
-import { Compass, Heart, User } from 'lucide-react';
 
-/* Locked tokens — same family as ProfileCard */
-const t = {
-  paper: '#fdfbf7',
-  lineDark: '#d4c5a9',
-  ink: '#1a1a1a',
-  inkMuted: '#8c8275',
-  crimson: '#8b1a1a',
-  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
-  grain: design?.texture?.grain || '',
+import React from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
+import { triggerHaptic } from '../utils/haptics';
+import { Compass, Heart, User, Shuffle } from 'lucide-react';
+import neu from '../styles/neu';
+
+const C = {
+  ...neu,
+  ink: '#111211',
+  ink2: '#383832',
+  paper: '#F1EDE2',
+  yellow: '#E0A15E',
+  coral: '#C96F68',
+  green: '#779477',
+  hair: 'rgba(17,18,17,.2)',
+  fontHeavy: "'Barlow Condensed', sans-serif",
+  fontBody: "'Space Grotesk', sans-serif",
+  fontMono: "'IBM Plex Mono', monospace",
 };
 
 const tabs = [
-  { key: 'discover', label: 'Discover', Icon: Compass },
-  { key: 'matches', label: 'Matches', Icon: Heart },
+  { key: 'discover', label: 'Deck', Icon: Compass },
+  { key: 'matches', label: 'Letters', Icon: Heart },
+  { key: 'roulette', label: 'Roulette', Icon: Shuffle },
   { key: 'profile', label: 'Profile', Icon: User },
 ];
 
-/* ==================================================================
-   MAIN NAVBAR COMPONENT
-================================================================== */
+const NAV_CSS = `
+  .nb-bar {
+    position: relative;
+    z-index: 50;
+    flex-shrink: 0;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+    background: ${C.paper};
+    border-top: 1px solid ${C.ink};
+    box-shadow: 0 -4px 0 rgba(17,18,17,.06);
+    font-family: ${C.fontBody};
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .nb-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 8px;
+    width: 100%;
+    max-width: 480px;
+    margin: 0 auto;
+  }
+
+  .nb-tab {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+    min-height: 54px;
+    padding: 5px 2px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: ${C.ink};
+    cursor: pointer;
+    outline: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+      background-color .18s ease,
+      border-color .18s ease,
+      box-shadow .18s ease,
+      color .18s ease;
+  }
+
+  .nb-tab:focus-visible {
+    outline: 2px solid ${C.ink};
+    outline-offset: 2px;
+  }
+
+  .nb-tab.active {
+    background: ${C.yellow};
+    border-color: ${C.ink};
+    box-shadow: 2px 2px 0 ${C.ink};
+  }
+
+  .nb-ic {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 23px;
+    color: ${C.ink2};
+    transition: transform .18s ease, color .18s ease;
+  }
+
+  .nb-tab.active .nb-ic {
+    color: ${C.ink};
+    transform: translateY(-1px);
+  }
+
+  .nb-label {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    color: ${C.ink2};
+    font-family: ${C.fontMono};
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .045em;
+    line-height: 1.1;
+    text-align: center;
+    text-transform: uppercase;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color .18s ease;
+  }
+
+  .nb-tab.active .nb-label {
+    color: ${C.ink};
+    font-weight: 700;
+  }
+
+  .nb-badge {
+    position: absolute;
+    top: -5px;
+    right: 4px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 19px;
+    height: 19px;
+    padding: 0 4px;
+    box-sizing: border-box;
+    border: 1px solid ${C.ink};
+    border-radius: 3px;
+    background: ${C.coral};
+    color: ${C.ink};
+    font-family: ${C.fontMono};
+    font-size: 9px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .nb-tab:not(.active):hover {
+      background: rgba(17,18,17,.055);
+      border-color: rgba(17,18,17,.15);
+    }
+  }
+
+  .nb-tab:active .nb-ic {
+    transform: scale(.92);
+  }
+
+  @media (max-width: 360px) {
+    .nb-bar {
+      padding-right: 7px;
+      padding-left: 7px;
+    }
+
+    .nb-row {
+      gap: 4px;
+    }
+
+    .nb-tab {
+      min-height: 50px;
+    }
+
+    .nb-label {
+      font-size: 8px;
+      letter-spacing: .025em;
+    }
+
+    .nb-badge {
+      right: 1px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .nb-ic,
+    .nb-label,
+    .nb-tab {
+      transition: none !important;
+    }
+  }
+`;
+
 const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
+  const reduceMotion = useReducedMotion();
 
   const handleTabClick = (key) => {
-    if (activeTab !== key) {
-      triggerHaptic('light');
-      onTabChange(key);
-    }
+    if (activeTab === key) return;
+
+    triggerHaptic('light');
+    onTabChange(key);
   };
 
   return (
-    <div style={styles.navContainer}>
-      {/* Grain film — same strength as every surface */}
-      <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 1 }} />
+    <nav className="nb-bar" aria-label="Primary">
+      <style>{NAV_CSS}</style>
 
-      <div style={styles.tabGrid}>
-        {tabs.map((tab) => {
-          const isActive = activeTab === tab.key;
-          const showBadge = tab.key === 'matches' && matchBadge > 0;
+      <div className="nb-row">
+        {tabs.map(({ key, label, Icon }) => {
+          const isActive = activeTab === key;
+          const showBadge = key === 'matches' && matchBadge > 0;
 
           return (
             <motion.button
-              key={tab.key}
-              onClick={() => handleTabClick(tab.key)}
-              whileTap={{ scale: 0.96 }}
-              transition={{ duration: 0.15, ease: 'easeOut' }}
-              style={styles.tabButton}
-              aria-label={tab.label}
+              key={key}
+              type="button"
+              className={`nb-tab${isActive ? ' active' : ''}`}
+              onClick={() => handleTabClick(key)}
+              aria-label={
+                key === 'matches' && matchBadge > 0
+                  ? `${label}, ${matchBadge} unread matches`
+                  : label
+              }
               aria-current={isActive ? 'page' : undefined}
+              whileTap={reduceMotion ? undefined : { scale: 0.96 }}
+              transition={
+                reduceMotion
+                  ? { duration: 0 }
+                  : { type: 'spring', stiffness: 450, damping: 28 }
+              }
             >
-              {/* Active indicator — one sliding crimson bar */}
-              {isActive && (
-                <motion.div
-                  layoutId="navActiveIndicator"
-                  transition={{ type: 'spring', damping: 28, stiffness: 350 }}
-                  style={styles.activeBar}
+              <span className="nb-ic" aria-hidden="true">
+                <Icon
+                  size={20}
+                  strokeWidth={isActive ? 2.5 : 1.9}
                 />
-              )}
-
-              {/* Icon & badge */}
-              <div style={styles.iconContainer}>
-                <motion.div
-                  initial={false}
-                  animate={{
-                    scale: isActive ? 1.1 : 1,
-                    color: isActive ? t.crimson : t.inkMuted,
-                  }}
-                  transition={{ duration: 0.2, ease: 'easeOut' }}
-                  style={styles.icon}
-                >
-                  <tab.Icon size={18} color="currentColor" strokeWidth={isActive ? 2.5 : 2} />
-                </motion.div>
-
-                <AnimatePresence>
-                  {showBadge && (
-                    <motion.div
-                      initial={{ scale: 0 }}
-                      animate={{ scale: [1, 1.08, 1] }}
-                      exit={{ scale: 0, opacity: 0 }}
-                      transition={{
-                        scale: { repeat: Infinity, duration: 3, ease: 'easeInOut' },
-                        default: { type: 'spring', damping: 12, stiffness: 300 },
-                      }}
-                      style={styles.badge}
-                    >
-                      <span style={styles.badgeText}>
-                        {matchBadge > 99 ? '99+' : matchBadge}
-                      </span>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-
-              <span
-                style={{
-                  ...styles.label,
-                  color: isActive ? t.crimson : t.inkMuted,
-                  fontWeight: isActive ? 800 : 600,
-                }}
-              >
-                {tab.label}
               </span>
+
+              <span className="nb-label">{label}</span>
+
+              {showBadge && (
+                <motion.span
+                  key={matchBadge}
+                  className="nb-badge"
+                  initial={reduceMotion ? false : { scale: 0.65, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={
+                    reduceMotion
+                      ? { duration: 0 }
+                      : { type: 'spring', stiffness: 480, damping: 24 }
+                  }
+                >
+                  {matchBadge > 99 ? '99+' : matchBadge}
+                </motion.span>
+              )}
             </motion.button>
           );
         })}
       </div>
-    </div>
+    </nav>
   );
-};
-
-/* ==================================================================
-   STYLES
-================================================================== */
-const styles = {
-  navContainer: {
-    marginTop: 'auto', // Flexbox: forces navbar to the bottom
-    flexShrink: 0,
-    backgroundColor: t.paper,
-    borderTop: '1px solid rgba(212,197,169,0.7)',
-    zIndex: 10,
-    boxShadow: '0 -4px 16px rgba(88,63,30,0.1)',
-    paddingBottom: 'max(6px, env(safe-area-inset-bottom))',
-    userSelect: 'none',
-    WebkitUserSelect: 'none',
-    contain: 'layout style',
-  },
-  tabGrid: {
-    display: 'flex',
-    position: 'relative',
-    zIndex: 3,
-    paddingTop: '2px',
-  },
-  tabButton: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '2px',
-    background: 'none',
-    border: 'none',
-    padding: '7px 0 3px',
-    cursor: 'pointer',
-    position: 'relative',
-    outline: 'none',
-    touchAction: 'manipulation', // Prevents default browser zoom/pan on double tap
-  },
-  iconContainer: {
-    position: 'relative',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: '22px',
-    width: '32px',
-  },
-  icon: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    willChange: 'transform, color',
-  },
-  badge: {
-    position: 'absolute',
-    top: '-4px',
-    right: '-4px',
-    minWidth: '18px',
-    height: '18px',
-    padding: '0 4px',
-    borderRadius: '999px',
-    backgroundColor: t.crimson,
-    border: `1.5px solid ${t.paper}`,
-    boxShadow: '0 2px 6px rgba(139, 26, 26, 0.3)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 5,
-    willChange: 'transform',
-    boxSizing: 'border-box',
-  },
-  badgeText: {
-    fontFamily: t.fontBody,
-    fontSize: '9px',
-    fontWeight: 800,
-    color: '#ffffff',
-    letterSpacing: '0.3px',
-    lineHeight: 1,
-    fontVariantNumeric: 'tabular-nums',
-  },
-  label: {
-    fontFamily: t.fontBody,
-    fontSize: '10px',
-    letterSpacing: '1px',
-    textTransform: 'uppercase',
-    transition: 'color 0.2s ease',
-  },
-  activeBar: {
-    position: 'absolute',
-    top: 0,
-    left: '50%',
-    marginLeft: '-16px',
-    width: '32px',
-    height: '2.5px',
-    backgroundColor: t.crimson,
-    borderRadius: '999px',
-    pointerEvents: 'none',
-  },
 };
 
 export default NavBar;

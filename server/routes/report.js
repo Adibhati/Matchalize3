@@ -1,7 +1,7 @@
 import express from 'express';
 import Report from '../models/Report.js';
 import Block from '../models/Block.js';
-import Match from '../models/Match.js';
+import Alignment from '../models/Alignment.js';
 import User from '../models/User.js';
 import Interaction from '../models/Interaction.js';
 import { protect } from '../middleware/auth.js';
@@ -34,15 +34,32 @@ router.post('/:userId', protect, async (req, res) => {
   }
 
   try {
-    const reported = await User.findById(reportedId);
+    // '+suspendedReason' only lifts that field's default exclusion — the rest
+    // of the document still comes back, so the escalation below does not write
+    // undefined over any other field.
+    const reported = await User.findById(reportedId).select('+suspendedReason');
     if (!reported) return res.status(404).json({ message: 'User not found' });
 
-    const report = await Report.create({
-      reporter: req.user._id,
-      reported: reportedId,
-      reason,
-      details: details || '',
-    });
+    // Dismissed-aware report: a dismissed report can be re-opened by the same
+    // reporter; an active one still rejects duplicates (keeps the unique index valid).
+    const existingReport = await Report.findOne({ reporter: req.user._id, reported: reportedId });
+    let report;
+    if (existingReport && existingReport.status === 'dismissed') {
+      existingReport.reason = reason;
+      existingReport.details = details || '';
+      existingReport.status = 'pending';
+      existingReport.createdAt = new Date();
+      report = await existingReport.save();
+    } else if (existingReport) {
+      return res.status(409).json({ message: 'Already reported this user' });
+    } else {
+      report = await Report.create({
+        reporter: req.user._id,
+        reported: reportedId,
+        reason,
+        details: details || '',
+      });
+    }
 
     // Escalation: count only non-dismissed reports so admin dismissals work
     const activeReportCount = await Report.countDocuments({
@@ -55,12 +72,10 @@ router.post('/:userId', protect, async (req, res) => {
       reported.suspended = true;
       reported.suspendedAt = reported.suspendedAt || new Date();
       reported.suspendedReason = reported.suspendedReason || 'Multiple community reports';
-      reported.isGhost = true;
       reported.shadowbannedAt = reported.shadowbannedAt || new Date();
       reported.contentFrozen = false;
       await reported.save();
     } else if (activeReportCount >= 3) {
-      reported.isGhost = true;
       reported.shadowbannedAt = reported.shadowbannedAt || new Date();
       reported.contentFrozen = true;
       await reported.save();
@@ -97,8 +112,8 @@ router.post('/block/:userId', protect, async (req, res) => {
       { upsert: true, new: true }
     );
 
-    // Deactivate any existing match
-    const match = await Match.findOne({
+    // Deactivate any existing alignment
+    const match = await Alignment.findOne({
       users: { $all: [req.user._id, blockedId] },
       isActive: true,
     });
@@ -109,20 +124,24 @@ router.post('/block/:userId', protect, async (req, res) => {
 
     // Create permanent exclusion so they never appear in each other's Discover deck
     await Interaction.create([
-      { actorId: req.user._id, targetId: blockedId, actionType: 'archive', cooldownExpiresAt: null },
-      { actorId: blockedId, targetId: req.user._id, actionType: 'archive', cooldownExpiresAt: null },
+      { actorId: req.user._id, targetId: blockedId, actionType: 'archive', cooldownExpiresAt: null, origin: 'block' },
+      { actorId: blockedId, targetId: req.user._id, actionType: 'archive', cooldownExpiresAt: null, origin: 'block' },
     ]);
 
     const io = req.app.get('io');
     if (io) {
-      io.to(blockedId).emit('unmatch-notification', { matchId: match?._id });
+      io.to(blockedId).emit('unmatch-notification', { alignmentId: match?._id });
     }
 
     // In-app (socket 'unmatch-notification') + push already notify the blocked user.
     // No Notification DB row is created — the model is purpose-built for letter interactions.
+    // Deliberately does NOT name who blocked them. A named notification confirms
+    // both that a block happened and that the blocker is still active on the
+    // platform. A generic message keeps the block indistinguishable from an
+    // ordinary unmatch.
     addToQueue(() => sendPushNotification(blockedId, {
-      title: 'Unmatched',
-      body: `You were unmatched by ${req.user.name}`,
+      title: 'Matchalize',
+      body: 'This conversation is no longer available.',
     }));
 
     res.status(200).json({ message: 'User blocked' });
@@ -142,8 +161,10 @@ router.delete('/block/:userId', protect, async (req, res) => {
       blocked: req.params.userId,
     });
 
-    // Remove permanent exclusion so they can re-encounter in Discover
+    // Remove permanent exclusion so they can re-encounter in Discover.
+    // Only block-created archives are reversed — unmatches/passes stay permanent.
     await Interaction.deleteMany({
+      origin: 'block',
       $or: [
         { actorId: req.user._id, targetId: req.params.userId, actionType: 'archive' },
         { actorId: req.params.userId, targetId: req.user._id, actionType: 'archive' },
@@ -162,7 +183,7 @@ router.delete('/block/:userId', protect, async (req, res) => {
 router.get('/list', protect, async (req, res) => {
   try {
     const blocks = await Block.find({ blocker: req.user._id })
-      .populate('blocked', 'name photos branch year hostel pronouns')
+      .populate('blocked', 'name photos year pronouns')
       .sort({ createdAt: -1 });
 
     res.status(200).json({
@@ -170,9 +191,7 @@ router.get('/list', protect, async (req, res) => {
         _id: b.blocked._id,
         name: b.blocked.name,
         photo: b.blocked.photos?.[0],
-        branch: b.blocked.branch,
         year: b.blocked.year,
-        hostel: b.blocked.hostel,
         pronouns: b.blocked.pronouns,
         blockedAt: b.createdAt,
       })),
@@ -183,26 +202,17 @@ router.get('/list', protect, async (req, res) => {
   }
 });
 
-// @route   GET /api/block/status/:userId
-// @desc    Check block status with a user
-// @access  Private
-router.get('/status/:userId', protect, async (req, res) => {
-  try {
-    const block = await Block.findOne({
-      $or: [
-        { blocker: req.user._id, blocked: req.params.userId },
-        { blocker: req.params.userId, blocked: req.user._id },
-      ],
-    });
-
-    res.status(200).json({
-      isBlocked: !!block,
-      iBlockedThem: block?.blocker?.toString() === req.user._id.toString(),
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Server error checking block status' });
-  }
-});
+// 🚫 REMOVED: GET /api/report/block/status/:userId
+//
+// It answered a SYMMETRIC question — `{ isBlocked, iBlockedThem }` for ANY pair
+// of user ids — which made it an oracle: probe any id and learn definitively that
+// a block exists, and in which direction. That tells a blocked person they were
+// blocked specifically, which is exactly what blocking exists to conceal (it also
+// confirms the blocker is still on the platform).
+//
+// Nothing in the client ever called it (only POST /block/:id from Chat.jsx and
+// DELETE /block/:id from Settings.jsx), so it was pure attack surface with no
+// product purpose. If a UI ever needs "did *I* block this person", re-add it
+// scoped to `{ blocker: req.user._id }` only — never the symmetric $or.
 
 export default router;

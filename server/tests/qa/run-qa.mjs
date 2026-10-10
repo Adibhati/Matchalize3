@@ -74,7 +74,7 @@ async function main() {
   }
 
   const cfg = await loadConfig();
-  console.log(`[qa] config loaded: ${cfg.compatQuestions?.length || 0} inquiries, ${cfg.prompts?.length || 0} prompts.`);
+  console.log(`[qa] config loaded: ${cfg.prompts?.length || 0} prompts.`);
 
   const browser = await chromium.launch({ headless: true });
   const selected = flags.scenes?.length ? flags.scenes : flags.only?.length ? flags.only : definitions.map((d) => d.id);

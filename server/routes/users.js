@@ -1,18 +1,186 @@
 import express from 'express';
 import { body } from '../middleware/validate.js';
 import User from '../models/User.js';
-import Match from '../models/Match.js';
-import Message from '../models/Message.js';
+import DiscoverSession from '../models/DiscoverSession.js';
+import Alignment from '../models/Alignment.js';
 import Block from '../models/Block.js';
 import Report from '../models/Report.js';
 import Notification from '../models/Notification.js';
 import Analytics from '../models/Analytics.js';
-import Interaction from '../models/Interaction.js';
 import { protect, clearAuthCookie } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { deleteCloudinaryFile } from '../config/cloudinary.js';
+import { isOwnedMediaUrl, isAcceptableMediaUrl } from '../utils/media.js';
+import { computeAgeFromDob } from '../utils/age.js';
+import { sanitizeLatLng, isFreshLocation, haversineKm, LOCATION_DRIFT_KM } from '../utils/geo.js';
+import { computeScore, MAX_PHOTOS, MAX_PROMPTS } from '../utils/ladder.js';
+import OTP from '../models/OTP.js';
+import { resolveCollege } from './auth.js';
+import College from '../models/College.js';
+import { verifyOtp, normalizeEmail } from '../utils/otpHash.js';
+import { toPublicCard } from '../utils/publicCard.js';
+import { GENDERS, INTENTS, DEPRECATED_INTENTS, INTEREST_TAGS, APP_CONSTANTS } from '../config/appData.js';
 
 const router = express.Router();
+
+// Prompt answer/question length bounds. Mirrored by `maxLength` on the two client
+// textareas (Onboarding.jsx, Profile.jsx) and enforced in the schema as a
+// backstop. Keep all three in sync.
+const PROMPT_LIMITS = { question: 200, answer: 300 };
+
+/**
+ * Normalise a submitted `interests` array.
+ *
+ * Caps to MAX_INTERESTS and drops anything that is not actually in
+ * INTEREST_TAGS. Both halves matter: the cap is enforced HERE rather than
+ * trusted from the client (a client-side cap is a UI affordance, not a
+ * constraint), and the tag check stops a crafted request from stuffing
+ * arbitrary strings into a field that renders on other people's cards.
+ *
+ * Order is preserved and duplicates removed — the client renders them in the
+ * order chosen, which is part of what the selection means.
+ */
+const normaliseInterests = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const value of raw) {
+    if (typeof value !== 'string') continue;
+    const tag = INTEREST_TAGS.includes(value) ? value : null;
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    out.push(tag);
+    if (out.length >= APP_CONSTANTS.MAX_INTERESTS) break;
+  }
+  return out;
+};
+
+/**
+ * Normalise a submitted `intent` array, mapping any retired value forward.
+ *
+ * The mapping is the important part. Without it, a profile saved before the
+ * "Study Buddy" → "Activity Partner" rename keeps the old string forever, which
+ * is still a valid-looking value, so validation passes and the profile silently
+ * stops matching anyone who picked the new name. Mapping on write means even an
+ * untouched profile heals the next time its owner saves.
+ *
+ * ⚠️ NO LENGTH CAP. This used to stop at APP_CONSTANTS.MAX_INTENTS (2), on the
+ * argument that a profile claiming everything stops discriminating. That
+ * argument does not survive having only three options — holding all three is
+ * nearly the same as saying "no preference", which is honest — and the cap had a
+ * cost of its own: a genuinely open person had to lie about one, and a user who
+ * tapped a third chip and watched it not stick had no way to tell that from a
+ * bug. All three may now be held. Ranking still benefits from naming one, so the
+ * signal is preserved where it is actually useful.
+ *
+ * Duplicates are still collapsed: mapping "Study Buddy" and "Activity Partner"
+ * onto the same value would otherwise store the same intent twice. */
+const normaliseIntent = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const value of raw) {
+    if (typeof value !== 'string') continue;
+    const mapped = DEPRECATED_INTENTS[value] || value;
+    if (!INTENTS.includes(mapped) || seen.has(mapped)) continue;
+    seen.add(mapped);
+    out.push(mapped);
+  }
+  return out;
+};
+
+/**
+ * The limits the USER SCHEMA enforces, mirrored here so over-length input
+ * produces a legible 400 instead of a 500.
+ *
+ * Why this must exist: Mongoose throws a ValidationError on `.save()`, and these
+ * routes' generic `catch` turns ANY thrown error into "Server error updating
+ * profile". So a user who typed a 70-character name was told the server broke,
+ * then had no idea why shortening it worked. Six fields had this problem.
+ *
+ * ⚠️ Keep in sync with the maxlength values in models/User.js. If you change one
+ * there, change it here — a mismatch means the schema is the only thing enforcing
+ * the field, which reintroduces the 500.
+ */
+const FIELD_LIMITS = {
+  name: 60,
+  pronouns: 30,
+  year: 40,
+  bio: 160,
+};
+
+/** Human-readable field labels for the error message. */
+const FIELD_LABELS = {
+  name: 'Name',
+  pronouns: 'Pronouns',
+  year: 'Year',
+  bio: 'Bio',
+};
+
+/**
+ * @returns {string|null} an error message, or null when everything is in bounds
+ */
+const validateFieldLengths = (body) => {
+  for (const [field, max] of Object.entries(FIELD_LIMITS)) {
+    const value = body?.[field];
+    // Only string values are checked; absent/optional fields are skipped, and a
+    // non-string is left to the schema to reject.
+    if (typeof value !== 'string') continue;
+    if (value.length > max) {
+      return `${FIELD_LABELS[field]} must be ${max} characters or fewer.`;
+    }
+  }
+  return null;
+};
+
+// The complete set of accepted `interestedIn` values. GENDERS is the canonical
+// list served to the client (routes/config.js:37); 'Everyone' is the opt-out
+// that discover.js filters out at :272, and is what Onboarding.jsx offers.
+const INTERESTED_IN_VALUES = [...GENDERS, 'Everyone'];
+
+/**
+ * Validate the "show me" preference list.
+ *
+ * Why this must exist: the field had NO validation at all — not a whitelist, not
+ * a type check, not a length cap — and the schema is a bare [String]. The failure
+ * mode is silent and permanent: discover.js:272 builds `{ gender: { $in: myGenders } }`
+ * from whatever is stored. A single unrecognised value ('everyone' with the wrong
+ * case, 'Other ' with a trailing space) matches zero profiles, so the user's deck
+ * is permanently empty with no error, no explanation, and no way to diagnose it
+ * from the UI. Worse, `interestedIn: {}` is a Mongoose CastError → 500.
+ *
+ * @returns {string|null} error message, or null when valid
+ */
+const validateInterestedIn = (value) => {
+  if (value === undefined) return null;
+  if (!Array.isArray(value)) {
+    return 'Gender preference must be a list.';
+  }
+  if (value.length === 0) return null;
+  for (const pref of value) {
+    if (typeof pref !== 'string') {
+      return 'Gender preference must be a list of text values.';
+    }
+    if (!INTERESTED_IN_VALUES.includes(pref)) {
+      return `"${pref}" is not a valid gender preference. Choose from: ${INTERESTED_IN_VALUES.join(', ')}.`;
+    }
+  }
+  return null;
+};
+
+const validatePromptLengths = (prompts) => {
+  for (const p of prompts) {
+    const answer = typeof p?.answer === 'string' ? p.answer : '';
+    if (answer.length > PROMPT_LIMITS.answer) {
+      return `Prompt answers must be ${PROMPT_LIMITS.answer} characters or fewer.`;
+    }
+    const question = typeof p?.question === 'string' ? p.question : '';
+    if (question.length > PROMPT_LIMITS.question) {
+      return `Prompt questions must be ${PROMPT_LIMITS.question} characters or fewer.`;
+    }
+  }
+  return null;
+};
 
 // Helper to collect all photo URLs (profile photos, bio photo, prompt attachments) from a user document
 const collectUserPhotos = (u) => {
@@ -25,8 +193,12 @@ const collectUserPhotos = (u) => {
   return urls;
 };
 
-// Helper function to validate image URLs
-const isValidImageUrl = (url) => {
+// Validate a profile image URL.
+// Beyond shape/host checks, the file must be one THIS user uploaded (or a
+// read-only Unsplash placeholder). A bare host check is not enough: photos are
+// public in Discover, so any user can copy someone else's URL into their own
+// profile — and saving/swapping/deleting it would then destroy their file.
+const isValidImageUrl = (url, userId) => {
   if (!url || typeof url !== 'string') return false;
 
   try {
@@ -44,7 +216,8 @@ const isValidImageUrl = (url) => {
       hostname.startsWith('192.168.') || 
       hostname.startsWith('172.')
     )) {
-      return /\.(jpg|jpeg|png|webp)$/i.test(parsed.pathname);
+      // Dev disk fallback: filenames are <userId>-<timestamp>.<ext>
+      return /\.(jpg|jpeg|png|webp)$/i.test(parsed.pathname) && isOwnedMediaUrl(url, userId);
     }
 
     const trustedHosts = [
@@ -57,8 +230,10 @@ const isValidImageUrl = (url) => {
     );
 
     if (!isTrusted) return false;
+    if (!/\.(jpg|jpeg|png|webp)$/i.test(parsed.pathname)) return false;
 
-    return /\.(jpg|jpeg|png|webp)$/i.test(parsed.pathname);
+    // OWNERSHIP: your own upload, or an Unsplash placeholder we can never delete.
+    return isAcceptableMediaUrl(url, userId);
   } catch {
     return false;
   }
@@ -72,9 +247,13 @@ router.post(
   [
     body('name').notEmpty().withMessage('Name is required'),
     body('age').isInt({ min: 18, max: 40 }).withMessage('Must be between 18 and 40'),
+    body('dob').isISO8601().withMessage('Date of birth is required and must be a valid date'),
     body('gender').notEmpty().withMessage('Gender is required'),
-    body('branch').notEmpty().withMessage('Branch is required'),
     body('year').notEmpty().withMessage('Year is required'),
+    body('graduatingYear')
+      .optional({ nullable: true })
+      .isInt({ min: new Date().getFullYear(), max: new Date().getFullYear() + 10 })
+      .withMessage('Enter a graduation year between now and the next 10 years'),
     body('intent').custom((val) => {
       if (Array.isArray(val)) return val.length > 0;
       return typeof val === 'string' && val.trim() !== '';
@@ -83,8 +262,9 @@ router.post(
   validate,
   async (req, res) => {
     const {
-      name, age, gender, pronouns, branch, year, hostel, bio, bioPhoto,
-      prompts, photos, intent, interestedIn, interests, compatAnswers,
+      name, gender, pronouns, year, bio, bioPhoto,
+      prompts, photos, intent, interestedIn, interests, dob,
+      graduatingYear, currentLatLng,
     } = req.body;
 
     try {
@@ -92,47 +272,106 @@ router.post(
       if (!user) return res.status(404).json({ message: 'User not found' });
       if (user.contentFrozen) {
         return res.status(403).json({
-          message: 'This feature is temporarily unavailable. Contact support@matchalize.com',
+          message: 'Edits are paused while your account is under review.',
           code: 'CONTENT_FROZEN',
         });
       }
 
       // VALIDATION: Check image URLs
-      const photosToSave = (Array.isArray(photos) ? photos : []).filter(Boolean).slice(0, 6);
-      if (!photosToSave.every(isValidImageUrl)) {
+      const photosToSave = (Array.isArray(photos) ? photos : []).filter(Boolean).slice(0, MAX_PHOTOS);
+      if (!photosToSave.every(p => isValidImageUrl(p, req.user._id))) {
         return res.status(400).json({ message: 'One or more photo URLs are invalid.' });
       }
 
-      const promptsToSave = Array.isArray(prompts) ? prompts.slice(0, 3) : [];
-      if (promptsToSave.some(p => p.photoUrl && !isValidImageUrl(p.photoUrl))) {
+      // bioPhoto used to be assigned with NO validation at all, so it was the
+      // easiest way to plant someone else's photo URL on a profile.
+      if (bioPhoto && !isValidImageUrl(bioPhoto, req.user._id)) {
+        return res.status(400).json({ message: 'Bio photo URL is invalid.' });
+      }
+
+      const promptsToSave = Array.isArray(prompts) ? prompts.slice(0, MAX_PROMPTS) : [];
+      if (promptsToSave.some(p => p.photoUrl && !isValidImageUrl(p.photoUrl, req.user._id))) {
         return res.status(400).json({ message: 'One or more prompt photo URLs are invalid.' });
       }
+      const promptLengthError = validatePromptLengths(promptsToSave);
+      if (promptLengthError) return res.status(400).json({ message: promptLengthError });
+
+      const setupLengthError = validateFieldLengths(req.body);
+      if (setupLengthError) return res.status(400).json({ message: setupLengthError });
+
+      const setupInterestedInError = validateInterestedIn(interestedIn);
+      if (setupInterestedInError) return res.status(400).json({ message: setupInterestedInError });
 
       const oldPhotos = collectUserPhotos(user);
 
       user.name = name;
-      user.age = age;
+      // Server-side age computation — never trust client-supplied age
+      const dobDate = new Date(dob);
+      const computedAge = computeAgeFromDob(dobDate);
+      if (!Number.isFinite(computedAge) || computedAge < 18 || computedAge > 40) {
+        return res.status(400).json({ message: 'Must be between 18 and 40' });
+      }
+      user.age = computedAge;
+      user.dob = dobDate;
       user.gender = gender;
       user.pronouns = pronouns || '';
-      user.branch = branch;
       user.year = year;
-      user.hostel = hostel || '';
+      user.graduatingYear = Number.isFinite(graduatingYear) ? graduatingYear : user.graduatingYear;
       user.bio = bio || '';
       user.bioPhoto = bioPhoto || '';
       user.prompts = promptsToSave;
       user.photos = photosToSave;
-      user.intent = intent;
+      user.intent = normaliseIntent(intent);
       user.interestedIn = interestedIn || [];
-      user.interests = Array.isArray(interests) ? interests.slice(0, 6) : [];
-      user.compatAnswers = compatAnswers || [];
+      user.interests = normaliseInterests(interests);
       user.isOnboarded = true;
 
-      await user.save();
+      /* 📍 Location from the onboarding step, which now REQUIRES an answer:
+         either a granted reading or an explicit pick of the campus fallback.
+
+         A reading is rounded here, on the server, so the precise value never
+         reaches the database — see the full note on PUT /api/users/location. */
+      if (currentLatLng !== undefined && currentLatLng !== null) {
+        const clean = sanitizeLatLng(currentLatLng);
+        /* Still not an error on a MALFORMED pair — onboarding must not fail
+           over a bad coordinate, and a broken client should not strand someone
+           mid-signup. The fallback below is what keeps the ranking basis
+           defined either way. */
+        if (clean) {
+          user.currentLatLng = clean;
+          user.locationSource = 'gps';
+          user.locationUpdatedAt = new Date();
+        } else {
+          user.locationSource = 'campus';
+        }
+      } else {
+        /* No reading offered, or the user declined. Record the deliberate
+           campus choice explicitly rather than leaving `locationSource` null,
+           because null previously meant three different things — "declined",
+           "never asked", and "onboarding predates the question" — and the feed's
+           fallback notice can only be honest if it can tell them apart.
+
+           Nothing is stored positionally here: a campus-backed user has NO
+           coordinates, and the discover pipeline resolves their college's
+           coordinates at query time (see the candidate-position block in
+           routes/discover.js). Storing a copy would freeze them at signup and
+           make a later college change look like a stale location. */
+        user.locationSource = 'campus';
+      }
+
+      // Ladder: last write before save, so one document never carries a score
+      // that disagrees with its own fields.
+      user.profileScore = computeScore(user);
+
+await user.save();
+
+    broadcastProfileUpdate(req, user);
+
 
       // 🧹 VAPORIZE ORPHANED PHOTOS: Delete any old photo that isn't in the new profile
       const newPhotos = collectUserPhotos(user);
       oldPhotos.forEach(url => {
-        if (!newPhotos.has(url)) deleteCloudinaryFile(url);
+        if (!newPhotos.has(url)) deleteCloudinaryFile(url, req.user._id);
       });
 
       // ANALYTICS: Track completion
@@ -149,6 +388,34 @@ router.post(
 // @route   GET /api/users/profile
 // @desc    Get user's own profile
 // @access  Private
+/* ── LIVE DECK UPDATE ──────────────────────────────────────────────────────
+   Broadcast so any deck currently showing this person's card repaints without
+   waiting for a refetch.
+
+   Without it an edit is only visible the next time a viewer happens to fetch
+   that profile — and the deck serves a localStorage snapshot on return, so
+   "next time" can be never. Two people editing and reviewing each other is the
+   normal loop here, so a stale card reads as "my save didn't work".
+
+   Broadcast rather than per-user: the payload is exactly the public card
+   projection (utils/publicCard.js — the SAME helper routes/discover.js uses, so
+   the campus badge cannot leak down a path the deck already closes), and every
+   client ignores ids it isn't showing. Tracking who might hold you in their
+   deck would need a reverse index that isn't worth it for a payload this small.
+
+   `profileScore` rides along so a card's own score refreshes. The viewer's own
+   gate is unaffected: it reads /auth/me, not this. */
+function broadcastProfileUpdate(req, user) {
+  try {
+    const io = req.app.get('io');
+    if (io) io.emit('profile-updated', { ...toPublicCard(user), _id: user._id.toString() });
+  } catch (err) {
+    // Never fail a save because the realtime path is unhappy — a 500 here would
+    // lose the user's actual edits. The next refetch still converges.
+    console.error('profile-updated broadcast failed:', err.message);
+  }
+}
+
 router.get('/profile', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
@@ -170,18 +437,17 @@ router.put('/profile', protect, async (req, res) => {
     name,
     gender,
     pronouns,
-    branch,
     year,
     bio,
+    bioPhoto,
     prompts,
     photos,
     intent,
     interestedIn,
-    ageRange,
     interests,
-    hostel,
-    compatAnswers,
-    isGhost,
+    graduatingYear,
+    showCollege,
+    gapYear,
   } = req.body;
 
   try {
@@ -197,48 +463,425 @@ router.put('/profile', protect, async (req, res) => {
       });
     }
 
+    const lengthError = validateFieldLengths(req.body);
+    if (lengthError) return res.status(400).json({ message: lengthError });
+
+    const interestedInError = validateInterestedIn(interestedIn);
+    if (interestedInError) return res.status(400).json({ message: interestedInError });
+
     const oldPhotos = collectUserPhotos(user);
 
     if (name) user.name = name;
     if (gender) user.gender = gender;
     if (pronouns !== undefined) user.pronouns = pronouns;
-    if (branch) user.branch = branch;
     if (year) user.year = year;
+    if (graduatingYear !== undefined && graduatingYear !== null && graduatingYear !== '') {
+      const y = Number(graduatingYear);
+      // Clamped to the same window the signup validator uses: a graduating year
+      // is a user-asserted signal about enrolment, so it must at least be
+      // plausible. Never trusted to be proof — the annual re-check is.
+      const currentYear = new Date().getFullYear();
+      if (!Number.isFinite(y) || y < currentYear || y > currentYear + 10) {
+        return res.status(400).json({
+          message: `Enter a graduation year between ${currentYear} and ${currentYear + 10}.`,
+        });
+      }
+      user.graduatingYear = y;
+    }
     if (bio !== undefined) user.bio = bio;
     if (prompts) {
-      const promptsToSave = Array.isArray(prompts) ? prompts.slice(0, 3) : [];
-      if (promptsToSave.some(p => p.photoUrl && !isValidImageUrl(p.photoUrl))) {
+      const promptsToSave = Array.isArray(prompts) ? prompts.slice(0, MAX_PROMPTS) : [];
+      if (promptsToSave.some(p => p.photoUrl && !isValidImageUrl(p.photoUrl, req.user._id))) {
         return res.status(400).json({ message: 'One or more prompt photo URLs are invalid.' });
       }
+      const promptLengthError = validatePromptLengths(promptsToSave);
+      if (promptLengthError) return res.status(400).json({ message: promptLengthError });
       user.prompts = promptsToSave;
     }
     if (photos) {
-      const photosToSave = (Array.isArray(photos) ? photos : []).filter(Boolean).slice(0, 6);
-      if (!photosToSave.every(isValidImageUrl)) {
+      const photosToSave = (Array.isArray(photos) ? photos : []).filter(Boolean).slice(0, MAX_PHOTOS);
+      if (!photosToSave.every(p => isValidImageUrl(p, req.user._id))) {
         return res.status(400).json({ message: 'One or more photo URLs are invalid.' });
       }
       user.photos = photosToSave;
     }
-    if (intent) user.intent = intent;
+    if (bioPhoto !== undefined) {
+      if (bioPhoto && !isValidImageUrl(bioPhoto, req.user._id)) {
+        return res.status(400).json({ message: 'Bio photo URL is invalid.' });
+      }
+      user.bioPhoto = bioPhoto || '';
+    }
+    if (intent) user.intent = normaliseIntent(intent);
+    /* ⚠️ ALSO normalise the STORED value when this request did not include
+       intent at all. `PUT /profile` is a partial update, so a save that touches
+       only the bio would otherwise leave a retired "Study Buddy" sitting in the
+       document forever — and because intent is a RANKING SIGNAL, that stale
+       string silently stops matching anyone who picked "Activity Partner".
+       Nothing is lost by normalising: mapping only rewrites retired values and
+       de-duplicates, it never invents or drops a currently-valid intent. */
+    else if (user.intent?.length) user.intent = normaliseIntent(user.intent);
     if (interestedIn) user.interestedIn = interestedIn;
-    if (ageRange) user.ageRange = ageRange;
-    if (interests) user.interests = interests;
-    if (hostel !== undefined) user.hostel = hostel;
-    if (compatAnswers) user.compatAnswers = compatAnswers;
-    if (isGhost !== undefined) user.isGhost = isGhost;
+    // ageRange validation + write removed: the setting it fed was never read by
+    // any query or UI, so accepting it only wrote dead data into the document.
+    // `age` and `dob` are deliberately NOT editable here — onboarding is the
+    // only place they are set, and the client states they're permanent.
+    if (interests) user.interests = normaliseInterests(interests);
+    // Campus badge opt-out. `!== undefined` rather than truthy, because `false`
+    // is the value that actually matters here and a truthy guard would make it
+    // impossible to turn OFF once on.
+    if (showCollege !== undefined) user.showCollege = Boolean(showCollege);
+    if (gapYear !== undefined) user.gapYear = Boolean(gapYear);
+
+    // Ladder: recomputed on EVERY profile write, not just onboarding. This is
+    // what makes the score drop when a user blanks a scored field — a real
+    // edit, e.g. clearing their bio, costs its points and can push them back
+    // under LADDER.interact.
+    user.profileScore = computeScore(user);
 
     await user.save();
+
+    // The edit path. Same broadcast as onboarding — a deck showing this card has
+    // to see the edit, not just see it on the owner's next visit.
+    broadcastProfileUpdate(req, user);
 
     // 🧹 VAPORIZE ORPHANED PHOTOS: Clean up removed/replaced images
     const newPhotos = collectUserPhotos(user);
     oldPhotos.forEach(url => {
-      if (!newPhotos.has(url)) deleteCloudinaryFile(url);
+      if (!newPhotos.has(url)) deleteCloudinaryFile(url, req.user._id);
     });
 
     res.status(200).json(user);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error updating profile' });
+  }
+});
+
+/* @route   GET /api/users/location
+ * @desc    Report whether the viewer currently has location, WITHOUT echoing it.
+ * @access  Private
+ *
+ * Settings' toggle has to be truthful about what is stored, so it needs to read
+ * the state. It does NOT need the coordinates: returning them would put a
+ * position into a response that is fetched on every Settings visit and logged
+ * in transit, for a UI that only renders "On" or "Off".
+ *
+ * Returns only the source marker and the age of the reading, and reports
+ * `active: false` for a reading too old to affect ranking (geo.js TTL) so the
+ * UI can say "expired" instead of implying a stale fix is still in use. */
+router.get('/location', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id)
+      .select('+currentLatLng +locationSource +locationUpdatedAt')
+      .lean();
+
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const hasCoords = Array.isArray(user.currentLatLng) && user.currentLatLng.length === 2;
+    const active = hasCoords && isFreshLocation(user);
+
+    res.status(200).json({
+      /* ⚠️ NOT `hasCoords ? user.locationSource : null`. That collapsed the
+         'campus' marker to null, because the campus choice stores NO
+         coordinates — so a client could set it but never read it back, and
+         would show "campus" as "off" on every reload. The state is reported
+         from `locationSource` alone, which is exactly the field that holds the
+         user's choice. */
+      locationSource: user.locationSource || null,
+      active,
+      /* Age in whole days, so the UI can distinguish "set today" from "set a
+         year ago" without ever handling a coordinate. */
+      storedDaysAgo: user.locationUpdatedAt
+        ? Math.floor((Date.now() - new Date(user.locationUpdatedAt).getTime()) / 86_400_000)
+        : null,
+    });
+  } catch (error) {
+    console.error('Error reading location:', error);
+    res.status(500).json({ message: 'Server error reading location' });
+  }
+});
+
+/* The viewer's campus position, independent of any personal reading. */
+const campusPointFor = async (user) => {
+  if (!user?.collegeCode) return null;
+  const college = await College.findOne({ code: user.collegeCode }).select('latLng').lean();
+  return sanitizeLatLng(college?.latLng);
+};
+
+/* The position the deck is actually ordered around: a fresh personal reading if
+ * there is one, otherwise the viewer's campus. Mirrors the `viewerPoint`
+ * resolution in routes/discover.js — these two must stay in step or a saved deck
+ * gets kept or discarded on a basis the ranking never used.
+ *
+ * ⚠️ Read this from a freshly loaded user, never from the auth middleware's
+ * `req.user`. That document is the PRE-write state: deriving the post-write
+ * anchor from it returns the position that was just removed, so a comparison
+ * always measures a point against itself and never fires. */
+const effectiveAnchorFor = async (user) => sanitizeLatLng(user?.currentLatLng)
+  || campusPointFor(user);
+
+/* Drop the viewer's frozen deck when the anchor it was built around no longer
+ * applies. Returns true when the deck was discarded, so callers can report it.
+ *
+ * ⚠️ An undefined previous anchor means there was nothing to lose, so it is NOT
+ * treated as a move. A viewer with no stored position has no saved ordering that
+ * could be wrong; deleting on every first write would just throw away a healthy
+ * campus deck each time the app opens. */
+const dropDeckIfAnchorMoved = async (viewerId, previousAnchor, nextAnchor) => {
+  if (!previousAnchor || !nextAnchor) return false;
+  if (haversineKm(previousAnchor, nextAnchor) <= LOCATION_DRIFT_KM) return false;
+  await DiscoverSession.deleteOne({ viewerId });
+  return true;
+};
+
+/* @route   PUT /api/users/location
+ * @desc    Set or clear the viewer's coarse location.
+ * @access  Private
+ *
+ * 📍 WHY THIS IS ITS OWN ENDPOINT RATHER THAN A FIELD ON PUT /profile
+ * Three reasons, all of them about not storing precise coordinates by accident:
+ *
+ *   1. `sanitizeLatLng()` is applied HERE, in the one place coordinates are
+ *      persisted. Rounding in the client would leave the exact value in the
+ *      request body and every log that captures it; rounding here means the
+ *      database only ever holds the ~1.1km rounded pair.
+ *   2. It is writable independently of a profile edit. Location changes
+ *      constantly (a term-break trip home) while profile edits are rare, and
+ *      coupling them means every location refresh also risks a ladder score
+ *      recalculation.
+ *   3. `null` clears it. That has to be expressible without touching the rest
+ *      of a profile, because turning the feature OFF must actually delete what
+ *      was stored rather than merely stop reading it.
+ *
+ * The client sends raw coordinates exactly once, immediately after an explicit
+ * permission grant. There is no background refresh and no `watchPosition`
+ * anywhere in the codebase. */
+router.put('/location', protect, async (req, res) => {
+  try {
+const { latLng, source } = req.body || {};
+
+    /* The one-time nudge on the caught-up screen is dismissed by setting this
+       flag rather than by touching the location fields. */
+    if (req.body?.dismissNudge === true) {
+      await User.updateOne({ _id: req.user._id }, { $set: { locationNudgeDismissed: true } });
+      return res.status(200).json({ locationNudgeDismissed: true });
+    }
+
+    /* ── "I declined GPS" ──
+       Recorded as a marker with NO coordinates at all, so the app can tell
+       "declined" apart from "never asked" without ever holding a position. */
+    if (latLng === undefined && source === 'campus') {
+      /* Declining GPS does not make the anchor "nothing" — it makes it the
+         campus. Coming back from a trip far away therefore has to discard a
+         deck that was ordered around the old position. */
+      const previousAnchor = await effectiveAnchorFor(req.user);
+      await User.updateOne(
+        { _id: req.user._id },
+        {
+          $set: { locationSource: 'campus', locationUpdatedAt: new Date() },
+          $unset: { currentLatLng: 1 },
+        },
+      );
+      /* Next anchor is the campus itself: the personal reading is gone. */
+      const moved = await dropDeckIfAnchorMoved(
+        req.user._id,
+        previousAnchor,
+        await campusPointFor(req.user),
+      );
+      return res.status(200).json({ locationSource: 'campus', moved });
+    }
+
+    /* An explicit null/absent `latLng` clears the reading. This is the
+       "turn location off" path and must genuinely delete the stored value.
+
+       ⚠️ `$unset`, NOT `$set: { field: undefined }`. Mongoose drops undefined
+       values from an update by default, so the "clear" silently did nothing and
+       the coordinates stayed in the database — a privacy control that reports
+       success while the data it claims to have removed is still there. */
+    if (latLng === null || latLng === undefined) {
+      /* 📍 A LAPSED ONE-TIME GRANT IS NOT THE SAME AS A REFUSAL.
+       *
+       * The client sends `ephemeral: true` when the position it held was covered
+       * by Chrome's "Allow this time" and that window has closed on the next
+       * launch. The user never said no — they said yes, briefly — so the stored
+       * basis becomes 'campus' rather than null.
+       *
+       * `null` would mean "location is switched off", and Settings reads it that
+       * way. It also reads as a deliberate user decision, which is the one thing
+       * this is not. 'campus' keeps every downstream surface truthful: the notice
+       * mounts, the label reads "college location", and the deck is ordered from
+       * the campus without claiming the user opted into anything.
+       *
+       * Both paths discard the deck on a real anchor move, so a student who went
+       * home under a temporary grant does not keep the campus-ordered deck. */
+      const previousAnchor = await effectiveAnchorFor(req.user);
+      const releasedBasis = req.body?.ephemeral === true ? 'campus' : null;
+      await User.updateOne(
+        { _id: req.user._id },
+        {
+          $set: { locationSource: releasedBasis, locationUpdatedAt: null },
+          $unset: { currentLatLng: 1 },
+        },
+      );
+      /* Either way the anchor hands back to the campus, so that is the next one.
+         Without a campus there is no next anchor and nothing is lost. */
+      const moved = await dropDeckIfAnchorMoved(
+        req.user._id,
+        previousAnchor,
+        await campusPointFor(req.user),
+      );
+      /* Echo the basis actually stored, not the one the old branch hardcoded —
+         `campus` and `null` mean different things to Settings and to the notice,
+         and returning the wrong one would let the two disagree. */
+      return res.status(200).json({ locationSource: releasedBasis, cleared: true, moved });
+    }
+
+    /* Reject rather than silently drop. A malformed pair here means the client
+       sent something the picker never should have produced, and quietly storing
+       nothing would leave the user believing location is on when it is not. */
+    const clean = sanitizeLatLng(latLng);
+    if (!clean) {
+      return res.status(400).json({ message: 'Invalid location' });
+    }
+
+    /* Only the two known sources are accepted. 'campus' means the user declined
+       GPS and we fall back to their college's position, which stores NO
+       coordinates at all — just a marker. */
+    const locationSource = source === 'campus' ? 'campus' : 'gps';
+
+    /* 📍 HAS THE VIEWER ACTUALLY MOVED?
+     *
+     * Read BEFORE the write, because after it the old value is gone. `req.user`
+     * carries `+currentLatLng` (added in middleware/auth.js for the deck's own
+     * distance ranking), which is what makes this comparison possible at all
+     * without a second query.
+     *
+     * ⚠️ COMPARE ANCHORS, NOT STORED READINGS.
+     *
+     * This used to compare only against the previously stored GPS position, on
+     * the reasoning that someone who has always declined GPS has not "travelled"
+     * just because they switched it on. That reasoning holds only when they
+     * switched it on while standing on their own campus.
+     *
+     * A viewer who has never granted GPS is ALREADY served a deck ordered around
+     * their campus. Tapping "turn on location" while away from it — summer break,
+     * a trip home, a semester at another campus — leaves those 500 frozen ids
+     * chosen around the campus position. Comparing against the absent old reading
+     * returned "not moved", so the session survived, and the feed kept serving
+     * the home-city deck for the full 30-minute lifetime while the UI reported
+     * the location was saved. The write succeeded, the storage succeeded, and the
+     * only thing that mattered — which people get served — did not change.
+     *
+     * So the comparison is now between the anchor the old deck was built around
+     * (`effectiveAnchorFor`, i.e. old personal reading else campus) and the new
+     * one. Enabling GPS on campus is still ~0km and keeps the deck, so there is
+     * no churn for the ordinary case. */
+    const previousAnchor = await effectiveAnchorFor(req.user);
+    const moved = await dropDeckIfAnchorMoved(req.user._id, previousAnchor, clean);
+
+    await User.updateOne(
+      { _id: req.user._id },
+      {
+        $set: {
+          currentLatLng: clean,
+          locationSource,
+          locationUpdatedAt: new Date(),
+        },
+      },
+    );
+
+    /* `moved` already deleted the session via `dropDeckIfAnchorMoved`. This
+       second delete used to sit here and was harmless, but with the comparison
+       moved into the helper it reads as though the deletion depends on
+       something this block computes — it does not. */
+
+    /* Echo the ROUNDED value, not the input, so the client can never hold or
+       display a more precise position than we kept.
+
+       `moved` lets the client tell "saved, nothing changed" from "saved, and your
+       deck was rebuilt" — it can show a brief notice in the second case instead of
+       silently rearranging the deck under someone mid-swipe. */
+    res.status(200).json({ currentLatLng: clean, locationSource, moved });
+  } catch (error) {
+    console.error('Error updating location:', error);
+    res.status(500).json({ message: 'Server error updating location' });
+  }
+});
+
+/* Voluntary Ghost Mode was retired, and the legacy `isGhost` field has since
+   been removed entirely: shadowbans now live only on `shadowbannedAt` and
+   deletion on `isDeleted`, which is what the deck filter reads. */
+
+/* @route   POST /api/users/change-college
+ * @desc    Move an account to a new college. Requires a fresh OTP issued to the
+ *          NEW college email, so the swap is proof the student controls that
+ *          inbox. One active campus at a time — the new one overwrites.
+ * @access  Private */
+router.post('/change-college', protect, async (req, res) => {
+  try {
+    const email = normalizeEmail(String(req.body?.email || ''));
+    const collegeCode = String(req.body?.collegeCode || '').trim().toLowerCase();
+    const otp = String(req.body?.otp || '').trim();
+
+    if (!email || !collegeCode || !/^\d{6}$/.test(otp)) {
+      return res.status(400).json({ message: 'Email, college and a 6-digit code are required.' });
+    }
+
+    const resolved = await resolveCollege(collegeCode, email);
+    if (!resolved.ok) {
+      return res.status(400).json({ message: resolved.reason });
+    }
+
+    // The newest outstanding OTP for this email is authoritative.
+    const record = await OTP.findOne({ email }).sort({ createdAt: -1 });
+    if (!record || record.expiresAt < new Date()) {
+      return res.status(400).json({ message: 'Code expired. Request a new one.' });
+    }
+    if (record.collegeCode && record.collegeCode !== collegeCode) {
+      return res.status(400).json({ message: 'That code was sent for a different college.' });
+    }
+    if (!verifyOtp(email, otp, record.otpHash)) {
+      await OTP.findOneAndUpdate({ _id: record._id }, { $inc: { attempts: 1 } });
+      return res.status(400).json({ message: 'Incorrect code.' });
+    }
+
+    // The new email must not already belong to another account.
+    const taken = await User.findOne({ email, _id: { $ne: req.user._id } });
+    if (taken) {
+      return res.status(409).json({ message: 'That email is already attached to another account.' });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    user.email = email;
+    user.college = resolved.college.name;
+    user.collegeCode = resolved.college.code;
+    user.lastVerifiedAt = new Date();
+    // One year from the fresh verification, same rule as signup.
+    user.reverifyDue = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+    user.status = 'active';
+    await user.save();
+
+    // The old deck was ordered for the old campus — drop it so the next request
+    // rebuilds around the new college. Also drop the campus-derived location
+    // marker if the user never enabled GPS: a "My campus" deck must move with
+    // them, and a stale campus marker would rank strangers near the old school.
+    await DiscoverSession.deleteOne({ viewerId: req.user._id });
+    if (user.locationSource === 'campus') {
+      await User.updateOne({ _id: user._id }, { $set: { locationSource: null, locationUpdatedAt: null } });
+      user.locationSource = null;
+    }
+
+    await OTP.deleteMany({ email });
+
+    res.status(200).json({
+      message: 'College updated',
+      user: { email: user.email, college: user.college, collegeCode: user.collegeCode, reverifyDue: user.reverifyDue },
+    });
+  } catch (error) {
+    console.error('change-college error:', error);
+    res.status(500).json({ message: 'Server error, could not change college' });
   }
 });
 
@@ -253,39 +896,58 @@ router.delete('/account', protect, async (req, res) => {
 
     // 🧹 IMMEDIATE WIPE: Public profile media from Cloudinary
     // (Profile photos, bio photo, prompt attachments — serve no purpose after deletion)
-    collectUserPhotos(user).forEach(url => deleteCloudinaryFile(url));
+    collectUserPhotos(user).forEach(url => deleteCloudinaryFile(url, req.user._id));
 
     // ⚠️ SAFETY RETENTION: Chat media is NOT wiped here.
     // Messages (including photos/voice notes) are retained for 30-day safety window
     // to allow Trust & Safety investigations if the user is reported after deletion.
     // A background cleanup job handles final Cloudinary purge after retention expires.
 
-    // 🏴 SOFT DELETE: Wipe PII, flag as deleted
-    user.name = 'Deleted User';
-    user.photos = [];
-    user.bio = '';
-    user.bioPhoto = '';
-    user.prompts = [];
-    user.isDeleted = true;
+// 🏴 SOFT DELETE: Wipe PII, flag as deleted.
+      //
+      // ⚠️ `email` is deliberately NOT cleared here.
+      //
+      // It looks like an oversight because every other identifying field is
+      // blanked, and a college email is the single most identifying thing we
+      // hold (see the roll-number exposure in the privacy policy). But this row
+      // is retained for 30 days as moderation evidence, and the email is the
+      // only field tying it to a person — blanking it would make the retained
+      // report evidence useless while the account still exists.
+      //
+      // It's also load-bearing for abuse: the address can't be re-registered
+      // until this window elapses (see RETENTION_MS in routes/auth.js), and
+      // that check queries by email.
+      //
+      // It is cleared when the retention window expires and the row is
+      // hard-deleted. Before then, this account is invisible in the product.
+      user.name = 'Deleted User';
+      user.photos = [];
+      user.bio = '';
+      user.bioPhoto = '';
+      user.prompts = [];
+      user.interests = [];
+      user.intent = [];
+      user.graduatingYear = null;
+      user.isDeleted = true;
     user.deletedAt = new Date();
-    user.isGhost = true;
     user.suspended = false;
     user.pushSubscription = null;
     user.interestedIn = [];
     user.interests = [];
-    user.compatAnswers = [];
     await user.save();
 
-    // 💔 DEACTIVATE all matches (chats vanish from inboxes instantly)
-    await Match.updateMany({ users: userId }, { $set: { isActive: false } });
+    // 💔 DEACTIVATE all alignments (chats vanish from inboxes instantly)
+    await Alignment.updateMany({ users: userId }, { $set: { isActive: false } });
 
     // 🧹 CLEANUP: Records with no safety retention value
     await Block.deleteMany({ $or: [{ blocker: userId }, { blocked: userId }] });
-    await Report.deleteMany({ $or: [{ reporter: userId }, { reported: userId }] });
+    // ⚠️ Reports are INTENTIONALLY RETAINED — moderation evidence must survive
+    // account deletion so abuse can still be investigated. Final purge happens
+    // in the 30-day background cleanup job.
     await Notification.deleteMany({ $or: [{ recipientId: userId }, { senderId: userId }] });
     await Analytics.deleteMany({ user: userId });
 
-    // 📦 RETAIN for 30-day safety window: Messages, Matches, Interactions
+    // 📦 RETAIN for 30-day safety window: Messages, Alignments, Interactions
     // (Final hard deletion handled by background cleanup job)
 
     // 🔒 CLEAR SESSION
@@ -315,7 +977,18 @@ router.get('/onboarding/resume', protect, async (req, res) => {
 router.put('/onboarding/save', protect, async (req, res) => {
   try {
     const { step, data } = req.body;
-    await User.findByIdAndUpdate(req.user._id, { onboardingStep: step, onboardingData: data });
+
+    if (typeof step !== 'number' || !Number.isInteger(step) || step < 1 || step > 8) {
+      return res.status(400).json({ message: 'Invalid onboarding step' });
+    }
+    if (data != null && JSON.stringify(data).length > 100 * 1024) { // 100KB cap
+      return res.status(400).json({ message: 'Onboarding draft too large' });
+    }
+
+    await User.findByIdAndUpdate(req.user._id, {
+      onboardingStep: step,
+      onboardingData: data || {},
+    });
     
     // ANALYTICS: Track user progression
     await Analytics.create({ user: req.user._id, event: 'ONBOARDING_STEP', step });
@@ -346,7 +1019,7 @@ router.delete('/onboarding/clear', protect, async (req, res) => {
 router.post('/logout-all', protect, async (req, res) => {
   try {
     await User.findByIdAndUpdate(req.user._id, { lastLogoutAt: new Date() });
-    res.status(200).json({ message: 'Logged out from all other devices successfully' });
+    res.status(200).json({ message: 'Logged out from all devices successfully' });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });

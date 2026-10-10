@@ -1,6 +1,12 @@
 import React, { useState, memo } from 'react';
 import { motion } from 'framer-motion';
-import { theme as design } from '../utils/theme';
+import { Camera } from 'lucide-react';
+import neu from '../styles/neu';
+
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
+
+const FALLBACK_IMG = 'https://placehold.co/480x480/fff3dc/191919?text=%C2%B7';
 
 /**
  * PolaroidCard — chat image bubble.
@@ -10,7 +16,7 @@ const PolaroidCard = ({ src, caption, tilt = '0deg', onExpand }) => {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
 
-  const resolvedSrc = failed ? design.placeholder.image : src;
+  const resolvedSrc = failed ? FALLBACK_IMG : src;
 
   return (
     <motion.figure
@@ -20,12 +26,12 @@ const PolaroidCard = ({ src, caption, tilt = '0deg', onExpand }) => {
       onClick={onExpand}
       style={{
         margin: 0,
-        padding: caption ? '7px 7px 0 7px' : '7px 7px 20px 7px',
+        padding: caption ? '7px 7px 0 7px' : '7px 7px 7px 7px',
         width: '240px',
-        backgroundColor: '#ffffff',
-        border: '1px solid rgba(0,0,0,0.06)',
-        borderRadius: 3,
-        boxShadow: '0 10px 24px rgba(88,63,30,0.2)',
+        backgroundColor: t.card,
+        border: `2px solid ${t.ink}`,
+        borderRadius: 6,
+        boxShadow: `5px 5px 0 ${t.ink}`,
         cursor: onExpand ? 'zoom-in' : 'default',
         transformOrigin: 'center center',
         willChange: 'transform',
@@ -39,8 +45,9 @@ const PolaroidCard = ({ src, caption, tilt = '0deg', onExpand }) => {
           width: '100%',
           aspectRatio: '1 / 1',
           overflow: 'hidden',
-          backgroundColor: '#f4f1ea',
-          borderRadius: 2,
+          backgroundColor: t.hair,
+          borderRadius: 3,
+          border: `1.5px solid ${t.ink}`,
         }}
       >
         <img
@@ -67,11 +74,13 @@ const PolaroidCard = ({ src, caption, tilt = '0deg', onExpand }) => {
       {caption ? (
         <figcaption
           style={{
-            padding: '8px 2px 14px',
-            fontFamily: "'Special Elite', 'Courier New', monospace",
-            fontSize: '12.5px',
+            padding: '9px 4px 12px',
+            fontFamily: t.fontMono,
+            fontSize: '10.5px',
+            fontWeight: 700,
+            letterSpacing: '.04em',
             lineHeight: 1.5,
-            color: '#4a4a4a',
+            color: t.ink2,
             textAlign: 'center',
             wordBreak: 'break-word',
             whiteSpace: 'pre-wrap',
@@ -79,7 +88,14 @@ const PolaroidCard = ({ src, caption, tilt = '0deg', onExpand }) => {
         >
           {caption}
         </figcaption>
-      ) : null}
+      ) : (
+        <div
+          aria-hidden="true"
+          style={{ display: 'flex', justifyContent: 'center', padding: '9px 0 10px' }}
+        >
+          <Camera size={13} strokeWidth={2.4} color={t.ink3} />
+        </div>
+      )}
     </motion.figure>
   );
 };

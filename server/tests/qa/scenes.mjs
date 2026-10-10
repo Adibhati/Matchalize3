@@ -81,15 +81,13 @@ async function driveOnboarding(page, cfg, profile, { fast = false } = {}) {
     const chip = page.locator('button.tactile-btn').filter({ hasText: new RegExp(`^\\s*${gi}\\s*$`) }).nth(idx);
     await chip.tap();
   }
-  const branch = profile.branch || 'Computer Science & Engineering';
-  await page.locator('button:has-text("Select branch...")').tap();
-  await page.locator('button.tactile-btn').filter({ hasText: branch }).first().tap();
-  await wait(300);
-  const era = profile.era || 'Freshies';
-  await page.locator('button:has-text("Select era...")').tap();
-  await page.locator('button.tactile-btn').filter({ hasText: new RegExp(`^\\s*${era}\\s*$`) }).first().tap();
-  await wait(300);
-  await page.locator('input[placeholder="e.g. Hostel 4"]').fill(profile.hostel || 'Hostel 4');
+  // Branch and Hostel were removed from the Coordinates chapter along with their
+  // schema fields, so there is nothing to tap or fill here any more. Do not
+  // reintroduce selectors for them — if this harness ever needs a college or
+  // location signal again, it should come from the college picker in Auth.
+  const era = profile.era || 'UG';
+  await page.locator('button:has-text("Select UG / PG...")').tap();
+  await page.locator('button.tactile-btn').filter({ hasText: new RegExp(`^\\s*${era}\\s*$`) }).first().tap().catch(() => {});
   await wait(300);
   await advance(); // coordinates -> portrait
 
@@ -138,16 +136,6 @@ async function driveOnboarding(page, cfg, profile, { fast = false } = {}) {
   await wait(300);
   await advance(); // parameters -> alignment
 
-  // ALIGNMENT — answer first option of each inquiry (horizontal pager)
-  const qcount = (cfg.compatQuestions || []).length;
-  for (let i = 0; i < qcount; i++) {
-    const card = page.locator('.hide-scroll > div').nth(i);
-    await card.scrollIntoViewIfNeeded({ inline: 'center', block: 'nearest' }).catch(() => {});
-    await card.locator('button.tactile-btn').first().tap();
-    await wait(700);
-  }
-  await page.locator('text=Inquiries Sealed').first().waitFor({ timeout: 12000 }).catch(() => {});
-  await advance(); // alignment -> review
 
   // REVIEW — publish
   const publish = page.locator('button:has-text("Publish Profile & Enter")');
@@ -164,7 +152,7 @@ const definitions = [
   {
     id: 's01',
     name: 'Onboarding — The Dossier',
-    blurb: 'Brand-new student Khushi signs in with her campus email and transcribes her story — Vitals, Coordinates, Portrait, Whispers, Parameters, Alignment — then Affixes the Seal.',
+    blurb: 'Brand-new student Khushi signs in with her campus email and transcribes her story — Vitals, Coordinates, Portrait, Whispers, Parameters, Alignment — then publishes her profile.',
   },
   {
     id: 's02',
@@ -174,21 +162,21 @@ const definitions = [
   {
     id: 's08',
     name: 'Safety — Report & Block',
-    blurb: 'Drishti reports a profile from the card menu and permanently blocks a match from her correspondence — creating the archive trail that reaches the admin next.',
+    blurb: 'Drishti reports a profile from the card menu and permanently blocks a match from her chat — creating the report trail that reaches the admin next.',
   },
   {
     id: 's03',
-    name: 'The Alignment — Live Match',
-    blurb: 'Drishti likes Arjun — her 100% compatibility card — and the campus lights up: instant match, the seal, and the first opening letter.',
+    name: 'The Alignment — Instant Chat',
+    blurb: 'Drishti likes Arjun and the campus lights up: instant match and the first opening letter.',
   },
   {
     id: 's04',
-    name: 'Matches — The Binder',
-    blurb: 'Anika opens her match binder: connections, unread correspondence, and the search that finds conversations instantly.',
+    name: 'Letters — The Binder',
+    blurb: 'Anika opens her Letters tab: conversations, unread messages, and the search that finds messages instantly.',
   },
   {
     id: 's05',
-    name: 'Live Correspondence',
+    name: 'Live Chat',
     blurb: 'Split-screen realtime chat: anika and rohan message each other live and react to a message. Everything relays over websockets.',
   },
   {
@@ -204,7 +192,7 @@ const definitions = [
   {
     id: 's11',
     name: 'Severing Ties',
-    blurb: 'Sanya unmatches Nishant from the correspondence options — an irreversible archive decision, confirmed and done.',
+    blurb: 'Sanya unmatches Nishant from the chat options — an irreversible decision, confirmed and done.',
   },
   {
     id: 's09',
@@ -220,11 +208,6 @@ const definitions = [
     id: 's12',
     name: 'Admin — The Ledger',
     blurb: 'Back on the admin dashboard: live campus stats, active bans, and the safety ledger reflecting everything the run did.',
-  },
-  {
-    id: 's13',
-    name: 'The Waitlist',
-    blurb: 'A student without a launch date joins the waitlist and claims their founding spot.',
   },
   {
     id: 's14',
@@ -291,7 +274,7 @@ async function runS03({ browser, cfg, world, log }) {
   }
   await page.getByText('You are Aligned', { exact: true }).first().waitFor({ timeout: 20000 });
   await sleep(1800);
-  await page.locator('button:has-text("Open Correspondence")').tap();
+  await page.locator('button:has-text("Open Chat")').tap();
   await page.getByPlaceholder('Write a message...').waitFor({ timeout: 15000 });
   await sleep(3000);
   return closeContext({ context, videoDir: dir, name: 's03' });
@@ -303,10 +286,10 @@ async function runS04({ browser, cfg, world, log }) {
   await loginViaOtp(page, 'anika.singh@iitb.ac.in');
   await page.locator('img').first().waitFor({ timeout: 30000 });
   await sleep(1500);
-  await tap(page, page.getByRole('button', { name: 'Matches' }));
+  await tap(page, page.getByRole('button', { name: 'Letters' }));
   await page.locator('text="Rohan Gokhale"').first().waitFor({ timeout: 15000 });
   await sleep(1200);
-  const search = page.getByPlaceholder('Search connections...');
+  const search = page.getByPlaceholder('Search letters...');
   await search.fill('rohan');
   await sleep(1200);
   await page.getByRole('button', { name: 'Clear search' }).tap().catch(() => {});
@@ -314,7 +297,7 @@ async function runS04({ browser, cfg, world, log }) {
   await page.locator('text="Rohan Gokhale"').first().tap();
   await page.getByPlaceholder('Write a message...').waitFor({ timeout: 15000 });
   await sleep(2500);
-  await page.getByRole('button', { name: 'Go back to matches' }).tap();
+  await page.getByRole('button', { name: 'Go back to letters' }).tap();
   await sleep(1500);
   return closeContext({ context, videoDir: dir, name: 's04' });
 }
@@ -328,9 +311,9 @@ async function runS05({ browser, cfg, world, log }) {
     await loginViaOtp(b.page, 'rohan.g@iitb.ac.in');
     await a.page.locator('img').first().waitFor({ timeout: 30000 });
     await b.page.locator('img').first().waitFor({ timeout: 30000 });
-    await tap(a.page, a.page.getByRole('button', { name: 'Matches' }));
+    await tap(a.page, a.page.getByRole('button', { name: 'Letters' }));
     await a.page.locator('text="Rohan Gokhale"').first().tap();
-    await tap(b.page, b.page.getByRole('button', { name: 'Matches' }));
+    await tap(b.page, b.page.getByRole('button', { name: 'Letters' }));
     await b.page.locator('text="Anika Singh"').first().tap();
     await a.page.getByPlaceholder('Write a message...').waitFor({ timeout: 15000 });
     await b.page.getByPlaceholder('Write a message...').waitFor({ timeout: 15000 });
@@ -387,7 +370,7 @@ async function runS06({ browser, cfg, world, log }) {
   await page.locator('button[aria-label="Accept"]').first().tap();
   await page.getByPlaceholder('Write a message...').waitFor({ timeout: 15000 });
   await sleep(2600);
-  await page.getByRole('button', { name: 'Go back to matches' }).tap().catch(() => {});
+  await page.getByRole('button', { name: 'Go back to letters' }).tap().catch(() => {});
   await sleep(900);
   await tap(page, page.getByRole('button', { name: 'View notifications' }));
   await page.locator('text="Ved Desai"').first().waitFor({ timeout: 15000 });
@@ -411,7 +394,7 @@ async function runS07({ browser, cfg, world, log }) {
     const aboutEdit = page.getByText('About Me', { exact: true }).first().locator('xpath=..').locator('button:has-text("Edit")');
     await aboutEdit.tap();
     await sleep(900);
-    const bio = page.locator('textarea[placeholder="Write your foreword..."]');
+    const bio = page.locator('textarea[placeholder="Write your bio..."]');
     if (await bio.isVisible().catch(() => false)) {
       await bio.fill('Just finished my first hackathon. Here for the chase scenes, the chai, and the long talks by the lake.');
       await bio.press('Tab'); // commit onBlur
@@ -465,7 +448,7 @@ async function runS08({ browser, cfg, world, log }) {
     log(`  [warn] s08 report failed: ${e.message}`);
   }
   try {
-    await tap(page, page.getByRole('button', { name: 'Matches' }));
+    await tap(page, page.getByRole('button', { name: 'Letters' }));
     await page.locator('text="Raj Kulkarni"').first().waitFor({ timeout: 15000 });
     await page.locator('text="Raj Kulkarni"').first().tap();
     await page.getByPlaceholder('Write a message...').waitFor({ timeout: 15000 });
@@ -541,10 +524,10 @@ async function runS11({ browser, cfg, world, log }) {
   await loginViaOtp(page, 'sanya.sharma@iitb.ac.in');
   await page.locator('img').first().waitFor({ timeout: 30000 });
   await sleep(1000);
-  await tap(page, page.getByRole('button', { name: 'Matches' }));
+  await tap(page, page.getByRole('button', { name: 'Letters' }));
   await page.locator('text="Nishant Jain"').first().waitFor({ timeout: 15000 });
   await sleep(800);
-  // open the correspondence and unmatch from the chat options
+  // open the chat and unmatch from the chat options
   await page.locator('text="Nishant Jain"').first().tap();
   await page.getByPlaceholder('Write a message...').waitFor({ timeout: 15000 });
   await sleep(1200);
@@ -563,25 +546,6 @@ async function runS12({ browser, cfg, world, log }) {
   await page.getByText('Total Users', { exact: true }).first().waitFor({ timeout: 25000 }).catch(() => {});
   await sleep(4500);
   return closeContext({ context, videoDir: dir, name: 's12' });
-}
-
-async function runS13({ browser, cfg, world, log }) {
-  const dir = path.join(SCENES_DIR, 's13');
-  const { context, page } = await makeContext(browser, dir, 's13');
-  await page.goto(`${QA_ORIGIN}/waitlist`, { waitUntil: 'domcontentloaded' });
-  await page.locator('text=/wait.?list/i').first().waitFor({ timeout: 20000 }).catch(() => {});
-  await sleep(1500);
-  try {
-    await page.locator('input[placeholder="Your name (optional)"]').fill('Farhan Ali');
-    await page.locator('input[placeholder="you@iitb.ac.in"]').fill('farhan.ali@iitb.ac.in');
-    await page.locator('button:has-text("Claim your founding spot")').tap();
-    await page.getByText('SPOT CLAIMED', { exact: false }).first().waitFor({ timeout: 15000 });
-    await sleep(2500);
-  } catch (e) {
-    log(`  [warn] s13 waitlist join failed: ${e.message}`);
-  }
-  await sleep(2000);
-  return closeContext({ context, videoDir: dir, name: 's13' });
 }
 
 async function runS14({ browser, cfg, world, log }) {
@@ -624,7 +588,6 @@ export const runners = {
   s10: runS10,
   s11: runS11,
   s12: runS12,
-  s13: runS13,
   s14: runS14,
   s15: runS15,
 };

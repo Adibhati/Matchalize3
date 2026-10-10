@@ -4,23 +4,9 @@ import { triggerHaptic } from '../../utils/haptics';
 import { Check, CheckCheck } from 'lucide-react';
 import PolaroidCard from '../PolaroidCard';
 import CassettePlayer from '../CassettePlayer';
-import { theme as design } from '../../utils/theme';
+import neu from '../../styles/neu';
 
-/* ==================================================================
-   ARCHIVAL THEME CONSTANTS
-================================================================== */
-const theme = {
-  paper: '#fdfbf7', 
-  surface: '#ffffff', 
-  surfaceAlt: '#f4f1ea', 
-  border: '#e0d8c8', 
-  borderDark: '#d4c5a9',
-  ink: '#1a1a1a', 
-  inkMuted: '#8c8275', 
-  accent: '#8b4513', 
-  crimson: '#8b1a1a', 
-  shadowWarm: 'rgba(139, 69, 19, 0.12)',
-};
+const t = neu;
 
 const MessageBubble = ({ 
   message, 
@@ -66,13 +52,13 @@ const MessageBubble = ({
     if (message.type === 'audio') {
       return (
         <div data-no-longpress>
-          <CassettePlayer audioUrl={message.mediaUrl} themeColor={isMine ? theme.accent : theme.inkSoft} />
+          <CassettePlayer audioUrl={message.mediaUrl} themeColor={isMine ? t.yellow : t.ink2} />
         </div>
       );
     }
     if (message.deleted) {
       return (
-        <span style={{ fontStyle: 'italic', color: theme.inkMuted, fontSize: '13px', fontFamily: "'Inter', sans-serif" }}>
+        <span style={{ fontStyle: 'italic', color: t.ink3, fontSize: '13px', fontFamily: t.fontBody }}>
           This artifact was removed.
         </span>
       );
@@ -98,8 +84,16 @@ const MessageBubble = ({
       transition={{ type: 'spring', damping: 26, stiffness: 380 }}
       
       // Touch / Mouse event bindings for Long Press
-      onTouchStart={startPress} onTouchEnd={cancelPress} onTouchMove={cancelPress}
-      onMouseDown={startPress} onMouseUp={cancelPress} onMouseLeave={cancelPress}
+      // Deleted messages are tombstones — the body/media/reactions are scrubbed,
+      // so the action menu has nothing to act on. Wiring the handlers to null
+      // stops the menu opening at all, which is what previously let you add
+      // fresh reactions to a message that had already been removed.
+      onTouchStart={message.deleted ? undefined : startPress}
+      onTouchEnd={message.deleted ? undefined : cancelPress}
+      onTouchMove={message.deleted ? undefined : cancelPress}
+      onMouseDown={message.deleted ? undefined : startPress}
+      onMouseUp={message.deleted ? undefined : cancelPress}
+      onMouseLeave={message.deleted ? undefined : cancelPress}
       onContextMenu={(e) => e.preventDefault()}
       data-bubble="true"
       data-msg-id={message._id} // Required for SearchOverlay jumping
@@ -122,18 +116,17 @@ const MessageBubble = ({
           maxWidth: '75%', 
           padding: '8px 12px', 
           marginBottom: '6px', 
-          backgroundColor: isMine ? 'rgba(139, 69, 19, 0.05)' : theme.surface, 
-          border: `1px solid ${theme.border}`,
-          borderLeft: `3px solid ${theme.accent}`, 
-          borderRadius: '6px', 
+          backgroundColor: isMine ? 'var(--n-yellow-deep)' : t.paper, 
+          border: `1px solid ${t.ink}`, 
+          borderLeft: `3px solid ${t.yellow}`, 
+          borderRadius: t.radius.sm, 
           fontSize: '12px', 
-          color: theme.inkMuted, 
-          fontFamily: "'Inter', sans-serif", 
+          color: t.ink2, 
+          fontFamily: t.fontBody, 
           fontStyle: 'italic', 
           whiteSpace: 'nowrap', 
           overflow: 'hidden', 
           textOverflow: 'ellipsis',
-          boxShadow: `0 2px 6px ${theme.shadowWarm}`
         }}>
           Replying to: {replyPreview.text || (replyPreview.type === 'image' ? 'Photograph' : 'Voice Note')}
         </div>
@@ -143,19 +136,16 @@ const MessageBubble = ({
       <div style={{ 
         maxWidth: '82%', 
         padding: '14px 18px', 
-        borderRadius: '12px', 
-        backgroundColor: isMine ? theme.surfaceAlt : theme.surface, 
-        border: `1px solid ${theme.border}`, 
-        borderLeft: isMine ? `1px solid ${theme.border}` : `3px solid ${theme.crimson}`, 
-        borderRight: isMine ? `3px solid ${theme.accent}` : `1px solid ${theme.border}`, 
-        color: theme.ink, 
-        fontFamily: "'Special Elite', 'Courier New', monospace", 
+        borderRadius: t.radius.md, 
+        backgroundColor: isMine ? t.card : t.paper, 
+        border: `2px solid ${t.ink}`, 
+        boxShadow: isMine ? t.shadow.sm : 'none',
+        color: t.ink, 
+        fontFamily: t.fontMono, 
         fontSize: '15px', 
         lineHeight: '1.5', 
         wordBreak: 'break-word', 
-        boxShadow: `0 6px 16px ${theme.shadowWarm}, inset 0 2px 4px rgba(255,255,255,0.4)`, 
         position: 'relative',
-        transition: 'border-color 0.3s ease',
       }}>
         {renderContent()}
 
@@ -169,10 +159,9 @@ const MessageBubble = ({
               [isMine ? 'right' : 'left']: '16px', 
               width: '32px', 
               height: '14px', 
-              backgroundColor: 'rgba(224, 216, 200, 0.9)', 
+              backgroundColor: 'var(--n-paper)', 
               backdropFilter: 'blur(2px)',
-              border: `1px solid rgba(139, 69, 19, 0.15)`,
-              boxShadow: '0 2px 4px rgba(0,0,0,0.06)',
+              border: `1px solid ${t.yellow}`,
               transform: `rotate(${isMine ? '4deg' : '-4deg'})`,
               zIndex: 2,
             }} 
@@ -181,7 +170,9 @@ const MessageBubble = ({
       </div>
 
       {/* Reaction Cluster */}
-      {Object.keys(reactionGroups).length > 0 && (
+      {/* Guarded on `!deleted` as well as in the routes: an older client build
+          could still deliver reactions for a message deleted moments earlier. */}
+      {!message.deleted && Object.keys(reactionGroups).length > 0 && (
         <div style={{ 
           display: 'flex', 
           gap: '6px', 
@@ -201,21 +192,20 @@ const MessageBubble = ({
                 alignItems: 'center', 
                 gap: '4px', 
                 padding: '4px 8px', 
-                backgroundColor: theme.surface, 
-                border: `1px solid ${theme.borderDark}`, 
-                borderRadius: '16px', 
+                backgroundColor: t.paper, 
+                border: `1px solid ${t.ink}`, 
+                borderRadius: t.radius.pill, 
                 fontSize: '14px', 
                 lineHeight: 1,
-                boxShadow: `0 2px 6px ${theme.shadowWarm}` 
               }}
             >
               <span>{emoji}</span>
               {users.length > 1 && (
                 <span style={{ 
-                  fontFamily: "'Inter', sans-serif", 
+                  fontFamily: t.fontBody, 
                   fontSize: '11px', 
                   fontWeight: 700, 
-                  color: theme.inkMuted 
+                  color: t.ink3 
                 }}>
                   {users.length}
                 </span>
@@ -229,25 +219,25 @@ const MessageBubble = ({
       <div style={{ 
         marginTop: '8px', 
         fontSize: '10px', 
-        fontFamily: "'Inter', sans-serif", 
+        fontFamily: t.fontBody, 
         fontWeight: 700, 
         letterSpacing: '1px', 
-        color: theme.inkMuted, 
+        color: t.ink3, 
         display: 'flex', 
         gap: '8px', 
         alignItems: 'center', 
         textTransform: 'uppercase' 
       }}>
-        <span>{time}</span>
+        <span style={{ fontFamily: t.fontMono }}>{time}</span>
         {receipt && (
           <span style={{ 
-            color: message.read ? '#2e7d32' : theme.accent, 
+            color: message.readAt ? t.green : t.yellow, 
             display: 'flex', 
             alignItems: 'center', 
             gap: '4px',
             transition: 'color 0.3s ease'
           }}>
-            {message.read ? <CheckCheck size={12} strokeWidth={2.5} /> : <Check size={12} strokeWidth={2.5} />} 
+            {message.readAt ? <CheckCheck size={12} strokeWidth={2.5} /> : <Check size={12} strokeWidth={2.5} />} 
             {receipt}
           </span>
         )}
@@ -262,7 +252,7 @@ const MessageBubble = ({
 const areEqual = (prev, next) => {
   return (
     prev.message._id === next.message._id &&
-    prev.message.read === next.message.read &&
+    prev.message.readAt === next.message.readAt &&
     prev.message.deleted === next.message.deleted &&
     prev.receipt === next.receipt &&
     JSON.stringify(prev.message.reactions) === JSON.stringify(next.message.reactions)

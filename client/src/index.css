@@ -1,25 +1,3 @@
-/* ==========================================
-   MATCHALIZE: THE SUNLIT LIBRARY THEME
-   ========================================== */
-
-:root {
-  /* The Ink & Paper Palette */
-  --color-ink: #2c2c2c;
-  --color-faded-ink: #6b6b6b;
-  --color-parchment: #fdfbf7;
-  --color-paper-white: #ffffff;
-  --color-leather: #8b4513;
-  --color-leather-dark: #5e2e0e;
-  --color-sepia-border: #d4c5a9;
-  --color-wax-red: #8b0000;
-  
-  /* Typography */
-  --font-heading: 'Playfair Display', serif;
-  --font-handwriting: 'Dancing Script', cursive;
-  --font-typewriter: 'Special Elite', cursive;
-  --font-system: 'Inter', sans-serif;
-}
-
 /* Global Resets */
 * {
   -webkit-tap-highlight-color: transparent;
@@ -29,22 +7,25 @@
 html, body {
   margin: 0;
   padding: 0;
-  background-color: var(--color-parchment);
-  color: var(--color-ink);
-  font-family: var(--font-typewriter);
+  background-color: var(--n-paper);
+  color: var(--n-ink);
+  font-family: var(--n-font-mono);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overflow-x: hidden;
+}
+
+#root {
+  height: 100%;
 }
 
 h1, h2, h3 {
-  font-family: var(--font-heading);
-  color: var(--color-ink);
+  font-family: var(--n-font-heavy);
+  color: var(--n-ink);
   margin: 0;
 }
 
 p, span, div {
-  font-family: var(--font-typewriter);
+  font-family: var(--n-font-body);
 }
 
 /* The Book Frame (App Container) */
@@ -53,10 +34,7 @@ p, span, div {
   margin: 0 auto;
   min-height: 100dvh;
   position: relative;
-  background-color: var(--color-parchment);
-  /* Subtle shadow to make it feel like a physical screen/pages */
-  box-shadow: 0 0 60px rgba(0,0,0,0.08);
-  overflow: hidden;
+  background-color: var(--n-paper);
 }
 
 /* Temporary Canvas Styling (To verify it works) */
@@ -68,19 +46,19 @@ p, span, div {
   align-items: center;
   justify-content: center;
   gap: 16px;
-  background: var(--color-parchment);
+  background: var(--n-paper);
 }
 
 .vintage-title {
   font-size: 48px;
   font-weight: 700;
-  color: var(--color-ink);
+  color: var(--n-ink);
   letter-spacing: -1px;
 }
 
 .vintage-subtitle {
   font-size: 16px;
-  color: var(--color-faded-ink);
+  color: var(--n-ink-2);
   font-style: italic;
 }
 
@@ -93,79 +71,76 @@ p, span, div {
   scrollbar-width: none;
 }
 
-/* Ghost Mode Sun/Moon Switch */
+/* Dark Mode Sun/Moon Switch — rounded rectangle, matching the app's button radius */
 .switch {
-  font-size: 17px;
   position: relative;
   display: inline-block;
-  width: 64px;
-  height: 34px;
+  width: 66px;
+  height: 36px;
+  flex-shrink: 0;
 }
 
 .switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
   opacity: 0;
-  width: 0;
-  height: 0;
+  cursor: pointer;
+  z-index: 2;
 }
 
 .slider {
   position: absolute;
-  cursor: pointer;
   top: 0; left: 0; right: 0; bottom: 0;
-  background-color: #73C0FC;
-  transition: .4s;
-  border-radius: 30px;
+  background-color: var(--n-ink);
+  border: 2px solid var(--n-ink);
+  border-radius: 12px;
+  transition: background-color .3s ease, border-color .3s ease;
 }
 
 .slider:before {
   position: absolute;
   content: "";
-  height: 30px;
-  width: 30px;
-  border-radius: 20px;
-  left: 2px;
-  bottom: 2px;
-  z-index: 2;
-  background-color: #e8e8e8;
-  transition: .4s;
-}
-
-.sun svg {
-  position: absolute;
-  top: 6px;
-  left: 36px;
+  height: 26px;
+  width: 26px;
+  border-radius: 8px;
+  left: 4px;
+  bottom: 4px;
   z-index: 1;
-  width: 24px;
-  height: 24px;
-  fill: #fff;
-  animation: rotate 15s linear infinite;
+  background-color: var(--n-paper);
+  border: 2px solid var(--n-ink);
+  transition: transform .3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.moon svg {
-  fill: #73C0FC;
+.switch .sun,
+.switch .moon {
   position: absolute;
-  top: 5px;
-  left: 5px;
-  z-index: 1;
-  width: 24px;
-  height: 24px;
-  animation: tilt 5s linear infinite;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 0;
 }
 
-@keyframes rotate {
-  0% { transform: rotate(0); }
-  100% { transform: rotate(360deg); }
+.switch .sun { left: 42px; transform: translateY(-50%); }
+.switch .moon { left: 6px; transform: translateY(-50%); }
+
+.switch .sun svg,
+.switch .moon svg {
+  width: 18px;
+  height: 18px;
 }
 
-@keyframes tilt {
-  0% { transform: rotate(0deg); }
-  25% { transform: rotate(-10deg); }
-  75% { transform: rotate(10deg); }
-  100% { transform: rotate(0deg); }
-}
+.switch .sun svg { fill: var(--n-yellow-deep); }
+.switch .moon svg { fill: var(--n-ink-3); }
 
 input:checked + .slider {
-  background-color: #183153;
+  background-color: var(--n-yellow);
+  border-color: var(--n-yellow-deep);
 }
 
 input:checked + .slider:before {
@@ -224,4 +199,61 @@ button:active { transform: scale(0.98); }
 @keyframes cassetteSpin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* ==========================================
+   MATCHALIZE: NEO-BRUTALIST TOKEN LAYER
+   The one canon. Mirrors src/styles/neu.js —
+   do not add colors/shadows anywhere else.
+   ========================================== */
+:root {
+  --n-desk: #131313;
+  --n-paper: #FFF9EC;
+  --n-card: #FFFFFF;
+  --n-ink: #191919;
+  --n-ink-2: #5F5B52;
+  --n-ink-3: #A39E92;
+  --n-hair: #EBE5D6;
+  --n-yellow: #FFD43D;
+  --n-yellow-deep: #FFC91F;
+  --n-coral: #FF7A59;
+  --n-green: #5BD98A;
+  --n-pink: #FFA3C6;
+  --n-red: #E5484D;
+
+  --n-font-heavy: 'Archivo Black', 'Arial Black', sans-serif;
+  --n-font-body: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+  --n-font-mono: 'Space Mono', 'Courier New', monospace;
+  --n-font-hand: 'Caveat', 'Segoe Script', cursive;
+
+  --n-slam-sm: 3px 3px 0 #191919;
+  --n-slam-md: 5px 5px 0 #191919;
+  --n-slam-lg: 8px 8px 0 #191919;
+}
+
+/* THE SLAM — one shared press recipe. Buttons/chips get
+   .slam + a size class; do not hand-roll this interaction. */
+.slam {
+  transition: transform .08s steps(2), box-shadow .08s steps(2);
+  -webkit-tap-highlight-color: transparent;
+}
+.slam-sm { box-shadow: var(--n-slam-sm); }
+.slam-md { box-shadow: var(--n-slam-md); }
+.slam-lg { box-shadow: var(--n-slam-lg); }
+
+.slam:hover:not(:disabled) { transform: translate(-2px, -2px); }
+.slam-sm:hover:not(:disabled) { box-shadow: 5px 5px 0 #191919; }
+.slam-md:hover:not(:disabled) { box-shadow: 7px 7px 0 #191919; }
+.slam-lg:hover:not(:disabled) { box-shadow: 10px 10px 0 #191919; }
+
+.slam:active:not(:disabled) {
+  transform: translate(3px, 3px) !important;
+  box-shadow: 0 0 0 #191919 !important;
+}
+.slam:focus-visible { outline: 3px solid var(--n-coral); outline-offset: 3px; }
+.slam:disabled { opacity: 0.55; cursor: not-allowed; }
+
+@media (prefers-reduced-motion: reduce) {
+  .slam { transition: none; }
+  .slam:hover:not(:disabled) { transform: none; }
 }

@@ -2,23 +2,9 @@ import React, { memo } from 'react';
 import { motion } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
 import { Image, Mic, X } from 'lucide-react';
-import { theme as design } from '../../utils/theme';
+import neu from '../../styles/neu';
 
-/* ==================================================================
-   ARCHIVAL THEME CONSTANTS
-================================================================== */
-const theme = {
-  paper: '#fdfbf7',
-  surface: '#ffffff',
-  surfaceAlt: '#f4f1ea',
-  border: '#e0d8c8',
-  borderDark: '#d4c5a9',
-  ink: '#1a1a1a',
-  inkMuted: '#8c8275',
-  accent: '#8b4513',
-  crimson: '#8b1a1a',
-  shadowWarm: 'rgba(139, 69, 19, 0.12)',
-};
+const t = neu;
 
 const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
   if (!replyTo) return null;
@@ -39,13 +25,12 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
       exit={{ height: 0, opacity: 0 }}
       transition={{ duration: 0.25, ease: [0.2, 0.8, 0.2, 1] }}
       style={{
-        backgroundColor: theme.surfaceAlt,
-        borderTop: `1px solid ${theme.borderDark}`,
+        backgroundColor: t.paper,
+        borderTop: `1px solid ${t.ink}`,
         overflow: 'hidden',
         willChange: 'height, opacity', // GPU Promotion for layout animation
         position: 'relative',
         zIndex: 5,
-        boxShadow: `0 -4px 16px ${theme.shadowWarm}`,
       }}
     >
       {/* Interactive Tactile Physics */}
@@ -57,9 +42,9 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
         @media (hover: hover) {
           .tactile-cancel-btn:hover {
             transform: translate3d(0, -2px, 0) scale3d(1.05, 1.05, 1);
-            background-color: rgba(139, 26, 26, 0.08) !important;
-            color: ${theme.crimson} !important;
-            border-color: ${theme.crimson} !important;
+            background-color: var(--n-red) !important;
+            color: #fff !important;
+            border-color: var(--n-red) !important;
           }
         }
         .tactile-cancel-btn:active {
@@ -86,7 +71,7 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
           aria-hidden="true" 
           style={{ 
             position: 'absolute', inset: 0, 
-            backgroundImage: `url("${design?.texture?.grain || ''}")`, 
+            backgroundImage: `url("${t.grain || ''}")`, 
             mixBlendMode: 'multiply', opacity: 0.5, pointerEvents: 'none', zIndex: 0 
           }} 
         />
@@ -97,11 +82,10 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
           style={{
             width: '3px',
             alignSelf: 'stretch',
-            backgroundColor: theme.accent,
+            backgroundColor: t.yellow,
             borderRadius: '2px',
             flexShrink: 0,
             zIndex: 1,
-            boxShadow: `1px 0 2px ${theme.shadowWarm}`,
           }}
         />
         
@@ -109,12 +93,12 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
         <div style={{ flex: 1, minWidth: 0, zIndex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <div
             style={{
-              fontFamily: "'Inter', sans-serif",
+              fontFamily: t.fontBody,
               fontSize: '10px',
               fontWeight: 800,
               letterSpacing: '1px',
               textTransform: 'uppercase',
-              color: theme.accent,
+              color: t.yellow,
               lineHeight: 1,
             }}
           >
@@ -122,10 +106,10 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
           </div>
           <div
             style={{
-              fontFamily: "'Special Elite', 'Courier New', monospace",
+              fontFamily: t.fontMono,
               fontSize: '13px',
               fontWeight: 600,
-              color: theme.inkMuted,
+              color: t.ink2,
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -147,15 +131,15 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
           }}
           aria-label="Cancel reply"
           style={{
-            backgroundColor: 'rgba(255, 255, 255, 0.5)',
-            border: `1.5px solid ${theme.borderDark}`,
+            backgroundColor: t.paper,
+            border: `2px solid ${t.ink}`,
             borderRadius: '50%',
             width: '28px',
             height: '28px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: theme.inkMuted,
+            color: t.ink,
             cursor: 'pointer',
             padding: 0,
             flexShrink: 0,

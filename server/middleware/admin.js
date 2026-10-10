@@ -1,7 +1,8 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import { APP_CONSTANTS } from '../config/appData.js';
 
-const COOKIE_NAME = 'matchalize_jwt';
+const COOKIE_NAME = APP_CONSTANTS.AUTH_COOKIE_NAME;
 
 export const adminProtect = async (req, res, next) => {
   let token = null;
@@ -17,7 +18,9 @@ export const adminProtect = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id).select('email name suspended isDeleted').lean();
+    // No .lean(): req.user is a full mongoose doc, so any future code that
+    // saves it works instead of throwing. (Nothing saves it today — cleanup only.)
+    const user = await User.findById(decoded.id).select('email name suspended isDeleted');
 
     if (!user) return res.status(401).json({ message: 'User not found' });
     if (user.suspended) return res.status(403).json({ message: 'Account suspended' });

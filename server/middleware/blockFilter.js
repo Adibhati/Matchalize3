@@ -36,3 +36,21 @@ export async function areBlocked(userA, userB) {
   });
   return !!block;
 }
+
+/**
+ * Which way a block runs between two users — `areBlocked` only says one exists.
+ *
+ * @param {ObjectId} userA - the authenticated user (the "you" in the copy)
+ * @param {ObjectId} userB
+ * @returns {Promise<null|'you_blocked_them'|'they_blocked_you'>}
+ */
+export async function getBlockDirection(userA, userB) {
+  const block = await Block.findOne({
+    $or: [
+      { blocker: userA, blocked: userB },
+      { blocker: userB, blocked: userA },
+    ],
+  }).lean();
+  if (!block) return null;
+  return block.blocker.toString() === userA.toString() ? 'you_blocked_them' : 'they_blocked_you';
+}

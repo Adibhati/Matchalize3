@@ -3,7 +3,11 @@ import { SOCKET_URL } from './api';
 
 const socket = io(SOCKET_URL, {
   withCredentials: true,
-  transports: ['websocket'],
+  // Deliberately NOT `transports: ['websocket']`. Pinning websocket-only removes
+  // the HTTP long-polling fallback, so when the server isn't reachable the
+  // connection fails outright with no retry path — which is what produced the
+  // ERR_CONNECTION_REFUSED cascade in the console. Letting socket.io pick
+  // (polling first, upgrade to websocket) makes it recover on its own.
 });
 
 // When admin suspends a user or per-event middleware catches them

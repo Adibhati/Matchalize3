@@ -23,6 +23,10 @@ export const triggerHaptic = (style = 'light') => {
         // A stronger, definitive thud (e.g., destructive actions, errors, successful match)
         window.navigator.vibrate(50);
         break;
+      case 'success':
+        // A short double-pulse confirmation (e.g., photo uploaded, seal affixed)
+        window.navigator.vibrate([15, 40, 25]);
+        break;
       default:
         window.navigator.vibrate(10);
     }

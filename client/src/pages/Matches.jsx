@@ -1,32 +1,48 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import neu from '../styles/neu';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '../utils/api';
 import { toast } from '../utils/toast';
 import { useAuth } from '../utils/AuthContext';
 import socket from '../utils/socket';
-import { theme as design } from '../utils/theme';
 import { SkeletonBox } from '../components/Skeleton';
 import { Heart, MoreVertical, Search, X } from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
+import { DECK_CONTENT_TOP } from '../utils/deckChrome';
 
-/* Locked tokens — same family as ProfileCard */
-const t = {
-  desk: '#ece4d4',
-  paper: '#fdfbf7',
-  card: '#fffdf8',
-  surfaceAlt: '#f4f1ea',
-  lineDark: '#d4c5a9',
-  ink: '#1a1a1a',
-  inkSoft: '#4a4a4a',
-  inkMuted: '#8c8275',
-  accent: '#8b4513',
-  crimson: '#8b1a1a',
-  fontDisplay: design?.font?.heading || "'Playfair Display', Georgia, serif",
-  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
-  fontType: "'Special Elite', 'Courier New', monospace",
-  grain: design?.texture?.grain || '',
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
+
+const MATCHES_CSS = `
+  .match-card { will-change: transform;
+    transition: transform .08s steps(2), box-shadow .08s steps(2), background .08s steps(2);
+    contain: layout style; }
+  .match-card:active { transform: translate(3px, 3px) !important; box-shadow: 0 0 0 #191919 !important; }
+
+  .match-menu-btn { display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 11px 12px; background: none; border: none; cursor: pointer; text-align: left;
+    font-family: ${t.fontMono}; font-size: 12px; font-weight: 700; letter-spacing: .1em;
+    text-transform: uppercase; color: ${t.red}; border-radius: 8px; transition: none; }
+  .match-menu-btn:active { background: ${t.red}; color: #fff; }
+
+  .match-search input::placeholder { color: ${t.ink3}; opacity: 1; }
+  .match-search:focus-within { border-color: ${t.ink} !important; box-shadow: 3px 3px 0 ${t.ink}; }
+
+  @media (hover: hover) and (pointer: fine) {
+    .match-card:hover { transform: translate(-1px, -1px);
+      box-shadow: 6px 6px 0 #191919; }
+    .match-menu-btn:hover { background: rgba(229,72,77,.08); }
+    .match-clear:hover { background: ${t.hair}; }
+  }
+
+  .match-card:focus-visible, .match-menu-btn:focus-visible, .match-clear:focus-visible {
+    outline: 3px solid ${t.yellow}; outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .match-card { transition: none !important; transform: none !important; }
+  }
+`;
 
 const Matches = ({ onOpenChat }) => {
   const queryClient = useQueryClient();
@@ -39,7 +55,7 @@ const Matches = ({ onOpenChat }) => {
 
   const { data, isLoading } = useQuery({
     queryKey: ['matches'],
-    queryFn: () => api.get('/matches'),
+    queryFn: () => api.get('/alignments'),
   });
 
   const matches = useMemo(() => data?.matches || [], [data]);
@@ -50,7 +66,7 @@ const Matches = ({ onOpenChat }) => {
       queryClient.setQueryData(['matches'], (old) => {
         if (!old?.matches) return old;
         const list = [...old.matches];
-        const idx = list.findIndex((m) => m._id === msg.matchId);
+        const idx = list.findIndex((m) => m._id === msg.alignmentId);
         if (idx === -1) return old;
         const m = list[idx];
         const updated = {
@@ -74,29 +90,29 @@ const Matches = ({ onOpenChat }) => {
     return () => socket.off('new-message', onNew);
   }, [queryClient, myId]);
 
-  // Real-time unmatch: remove the match from cache when the other user severs the connection
+  // Real-time unmatch: remove the alignment from cache when the other user severs the connection
   useEffect(() => {
-    const onUnmatch = ({ matchId }) => {
+    const onUnmatch = ({ alignmentId }) => {
       queryClient.setQueryData(['matches'], (old) => ({
         ...(old || {}),
-        matches: (old?.matches || []).filter((m) => m._id !== matchId),
+        matches: (old?.matches || []).filter((m) => m._id !== alignmentId),
       }));
     };
     socket.on('unmatch-notification', onUnmatch);
     return () => socket.off('unmatch-notification', onUnmatch);
   }, [queryClient]);
 
-  const handleUnmatch = useCallback(async (matchId) => {
+  const handleUnmatch = useCallback(async (alignmentId) => {
     setOpenMenuId(null);
     if (!window.confirm('Are you sure you want to unmatch? This cannot be undone.')) return;
     try {
-      await api.delete(`/matches/${matchId}`);
+      await api.delete(`/alignments/${alignmentId}`);
       queryClient.setQueryData(['matches'], (old) => ({
         ...(old || {}),
-        matches: (old?.matches || []).filter((m) => m._id !== matchId),
+        matches: (old?.matches || []).filter((m) => m._id !== alignmentId),
       }));
     } catch (err) {
-      toast.error('Failed to sever this connection. Please try again.');
+      if (!err?.toasted) toast.error('Could not unmatch. Try again.');
     }
   }, [queryClient]);
 
@@ -130,11 +146,15 @@ const Matches = ({ onOpenChat }) => {
 
   if (isLoading) {
     return (
-      <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: '16px 14px' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: `calc(${DECK_CONTENT_TOP} + 8px) 14px 16px` }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {[0, 1, 2].map((i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 14, backgroundColor: t.paper, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 18, padding: 16, boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)' }}>
-              <SkeletonBox width={56} height={56} radius="50%" />
+            <div key={i} style={{
+              display: 'flex', alignItems: 'center', gap: 14,
+              backgroundColor: t.paper, border: `2px solid ${t.ink}`,
+              borderRadius: 16, boxShadow: `5px 5px 0 ${t.ink}`, padding: 16,
+            }}>
+              <SkeletonBox width={56} height={56} radius={12} />
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <SkeletonBox width={120} height={14} />
                 <SkeletonBox width={180} height={11} />
@@ -152,13 +172,17 @@ const Matches = ({ onOpenChat }) => {
         flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
         flexDirection: 'column', gap: 16, padding: 32, backgroundColor: t.desk,
       }}>
-        <div style={{ width: 48, height: 48, borderRadius: 12, backgroundColor: t.surfaceAlt, border: '1px solid rgba(212,197,169,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Heart size={18} strokeWidth={2} color={t.accent} />
+        <div style={{
+          width: 56, height: 56, borderRadius: 16, backgroundColor: t.coral,
+          border: `2px solid ${t.ink}`, boxShadow: `4px 4px 0 ${t.ink}`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4,
+        }}>
+          <Heart size={24} strokeWidth={2.6} color={t.ink} />
         </div>
-        <p style={{ fontFamily: t.fontDisplay, fontSize: 22, color: t.ink, textAlign: 'center', margin: 0, fontWeight: 800, letterSpacing: '-0.02em' }}>
-          No connections yet
+        <p style={{ fontFamily: t.fontHeavy, fontSize: 21, color: t.paper, textAlign: 'center', margin: 0, letterSpacing: '-.01em', textTransform: 'uppercase' }}>
+          No letters yet
         </p>
-        <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 450, color: t.inkMuted, textAlign: 'center', maxWidth: 280, margin: 0, lineHeight: 1.6 }}>
+        <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 500, color: t.ink3, textAlign: 'center', maxWidth: 280, margin: 0, lineHeight: 1.6 }}>
           Start exploring and leave a flower to begin your story.
         </p>
       </div>
@@ -166,59 +190,36 @@ const Matches = ({ onOpenChat }) => {
   }
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: '16px 14px' }}>
-      {/* Grain film */}
-      <div aria-hidden="true" style={{ position: 'fixed', inset: 0, backgroundImage: `url("${t.grain}")`, mixBlendMode: 'multiply', opacity: 0.3, pointerEvents: 'none', zIndex: 0 }} />
+    <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: `calc(${DECK_CONTENT_TOP} + 8px) 14px 16px`, position: 'relative' }}>
+      <style>{MATCHES_CSS}</style>
 
-      <style>{`
-        .match-card {
-          will-change: transform;
-          transition: transform 0.15s ease-out, box-shadow 0.2s ease;
-          contain: layout style;
-        }
-        @media (hover: hover) {
-          .match-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 18px 40px rgba(88,63,30,0.2), 0 4px 12px rgba(88,63,30,0.1);
-          }
-        }
-        .match-card:active {
-          transform: scale(0.98) !important;
-          transition: transform 0.08s ease-out !important;
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .match-card { transition: none !important; transform: none !important; }
-        }
-      `}</style>
-
-      <div style={{ position: 'relative', zIndex: 1 }}>
-        <h2 style={{ fontFamily: t.fontDisplay, fontSize: 24, color: t.ink, marginBottom: 16, marginTop: 4, fontWeight: 800, letterSpacing: '-0.02em' }}>
-          Your Connections
-        </h2>
-
-        {/* Search — box-tier input */}
+      <div style={{ position: 'relative' }}>
+        {/* Search — chunky box, ink border, shadow on focus. The tab heading now
+            comes from the floating Header row, so no in-page title here. */}
         <div
+          className="match-search"
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: 10,
             padding: '0 14px',
-            marginBottom: 18,
+            marginBottom: 6,
             backgroundColor: t.paper,
-            border: `1px solid ${isFocused ? 'rgba(139,69,19,0.45)' : 'rgba(212,197,169,0.7)'}`,
-            borderRadius: 6,
-            transition: 'border-color 0.2s ease',
+            border: `2px solid ${t.ink}`,
+            borderRadius: 12,
+            boxShadow: isFocused ? `3px 3px 0 ${t.ink}` : 'none',
+            transition: 'box-shadow .08s steps(2)',
           }}
         >
-          <Search size={14} strokeWidth={2} color={isFocused ? t.accent : t.inkMuted} style={{ transition: 'color 0.2s ease', flexShrink: 0 }} />
+          <Search size={15} strokeWidth={2.6} color={isFocused ? t.ink : t.ink3} style={{ transition: 'color 0.15s ease', flexShrink: 0 }} />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             onFocus={() => setIsFocused(true)}
             onBlur={() => setIsFocused(false)}
-            placeholder="Search connections..."
-            aria-label="Search connections"
+            placeholder="Search letters..."
+            aria-label="Search letters"
             style={{
               width: '100%',
               boxSizing: 'border-box',
@@ -227,6 +228,7 @@ const Matches = ({ onOpenChat }) => {
               border: 'none',
               fontFamily: t.fontBody,
               fontSize: 13.5,
+              fontWeight: 500,
               color: t.ink,
               outline: 'none',
             }}
@@ -234,16 +236,17 @@ const Matches = ({ onOpenChat }) => {
           {search && (
             <button
               type="button"
+              className="match-clear"
               onClick={() => { triggerHaptic('light'); setSearch(''); }}
               aria-label="Clear search"
-              style={{ background: 'none', border: 'none', color: t.inkMuted, cursor: 'pointer', display: 'flex', padding: 4, flexShrink: 0 }}
+              style={{ background: 'none', border: 'none', color: t.ink2, cursor: 'pointer', display: 'flex', padding: 6, margin: -6, borderRadius: 6, flexShrink: 0 }}
             >
-              <X size={14} strokeWidth={2} />
+              <X size={14} strokeWidth={2.6} />
             </button>
           )}
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {filtered.map((match) => {
             const user = match.user;
             if (!user) return null;
@@ -275,46 +278,61 @@ const Matches = ({ onOpenChat }) => {
                   alignItems: 'center',
                   gap: 14,
                   backgroundColor: unread ? t.card : t.paper,
-                  border: `1px solid ${unread ? 'rgba(139,69,19,0.35)' : 'rgba(212,197,169,0.7)'}`,
-                  borderRadius: 18,
+                  border: `2px solid ${t.ink}`,
+                  borderRadius: 16,
+                  boxShadow: unread ? `5px 5px 0 ${t.ink}` : `4px 4px 0 ${t.ink}`,
                   padding: '14px 16px',
-                  boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)',
                   cursor: 'pointer',
                 }}
               >
-                {/* Avatar — circular with hairline ring, matching every other avatar in the app */}
+                {/* Avatar — square-ish tile, ink border; unread gets the yellow ring */}
                 <img
-                  src={user.photos?.[0] || 'https://via.placeholder.com/80'}
+                  src={user.photos?.[0] || 'https://placehold.co/80/fff3dc/191919?text=%C2%B7'}
                   alt={user.name}
                   loading="lazy"
                   decoding="async"
-                  style={{ width: 56, height: 56, borderRadius: '50%', objectFit: 'cover', border: '1px solid rgba(212,197,169,0.9)', backgroundColor: t.surfaceAlt, flexShrink: 0 }}
+                  style={{
+                    width: 56, height: 56, borderRadius: 12, objectFit: 'cover',
+                    border: `2px solid ${t.ink}`, backgroundColor: t.hair, flexShrink: 0,
+                    outline: unread ? `3px solid ${t.yellow}` : 'none', outlineOffset: 1,
+                  }}
                 />
 
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <p style={{ fontFamily: t.fontBody, fontSize: 15, fontWeight: unread ? 700 : 600, color: t.ink, margin: 0 }}>
-                      {user.name}{user.age ? <span style={{ fontWeight: 400, color: t.inkMuted }}>, {user.age}</span> : null}
+                    <p style={{ fontFamily: t.fontBody, fontSize: 15, fontWeight: unread ? 800 : 600, color: t.ink, margin: 0 }}>
+                      {user.name}{user.age ? <span style={{ fontWeight: 500, color: t.ink3 }}>, {user.age}</span> : null}
                     </p>
                     {unread && (
                       <span
                         aria-label="Unread message"
-                        style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: t.crimson, flexShrink: 0, boxShadow: '0 0 0 3px rgba(139,26,26,0.12)' }}
+                        style={{
+                          width: 10, height: 10, borderRadius: '50%',
+                          backgroundColor: t.coral, border: `1.5px solid ${t.ink}`,
+                          flexShrink: 0,
+                        }}
                       />
                     )}
                   </div>
-                  <p style={{ fontFamily: t.fontType, fontSize: 12.5, color: unread ? t.inkSoft : t.inkMuted, margin: '4px 0 0 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: unread ? 700 : 400 }}>
+                  <p style={{ fontFamily: t.fontBody, fontSize: 12.5, color: unread ? t.ink : t.ink2, margin: '4px 0 0 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: unread ? 700 : 500 }}>
                     {lastMessage
                       ? lastIsMedia
-                        ? (lastMessage.type === 'image' ? 'Sent a photograph' : 'Sent a voice note')
+                        ? (lastMessage.type === 'image' ? '📷 Sent a photograph' : '🎙 Sent a voice note')
                         : lastMessage.text
-                      : 'Say hello'}
+                      : 'Open chat'}
                   </p>
                 </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
-                  <span style={{ fontFamily: t.fontType, fontSize: 10.5, color: unread ? t.accent : t.inkMuted, fontWeight: unread ? 700 : 400, whiteSpace: 'nowrap' }}>
-                    {lastMessage ? fmtTime(lastMessage.createdAt) : `Matched ${timeAgo(match.createdAt)}`}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flexShrink: 0 }}>
+                  <span style={{
+                    fontFamily: t.fontMono, fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em',
+                    color: unread ? t.ink : t.ink3,
+                    background: unread ? t.yellow : 'transparent',
+                    border: unread ? `1.5px solid ${t.ink}` : 'none',
+                    borderRadius: 5, padding: unread ? '2px 6px' : 0,
+                    whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums',
+                  }}>
+                    {lastMessage ? fmtTime(lastMessage.createdAt) : `Aligned ${timeAgo(match.createdAt)}`}
                   </span>
                   <button
                     type="button"
@@ -323,15 +341,22 @@ const Matches = ({ onOpenChat }) => {
                       triggerHaptic('light');
                       setOpenMenuId(isOpen ? null : match._id);
                     }}
-                    style={{ background: 'none', border: 'none', color: t.inkMuted, cursor: 'pointer', padding: 4, margin: -4, display: 'flex', alignItems: 'center', borderRadius: 4 }}
+                    style={{
+                      background: isOpen ? t.ink : 'transparent',
+                      color: isOpen ? t.paper : t.ink3,
+                      border: `1.5px solid ${isOpen ? t.ink : t.hair}`,
+                      cursor: 'pointer', padding: 3, display: 'flex', alignItems: 'center',
+                      borderRadius: 7,
+                    }}
                     aria-label="More options"
+                    aria-expanded={isOpen}
                     title="More options"
                   >
-                    <MoreVertical size={16} strokeWidth={2} />
+                    <MoreVertical size={15} strokeWidth={2.4} />
                   </button>
                 </div>
 
-                {/* Contextual menu */}
+                {/* Contextual menu — chunky card, slam language */}
                 <AnimatePresence>
                   {isOpen && (
                     <>
@@ -343,21 +368,24 @@ const Matches = ({ onOpenChat }) => {
                         style={{ position: 'fixed', inset: 0, zIndex: 90, cursor: 'default' }}
                       />
                       <motion.div
-                        initial={{ opacity: 0, scale: 0.96, y: -6 }}
+                        initial={{ opacity: 0, scale: 0.94, y: -6 }}
                         animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.96, y: -6 }}
-                        transition={{ duration: 0.15, ease: 'easeOut' }}
-                        style={{ position: 'absolute', top: 48, right: 16, backgroundColor: t.paper, border: '1px solid rgba(212,197,169,0.7)', borderRadius: 8, boxShadow: '0 12px 28px rgba(88,63,30,0.22)', zIndex: 100, overflow: 'hidden', minWidth: 150, padding: 6 }}
+                        exit={{ opacity: 0, scale: 0.94, y: -6 }}
+                        transition={{ duration: 0.13, ease: 'easeOut' }}
+                        style={{
+                          position: 'absolute', top: 50, right: 16, zIndex: 100, overflow: 'hidden',
+                          minWidth: 150, padding: 5,
+                          backgroundColor: t.paper, border: `2px solid ${t.ink}`,
+                          borderRadius: 12, boxShadow: `5px 5px 0 ${t.ink}`,
+                        }}
                       >
                         <button
                           type="button"
+                          className="match-menu-btn"
                           onClick={(e) => {
                             e.stopPropagation();
                             handleUnmatch(match._id);
                           }}
-                          style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 12px', background: 'none', border: 'none', fontFamily: t.fontBody, fontSize: 12, fontWeight: 800, color: t.crimson, cursor: 'pointer', textAlign: 'left', borderRadius: 5, transition: 'background-color 0.15s ease' }}
-                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(139, 26, 26, 0.05)'}
-                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
                           Unmatch
                         </button>

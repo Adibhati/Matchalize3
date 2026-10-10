@@ -37,15 +37,14 @@ const CassettePlayer = ({ audioUrl }) => {
   return (
     <div
       style={{
-        backgroundColor: '#fffcf5',
-        border: '1.5px solid #d4af37',
+        backgroundColor: 'var(--card)',
+        border: '1.5px solid var(--gold-deep)',
         borderRadius: '12px',
         padding: '12px 14px',
         display: 'flex',
         alignItems: 'center',
         gap: '14px',
         width: '260px',
-        boxShadow: '0 4px 10px rgba(212, 175, 55, 0.12)',
         boxSizing: 'border-box',
       }}
     >
@@ -60,12 +59,12 @@ const CassettePlayer = ({ audioUrl }) => {
               height: '24px',
               borderRadius: '50%',
               backgroundColor: '#2a221e',
-              border: '2px solid #d4af37',
+              border: '2px solid var(--gold-deep)',
               position: 'relative',
             }}
           >
-            <div style={{ position: 'absolute', top: 0, left: '10px', width: '2px', height: '20px', backgroundColor: '#d4af37' }} />
-            <div style={{ position: 'absolute', top: '10px', left: 0, width: '20px', height: '2px', backgroundColor: '#d4af37' }} />
+            <div style={{ position: 'absolute', top: 0, left: '10px', width: '2px', height: '20px', backgroundColor: 'var(--gold-deep)' }} />
+            <div style={{ position: 'absolute', top: '10px', left: 0, width: '20px', height: '2px', backgroundColor: 'var(--gold-deep)' }} />
           </div>
         ))}
       </div>
@@ -77,8 +76,8 @@ const CassettePlayer = ({ audioUrl }) => {
             type="button"
             onClick={togglePlay}
             style={{
-              backgroundColor: '#8b1a1a',
-              color: '#ffffff',
+              backgroundColor: 'var(--crimson)',
+              color: 'var(--surface)',
               border: 'none',
               borderRadius: '50%',
               width: '32px',
@@ -88,23 +87,22 @@ const CassettePlayer = ({ audioUrl }) => {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 2px 4px rgba(139, 26, 26, 0.2)',
             }}
           >
             {isPlaying ? '❚❚' : '▶'}
           </button>
-          <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#8b4513', letterSpacing: '0.5px' }}>
+          <span style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--accent)', letterSpacing: '0.5px' }}>
             CASSETTE
           </span>
         </div>
 
         {/* Progress Bar */}
-        <div style={{ marginTop: '10px', height: '4px', backgroundColor: '#e0d8c8', borderRadius: '2px', overflow: 'hidden' }}>
-          <div style={{ width: `${progress * 100}%`, height: '100%', backgroundColor: '#8b1a1a', transition: 'width 0.1s linear' }} />
+        <div style={{ marginTop: '10px', height: '4px', backgroundColor: 'var(--line)', borderRadius: '2px', overflow: 'hidden' }}>
+          <div style={{ width: `${progress * 100}%`, height: '100%', backgroundColor: 'var(--crimson)', transition: 'width 0.1s linear' }} />
         </div>
 
         {/* Timestamp */}
-        <div style={{ marginTop: '4px', fontSize: '10px', color: '#8c8275', textAlign: 'right', fontFamily: 'monospace' }}>
+        <div style={{ marginTop: '4px', fontSize: '10px', color: 'var(--ink-muted)', textAlign: 'right', fontFamily: 'monospace' }}>
           {formatTime(currentTime)} / {formatTime(duration)}
         </div>
       </div>

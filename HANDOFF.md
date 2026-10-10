@@ -1,5 +1,7 @@
 # Matchalize — Handoff Status Report
 
+> **NETWORK SCOPE (canonical decision):** Matchalize is an **INTRA + INTER college network** — users connect within their own campus (intra) AND across colleges nationwide (inter). Never describe it as one or the other. Verified via each college's `.ac.in` academic email.
+
 > Updated: Sun Jul 26 2026. Reflects the actual codebase state after 55+ bug fixes and hardening passes.
 
 ---

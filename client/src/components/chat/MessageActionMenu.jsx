@@ -2,27 +2,12 @@ import React, { memo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
-import { theme as design } from '../../utils/theme';
+import neu from '../../styles/neu';
 
-/* ==================================================================
-   ARCHIVAL THEME CONSTANTS
-================================================================== */
-const theme = { 
-  paper: '#fdfbf7', 
-  surface: '#ffffff', 
-  surfaceAlt: '#f4f1ea', 
-  border: '#e0d8c8', 
-  borderDark: '#d4c5a9', 
-  ink: '#1a1a1a', 
-  inkMuted: '#8c8275', 
-  accent: '#8b4513', 
-  crimson: '#8b1a1a', 
-  shadowWarm: 'rgba(139, 69, 19, 0.12)',
-  shadowDark: 'rgba(26, 26, 26, 0.20)',
-};
+const t = neu;
 
 // Zero-Lag Memoized Icon Component
-const Icon = memo(({ path, size = 20, color = theme.ink, strokeWidth = 1.8 }) => (
+const Icon = memo(({ path, size = 20, color = t.ink, strokeWidth = 1.8 }) => (
   <svg 
     width={size} 
     height={size} 
@@ -84,19 +69,20 @@ const MessageActionMenu = ({ anchorRect, isMine, isMedia, onClose, onReply, onRe
         }
         @media (hover: hover) {
           .tactile-menu-btn:hover {
-            background-color: rgba(139, 69, 19, 0.05); /* Subtle warm paper highlight */
+            background-color: var(--n-yellow) !important;
           }
           .tactile-menu-btn.danger-btn:hover {
-            background-color: rgba(139, 26, 26, 0.05); /* Subtle crimson highlight */
+            background-color: var(--n-red) !important;
+            color: #fff !important;
           }
         }
         .tactile-menu-btn:active {
           transform: scale3d(0.97, 0.97, 1) !important;
           transition: transform 0.08s cubic-bezier(0, 0, 0.2, 1) !important;
-          background-color: rgba(139, 69, 19, 0.1) !important;
+          background-color: var(--n-yellow-deep) !important;
         }
         .tactile-menu-btn.danger-btn:active {
-          background-color: rgba(139, 26, 26, 0.1) !important;
+          background-color: var(--n-red) !important;
         }
         @media (prefers-reduced-motion: reduce) {
           .tactile-menu-btn { transition: none !important; transform: none !important; }
@@ -113,7 +99,7 @@ const MessageActionMenu = ({ anchorRect, isMine, isMedia, onClose, onReply, onRe
         style={{ 
           position: 'fixed', 
           inset: 0, 
-          backgroundColor: 'rgba(20, 15, 10, 0.35)', 
+          backgroundColor: 'rgba(25, 25, 25, 0.35)', 
           backdropFilter: 'blur(2px)', 
           zIndex: 9998 
         }}
@@ -131,11 +117,10 @@ const MessageActionMenu = ({ anchorRect, isMine, isMedia, onClose, onReply, onRe
           top,
           left,
           width: menuWidth,
-          backgroundColor: theme.surface,
-          backgroundImage: `url("${design?.texture?.grain || ''}")`,
-          border: `1.5px solid ${theme.borderDark}`,
-          borderRadius: '16px',
-          boxShadow: `0 16px 40px ${theme.shadowDark}, 0 4px 12px ${theme.shadowWarm}`,
+          backgroundColor: t.card,
+          backgroundImage: `url("${t.grain || ''}")`,
+          border: `2px solid ${t.ink}`,
+          borderRadius: t.radius.lg,
           padding: '8px',
           zIndex: 9999,
           display: 'flex',
@@ -146,8 +131,8 @@ const MessageActionMenu = ({ anchorRect, isMine, isMedia, onClose, onReply, onRe
       >
         {visible.map((a) => {
           const isDanger = a.key === 'delete' || a.key === 'report';
-          const iconColor = isDanger ? theme.crimson : theme.inkSoft;
-          const textColor = isDanger ? theme.crimson : theme.ink;
+          const iconColor = isDanger ? t.red : t.ink2;
+          const textColor = isDanger ? t.red : t.ink;
 
           return (
             <button
@@ -166,7 +151,7 @@ const MessageActionMenu = ({ anchorRect, isMine, isMedia, onClose, onReply, onRe
                 padding: '12px 16px',
                 backgroundColor: 'transparent',
                 border: 'none',
-                borderRadius: '8px', // Modern rounded internal list items
+                borderRadius: t.radius.sm,
                 cursor: 'pointer',
                 textAlign: 'left',
                 outline: 'none',
@@ -176,7 +161,7 @@ const MessageActionMenu = ({ anchorRect, isMine, isMedia, onClose, onReply, onRe
               <Icon path={a.path} size={18} color={iconColor} strokeWidth={2} />
               <span 
                 style={{ 
-                  fontFamily: "'Inter', sans-serif", 
+                  fontFamily: t.fontBody, 
                   fontWeight: 600, 
                   fontSize: '14px',
                   color: textColor,

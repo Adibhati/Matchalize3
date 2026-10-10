@@ -14,8 +14,20 @@ const interactionSchema = new mongoose.Schema(
     },
     actionType: { 
       type: String, 
-      enum: ['archive', 'letter', 'seal_stamp', 'accept_letter', 'accept_seal'], 
+      /* 'letter' and 'telegram' are RETIRED as UI actions — the deck now has a
+         single 'align' action. They stay in the enum because rows already exist
+         that carry them, and the accept route (routes/notifications.js) reads
+         them to decide whether an inbound request was already answered.
+         Removing either value would make those documents fail validation on the
+         next save, and would break mutual detection for historical matches.
+         Nothing NEW writes them. */
+      enum: ['archive', 'letter', 'telegram', 'accept_letter', 'align'], 
       required: true 
+    },
+    origin: {
+      type: String,
+      enum: ['block', 'unmatch', 'pass'],
+      default: null,
     },
     targetArtifact: { 
       type: String, 
@@ -40,6 +52,23 @@ const interactionSchema = new mongoose.Schema(
 
 // High-performance compound indexes for building the Discover deck instantly
 interactionSchema.index({ actorId: 1, targetId: 1 });
+
+/* UNIQUE on the pair + action. The pass route and the letter route both use
+   findOneAndUpdate({actorId, targetId, actionType}, …, {upsert: true}), which
+   is only safe if that combination can never appear twice. Without this index
+   two concurrent passes on the same person can both fail to match, both insert,
+   and leave duplicate archive rows — after which the deck's exclusion query
+   reads them as two separate ledger entries and the escalating-cooldown pass
+   count double-increments.
+
+   Verified against the live collection before this index was added: zero
+   duplicate {actorId, targetId, actionType} keys existed, so the index built
+   without a migration. */
+interactionSchema.index(
+  { actorId: 1, targetId: 1, actionType: 1 },
+  { unique: true, name: 'unique_interaction_per_pair_action' }
+);
+
 interactionSchema.index({ actorId: 1, cooldownExpiresAt: 1 });
 interactionSchema.index(
   { actorId: 1, actionType: 1, createdAt: -1 },

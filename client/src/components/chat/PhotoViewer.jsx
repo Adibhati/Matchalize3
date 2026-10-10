@@ -2,29 +2,18 @@ import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
-import { theme as design } from '../../utils/theme';
+import neu from '../../styles/neu';
 import { X } from 'lucide-react';
 
-/* ==================================================================
-   ARCHIVAL THEME CONSTANTS
-================================================================== */
-const theme = {
-  paper: '#fdfbf7',
-  border: '#e0d8c8',
-  borderDark: '#d4c5a9',
-  ink: '#1a1a1a',
-  inkMuted: '#8c8275',
-  accent: '#8b4513',
-  shadowWarm: 'rgba(139, 69, 19, 0.15)',
-};
+const t = neu;
 
 // GPU-Promoted, Memoized Archival Corner Mounts
 const CornerMounts = React.memo(() => (
   <>
-    <span aria-hidden="true" style={{ position: 'absolute', top: 0, left: 0, width: 24, height: 24, background: '#fff', clipPath: 'polygon(0 0, 100% 0, 0 100%)', zIndex: 3, filter: 'drop-shadow(1px 1px 2px rgba(0,0,0,0.15))' }} />
-    <span aria-hidden="true" style={{ position: 'absolute', top: 0, right: 0, width: 24, height: 24, background: '#fff', clipPath: 'polygon(100% 0, 0 0, 100% 100%)', zIndex: 3, filter: 'drop-shadow(-1px 1px 2px rgba(0,0,0,0.15))' }} />
-    <span aria-hidden="true" style={{ position: 'absolute', bottom: 0, left: 0, width: 24, height: 24, background: '#fff', clipPath: 'polygon(0 100%, 100% 100%, 0 0)', zIndex: 3, filter: 'drop-shadow(1px -1px 2px rgba(0,0,0,0.15))' }} />
-    <span aria-hidden="true" style={{ position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, background: '#fff', clipPath: 'polygon(100% 100%, 0 100%, 100% 0)', zIndex: 3, filter: 'drop-shadow(-1px -1px 2px rgba(0,0,0,0.15))' }} />
+    <span aria-hidden="true" style={{ position: 'absolute', top: 0, left: 0, width: 24, height: 24, background: t.card, clipPath: 'polygon(0 0, 100% 0, 0 100%)', zIndex: 3 }} />
+    <span aria-hidden="true" style={{ position: 'absolute', top: 0, right: 0, width: 24, height: 24, background: t.card, clipPath: 'polygon(100% 0, 0 0, 100% 100%)', zIndex: 3 }} />
+    <span aria-hidden="true" style={{ position: 'absolute', bottom: 0, left: 0, width: 24, height: 24, background: t.card, clipPath: 'polygon(0 100%, 100% 100%, 0 0)', zIndex: 3 }} />
+    <span aria-hidden="true" style={{ position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, background: t.card, clipPath: 'polygon(100% 100%, 0 100%, 100% 0)', zIndex: 3 }} />
   </>
 ));
 CornerMounts.displayName = 'CornerMounts';
@@ -65,8 +54,8 @@ const PhotoViewer = ({ src, onClose }) => {
         style={{
           position: 'fixed',
           inset: 0,
-          backgroundColor: 'rgba(10, 8, 6, 0.85)',
-          backgroundImage: `url("${design?.texture?.grain || ''}")`,
+backgroundColor: t.desk,
+           backgroundImage: `url("${t.grain || ''}")`,
           backgroundSize: '150px 150px',
           backdropFilter: 'blur(6px)', // Depth of field focus pull
           zIndex: 10000,
@@ -88,7 +77,7 @@ const PhotoViewer = ({ src, onClose }) => {
             top: 'max(24px, env(safe-area-inset-top))',
             right: '24px',
             color: 'rgba(255,255,255,0.8)',
-            fontFamily: "'Inter', sans-serif",
+            fontFamily: t.fontBody,
             fontSize: '11px',
             fontWeight: 700,
             letterSpacing: '1.5px',
@@ -113,11 +102,10 @@ const PhotoViewer = ({ src, onClose }) => {
           onDoubleClick={handleDoubleClick}
           onClick={(e) => e.stopPropagation()}
           style={{
-            backgroundColor: '#ffffff',
+            backgroundColor: t.card,
             padding: '16px 16px 48px 16px',
-            borderRadius: '4px',
-            boxShadow: '0 40px 100px rgba(0,0,0,0.6), 0 10px 30px rgba(0,0,0,0.4)',
-            border: `1px solid ${theme.borderDark}`,
+            borderRadius: t.radius.sm,
+            border: `2px solid ${t.ink}`,
             position: 'relative',
             maxWidth: '100%',
             maxHeight: '85dvh',
@@ -150,8 +138,8 @@ const PhotoViewer = ({ src, onClose }) => {
               objectFit: 'contain',
               borderRadius: '2px',
               display: 'block',
-              border: `1px solid ${theme.border}`,
-              backgroundColor: '#f4f1ea', // Fallback color while decoding
+              border: `1px solid ${t.ink}`,
+              backgroundColor: t.paper, // Fallback color while decoding
             }}
           />
 
@@ -162,10 +150,10 @@ const PhotoViewer = ({ src, onClose }) => {
               bottom: '16px',
               left: '50%',
               transform: 'translateX(-50%)',
-              fontFamily: "'Special Elite', 'Courier New', monospace",
+              fontFamily: t.fontMono,
               fontSize: '13px',
               fontWeight: 600,
-              color: theme.inkMuted,
+              color: t.ink2,
               fontStyle: 'italic',
               textAlign: 'center',
               letterSpacing: '-0.01em',

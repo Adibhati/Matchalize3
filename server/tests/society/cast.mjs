@@ -1,6 +1,4 @@
-// Named cast roles. `compat`:
-//   'signature' -> identical compatAnswers (100% mutual). Only arjun + drishti.
-//   otherwise   -> answers shifted so they can never reach 1.0 hybrid.
+// Named cast roles.
 export const CAST = {
   admin: {
     email: 'admin@test.ac.in',
@@ -22,7 +20,6 @@ export const CAST = {
     interestedIn: ['male'],
     intent: ['Dating'],
     age: 20,
-    compat: 'plain',
   },
   drishti: {
     email: 'drishti.iyer@iitb.ac.in',
@@ -31,7 +28,6 @@ export const CAST = {
     interestedIn: ['male'],
     intent: ['Dating'],
     age: 21,
-    compat: 'signature',
   },
   arjun: {
     email: 'arjun.ks@iitb.ac.in',
@@ -40,7 +36,6 @@ export const CAST = {
     interestedIn: ['female'],
     intent: ['Dating'],
     age: 22,
-    compat: 'signature',
   },
   anika: {
     email: 'anika.singh@iitb.ac.in',
@@ -49,7 +44,6 @@ export const CAST = {
     interestedIn: ['male'],
     intent: ['Dating', 'Friends'],
     age: 20,
-    compat: 'plain',
   },
   rohan: {
     email: 'rohan.g@iitb.ac.in',
@@ -58,7 +52,6 @@ export const CAST = {
     interestedIn: ['female'],
     intent: ['Dating'],
     age: 21,
-    compat: 'plain',
   },
   mira: {
     email: 'mira.nair@iitb.ac.in',
@@ -67,7 +60,6 @@ export const CAST = {
     interestedIn: ['male'],
     intent: ['Friends'],
     age: 20,
-    compat: 'plain',
   },
   ved: {
     email: 'ved.desai@iitb.ac.in',
@@ -76,7 +68,6 @@ export const CAST = {
     interestedIn: ['female'],
     intent: ['Dating'],
     age: 22,
-    compat: 'plain',
   },
   sanya: {
     email: 'sanya.sharma@iitb.ac.in',
@@ -85,7 +76,6 @@ export const CAST = {
     interestedIn: ['male'],
     intent: ['Dating'],
     age: 21,
-    compat: 'plain',
   },
   nishant: {
     email: 'nishant.j@iitb.ac.in',
@@ -94,7 +84,6 @@ export const CAST = {
     interestedIn: ['female'],
     intent: ['Dating'],
     age: 22,
-    compat: 'plain',
   },
   raj: {
     email: 'raj.kulkarni@iitb.ac.in',
@@ -103,7 +92,6 @@ export const CAST = {
     interestedIn: ['female'],
     intent: ['Dating', 'Friends'],
     age: 23,
-    compat: 'plain',
   },
   kabir: {
     email: 'kabir.anand@iitb.ac.in',
@@ -112,7 +100,6 @@ export const CAST = {
     interestedIn: ['female'],
     intent: ['Dating'],
     age: 21,
-    compat: 'plain',
   },
   priya: {
     email: 'priya.das@iitb.ac.in',
@@ -121,7 +108,6 @@ export const CAST = {
     interestedIn: ['male'],
     intent: ['Friends'],
     age: 21,
-    compat: 'plain',
   },
   arohi: {
     email: 'arohi.kapoor@iitb.ac.in',
@@ -130,7 +116,6 @@ export const CAST = {
     interestedIn: ['male'],
     intent: ['Dating'],
     age: 19,
-    compat: 'plain',
     fresh: true,
   },
   khushi: {
@@ -140,7 +125,6 @@ export const CAST = {
     interestedIn: ['male'],
     intent: ['Dating'],
     age: 19,
-    compat: 'plain',
     fresh: true,
   },
 };

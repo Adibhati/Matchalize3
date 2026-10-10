@@ -6,7 +6,7 @@ const settingSchema = new mongoose.Schema(
       type: String,
       unique: true,
       required: true,
-      enum: ['appConfig'], // Can be expanded later
+      trim: true,
     },
     value: {
       type: mongoose.Schema.Types.Mixed,

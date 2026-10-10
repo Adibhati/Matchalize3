@@ -1,23 +1,10 @@
 import React from 'react';
 import * as Sentry from '@sentry/react';
-import { theme as design } from '../utils/theme';
 import { FileWarning, RotateCw } from 'lucide-react';
+import neu from '../styles/neu';
 
-/* Locked tokens — same family as ProfileCard */
-const t = {
-  desk: '#ece4d4',
-  paper: '#fdfbf7',
-  surfaceAlt: '#f4f1ea',
-  lineDark: '#d4c5a9',
-  ink: '#1a1a1a',
-  inkSoft: '#4a4a4a',
-  inkMuted: '#8c8275',
-  accent: '#8b4513',
-  crimson: '#8b1a1a',
-  fontDisplay: design?.font?.heading || design?.font?.display || "'Playfair Display', Georgia, serif",
-  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
-  fontType: "'Special Elite', 'Courier New', monospace",
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -60,29 +47,24 @@ class ErrorBoundary extends React.Component {
               animation: errorFadeUp 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
               will-change: transform, opacity;
             }
-            .tactile-btn { transition: transform 0.15s ease-out; will-change: transform; }
-            .tactile-btn:active { transform: scale(0.96) !important; }
+            .eb-slam { display: inline-flex; align-items: center; gap: 8px;
+              padding: 14px 26px; background: ${t.yellow}; color: ${t.ink};
+              border: 2px solid ${t.ink}; border-radius: 12px; box-shadow: 4px 4px 0 ${t.ink};
+              font-family: ${t.fontMono}; font-size: 12px; font-weight: 700;
+              letter-spacing: .12em; text-transform: uppercase; cursor: pointer;
+              transition: transform .08s steps(2), box-shadow .08s steps(2);
+              -webkit-tap-highlight-color: transparent; }
+            .eb-slam:active { transform: translate(4px, 4px); box-shadow: 0 0 0 ${t.ink}; }
+            @media (hover: hover) and (pointer: fine) {
+              .eb-slam:hover:not(:active) { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 ${t.ink}; }
+            }
             @media (prefers-reduced-motion: reduce) {
               .error-anim { animation: none !important; opacity: 1 !important; transform: none !important; }
-              .tactile-btn { transition: none !important; transform: none !important; }
+              .eb-slam { transition: none !important; }
             }
           `}</style>
 
-          {/* Grain film — same strength as every other surface */}
-          <div
-            aria-hidden="true"
-            style={{
-              position: 'fixed',
-              inset: 0,
-              backgroundImage: `url("${design?.texture?.grain || ''}")`,
-              mixBlendMode: 'multiply',
-              opacity: 0.3,
-              pointerEvents: 'none',
-              zIndex: 1,
-            }}
-          />
-
-          {/* The floating paper panel */}
+          {/* The floating candy card */}
           <div
             className="error-anim"
             style={{
@@ -91,10 +73,10 @@ class ErrorBoundary extends React.Component {
               maxWidth: 380,
               width: '100%',
               backgroundColor: t.paper,
-              border: '1px solid rgba(212,197,169,0.7)',
-              borderRadius: 18,
-              boxShadow: '0 14px 34px rgba(88,63,30,0.16), 0 3px 8px rgba(88,63,30,0.08)',
-              padding: '32px 28px 28px',
+              border: `2px solid ${t.ink}`,
+              borderRadius: 20,
+              boxShadow: `8px 8px 0 ${t.ink}`,
+              padding: '32px 24px 28px',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
@@ -102,29 +84,31 @@ class ErrorBoundary extends React.Component {
               boxSizing: 'border-box',
             }}
           >
-            {/* Icon in the standard 12px-radius tile */}
+            {/* Icon tile — coral, same DNA as the deck error state */}
             <div style={{
-              width: 48,
-              height: 48,
-              borderRadius: 12,
-              backgroundColor: t.surfaceAlt,
-              border: '1px solid rgba(212,197,169,0.7)',
+              width: 56,
+              height: 56,
+              borderRadius: 16,
+              backgroundColor: t.coral,
+              border: `2px solid ${t.ink}`,
+              boxShadow: `4px 4px 0 ${t.ink}`,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               marginBottom: 20,
             }}>
-              <FileWarning size={18} color={t.accent} strokeWidth={2} />
+              <FileWarning size={24} color={t.ink} strokeWidth={2.4} />
             </div>
 
             <h1 style={{
-              fontFamily: t.fontDisplay,
-              fontSize: 30,
-              fontWeight: 800,
+              fontFamily: t.fontHeavy,
+              fontSize: 24,
+              fontWeight: 400,
               color: t.ink,
               margin: 0,
-              letterSpacing: '-0.02em',
+              letterSpacing: '-.01em',
               lineHeight: 1.1,
+              textTransform: 'uppercase',
             }}>
               Ink Spilled
             </h1>
@@ -132,67 +116,52 @@ class ErrorBoundary extends React.Component {
             <p style={{
               fontFamily: t.fontBody,
               fontSize: 14,
-              color: t.inkSoft,
+              fontWeight: 500,
+              color: t.ink2,
               margin: '12px 0 0 0',
               lineHeight: 1.6,
             }}>
-              Something tore in the archive. Refresh to restore your session.
+              Something broke on our end. Refresh to get back in.
             </p>
 
-            {/* Findings-style error note — typewriter, hairline box */}
+            {/* Error note — bordered mono strip */}
             {this.state.error?.message && (
               <div style={{
                 width: '100%',
                 marginTop: 18,
-                border: '1px solid rgba(139,69,19,0.3)',
-                borderRadius: 6,
-                backgroundColor: 'rgba(139,69,19,0.03)',
+                border: `2px solid ${t.ink}`,
+                borderRadius: 10,
+                backgroundColor: t.card,
                 padding: '10px 12px',
                 boxSizing: 'border-box',
               }}>
                 <p style={{
-                  fontFamily: t.fontType,
-                  fontSize: 11.5,
-                  color: t.inkMuted,
+                  fontFamily: t.fontMono,
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  color: t.ink3,
                   margin: 0,
                   lineHeight: 1.5,
                   wordBreak: 'break-word',
+                  textAlign: 'left',
                 }}>
                   {this.state.error.message}
                 </p>
               </div>
             )}
 
-            {/* The one crimson moment — pill CTA */}
+            {/* The one yellow moment — slam CTA */}
             <button
-              className="tactile-btn"
+              className="eb-slam"
               onClick={() => {
                 if (window.navigator && window.navigator.vibrate) {
                   window.navigator.vibrate(50);
                 }
                 window.location.reload();
               }}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                marginTop: 24,
-                padding: '14px 26px',
-                backgroundColor: t.crimson,
-                color: '#ffffff',
-                border: 'none',
-                borderRadius: 999,
-                fontFamily: t.fontBody,
-                fontSize: 11,
-                fontWeight: 800,
-                letterSpacing: '1.8px',
-                textTransform: 'uppercase',
-                cursor: 'pointer',
-                boxShadow: '0 6px 18px rgba(139,26,26,0.28)',
-              }}
             >
-              <RotateCw size={14} strokeWidth={2.5} />
-              Restore Ledger
+              <RotateCw size={14} strokeWidth={2.8} />
+              Refresh
             </button>
           </div>
         </div>

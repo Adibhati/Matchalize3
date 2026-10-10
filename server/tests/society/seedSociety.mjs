@@ -2,13 +2,14 @@ import mongoose from 'mongoose';
 import User from '../../models/User.js';
 import Interaction from '../../models/Interaction.js';
 import Notification from '../../models/Notification.js';
-import Match from '../../models/Match.js';
+import Alignment from '../../models/Alignment.js';
 import Message from '../../models/Message.js';
 import Report from '../../models/Report.js';
 import { connectMongo, disconnectMongo, resetTestDb } from '../lib/mongo.mjs';
 import { QA_ORIGIN } from '../lib/env.mjs';
 import { buildPersonas, flattenPersonas } from './personas.mjs';
 import { CAST_ORDER } from './cast.mjs';
+import { computeScore } from '../../utils/ladder.js';
 
 const H = 3600 * 1000;
 const D = 24 * H;
@@ -29,6 +30,14 @@ export async function seedSociety() {
   const { castUsers, fillers } = buildPersonas(cfg);
 
   const docs = flattenPersonas({ castUsers, fillers }).map(({ role, user }) => ({ ...user }));
+
+  /* Seed the ladder score with the same pure function the write routes use.
+     persona rows go in via insertMany, which never touches the recompute in
+     /users/setup or PUT /profile — so without this every society row sits at
+     the schema default of 0, below LADDER.publish, and the QA deck reads as
+     entirely locked rather than exercising the cards it was built to exercise. */
+  docs.forEach((d) => { d.profileScore = computeScore(d); });
+
   const inserted = await User.insertMany(docs);
   const byRole = {};
   const byEmail = {};
@@ -59,7 +68,7 @@ export async function seedSociety() {
     await Notification.create({
       recipientId: to._id,
       senderId: from._id,
-      type: type === 'seal_stamp' ? 'priority_seal' : 'new_letter',
+      type: type === 'telegram' ? 'priority_telegram' : 'new_letter',
       interactionRef: it._id,
       isCleared: cleared,
       createdAt: match(null, hoursAgo * H),
@@ -70,13 +79,13 @@ export async function seedSociety() {
 
   await letter({ from: byRole.arjun, to: byRole.drishti, type: 'letter', note: 'The way the light falls on the library steps at six — I think you’d see it the same way.', hoursAgo: 1, cleared: true });
   await letter({ from: byRole.mira, to: byRole.anika, type: 'letter', note: 'Your mess doodle of the chef got me through finals week. Dinner sometime?', hoursAgo: 2 });
-  await letter({ from: byRole.ved, to: byRole.anika, type: 'seal_stamp', note: 'Priority note — amphitheatre, sunset, tonight. You in?', hoursAgo: 2 });
+  await letter({ from: byRole.ved, to: byRole.anika, type: 'telegram', note: 'Priority note — amphitheatre, sunset, tonight. You in?', hoursAgo: 2 });
   await letter({ from: byRole.ved, to: byRole.arohi, type: 'letter', note: 'Welcome to campus. If you want a map that’s actually honest, I know good shortcuts.', hoursAgo: 3 });
 
   // --- 2. SEEDED MATCHES + CONVERSATIONS (history for Matches/Chat scenes) ---
   const seedMatch = async ({ a, b, sinceDays, thread }) => {
     const pkey = pairKey(a, b);
-    const m = await Match.create({
+    const m = await Alignment.create({
       users: [a._id, b._id],
       pairKey: pkey,
       isActive: true,
@@ -89,7 +98,7 @@ export async function seedSociety() {
       const [senderKey, text, read] = mtext;
       const senderDoc = byRole[senderKey] || byEmail[senderKey];
       await Message.create({
-        matchId: m._id,
+        alignmentId: m._id,
         senderId: senderDoc._id,
         type: 'text',
         text,
@@ -159,7 +168,7 @@ export async function seedSociety() {
   }
   await User.updateOne(
     { _id: byRole.kabir._id },
-    { $set: { isGhost: true, shadowbannedAt: new Date(Date.now() - 4 * H), contentFrozen: true } }
+    { $set: { shadowbannedAt: new Date(Date.now() - 4 * H), contentFrozen: true } }
   );
 
   // --- 4. TIME-WARP user timestamps + lastActive ---

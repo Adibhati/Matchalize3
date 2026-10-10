@@ -27,6 +27,7 @@ export async function ensureMongo() {
 }
 
 export async function readLatestOtp(email) {
+  await ensureMongo();
   const doc = await findLatestOtpEmail(mongoose.connection.db, String(email).toLowerCase().trim());
   if (!doc) throw new Error(`No OTP record for ${email} — did send-otp hit the test DB?`);
   return doc.otp;
