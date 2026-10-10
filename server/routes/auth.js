@@ -73,6 +73,34 @@ export const resolveCollege = async (collegeCode, email) => {
   }
 
   if (!emailMatchesCollege(email, college.domains)) {
+    // ── THE OPERATOR ESCAPE HATCH ────────────────────────────────────────────
+    //
+    // A single account, matched by exact address, is allowed to register
+    // without a college-domain email. This exists because adminProtect gates on
+    // `user.email === ADMIN_EMAIL`, and an admin whose address is a Gmail or an
+    // alumni mailbox can never satisfy an academic-domain check — so without
+    // this, setting ADMIN_EMAIL to anything other than a student address makes
+    // the entire admin panel permanently unreachable. There is no other way
+    // to recover it: the panel has no separate login.
+    //
+    // Deliberately narrow on all three axes:
+    //   • ONE address, exact match after trim+lowercase — never a domain.
+    //   • It still needs a valid college CODE that exists and is active, and
+    //     still has to clear the pilot gate. This bypasses the email check
+    //     only, not the college gate.
+    //   • It still requires a real OTP. Nothing about it skips verification;
+    //     it only lets a non-@iitb.ac.in mailbox receive that code.
+    //
+    // Unset ADMIN_EMAIL → the comparison is against undefined, matches
+    // nothing, and behaviour is exactly as before.
+    const adminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    if (adminEmail && email.toLowerCase() === adminEmail) {
+      console.warn(
+        `[admin-bootstrap] ${email} registered on "${code}" without a matching college domain.`,
+      );
+      return { ok: true, college };
+    }
+
     // The one error that names the college and its domain. Specific enough to
     // tell a student what went wrong; it leaks no user data — college domains
     // are public information and the student supplied the email themselves.
