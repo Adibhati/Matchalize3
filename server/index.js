@@ -34,6 +34,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Config
 import connectDB from './config/db.js';
+import { seedGatedColleges } from './utils/campusSeed.js';
 import { socketHandler } from './socket/chat.js';
 
 // Routes
@@ -156,6 +157,17 @@ try {
 } catch (err) {
   console.error(`❌ Server failed to start: ${err.message}`);
   process.exit(1);
+}
+
+// 🏫 Seed any gated campus that does not exist yet.
+//
+// Runs AFTER connectDB (which has verified every index) and BEFORE the server
+// listens, so a picker query can never race it. Never throws — see the file for
+// why an empty picker is survivable and an unbootable server is not.
+try {
+  await seedGatedColleges();
+} catch (err) {
+  console.error(`⚠️  Campus seed skipped: ${err.message}`);
 }
 
 const app = express();
