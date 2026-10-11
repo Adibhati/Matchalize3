@@ -813,7 +813,35 @@ function CollegesTab() {
   const pending = requests.filter((g) => g.status === 'pending').length;
   const oldCount = requests.filter((g) => g.status === 'pending' && g.ageDays >= 30).length;
 
-  const inputStyle = { ...input, marginBottom: 12 };
+  // ⚠️ This used to read `{ ...input, marginBottom: 12 }`, spreading an `input`
+  // that is never declared in this scope. Every one of the six text fields
+  // below was styled from it, so the whole Colleges tab threw
+  // "ReferenceError: Can't find variable: input" on its first render and the
+  // error boundary took the page down with it.
+  //
+  // The base style is written out rather than derived, so there is nothing left
+  // to be undefined. `inputStyle` is just that base plus the spacing this form
+  // wants — it was always only ever those two things.
+  const inputStyle = {
+    display: 'block',
+    width: '100%',
+    boxSizing: 'border-box',
+    fontFamily: T.fontBody,
+    fontSize: 14,
+    fontWeight: 500,
+    color: T.ink,
+    backgroundColor: T.hair,
+    border: `2px solid ${T.ink}`,
+    borderRadius: 10,
+    padding: '10px 12px',
+    outline: 'none',
+    marginBottom: 12,
+  };
+
+  // Fields laid out inside a flex row manage their own width and must not also
+  // carry the block-level margin, or they sit visually misaligned with the
+  // stacked fields above them.
+  const inputStyleInline = { ...inputStyle, flex: 1, marginBottom: 0 };
 
   return (
     <div>
@@ -852,7 +880,7 @@ function CollegesTab() {
           <label style={label}>Email domains (at least one)</label>
           {form.domains.map((d, i) => (
             <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-              <input style={{ ...input, flex: 1 }} value={d} onChange={(e) => setDomainAt(i, e.target.value)}
+              <input style={inputStyleInline} value={d} onChange={(e) => setDomainAt(i, e.target.value)}
                 placeholder="iitd.ac.in" />
               {form.domains.length > 1 && (
                 <button type="button" className="adm-slam" onClick={() => setForm((f) => ({ ...f, domains: f.domains.filter((_, x) => x !== i) }))}
@@ -866,9 +894,9 @@ function CollegesTab() {
           </button>
 
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <input style={{ ...input, flex: '1 1 140px' }} value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} placeholder="City" />
-            <input style={{ ...input, flex: '1 1 140px' }} value={form.state} onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))} placeholder="State" />
-            <input style={{ ...input, flex: '1 1 140px' }} value={form.country} onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))} placeholder="Country" />
+            <input style={inputStyleInline} value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} placeholder="City" />
+            <input style={inputStyleInline} value={form.state} onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))} placeholder="State" />
+            <input style={inputStyleInline} value={form.country} onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))} placeholder="Country" />
           </div>
 
           {/* 📍 Campus map position. Optional — a college without one is fully
@@ -878,14 +906,14 @@ function CollegesTab() {
               transposed pair far more easily in separate fields. */}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
             <input
-              style={{ ...input, flex: '0 1 150px' }}
+              style={{ ...inputStyle, flex: '0 1 150px', marginBottom: 0 }}
               value={form.lat}
               onChange={(e) => setForm((f) => ({ ...f, lat: e.target.value }))}
               placeholder="Latitude (19.076)"
               inputMode="decimal"
             />
             <input
-              style={{ ...input, flex: '0 1 150px' }}
+              style={{ ...inputStyle, flex: '0 1 150px', marginBottom: 0 }}
               value={form.lng}
               onChange={(e) => setForm((f) => ({ ...f, lng: e.target.value }))}
               placeholder="Longitude (72.878)"
