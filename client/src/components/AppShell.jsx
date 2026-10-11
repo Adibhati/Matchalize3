@@ -13,6 +13,7 @@ import { setToastPresenceHandler } from '../utils/toast';
 import Settings from '../pages/Settings.jsx';
 import socket from '../utils/socket';
 import neu from '../styles/neu';
+import { useChromeColor } from '../utils/chrome';
 
 // Lazy loaded routes
 const Discover = lazy(() => import('../pages/Discover'));
@@ -49,6 +50,27 @@ const ArchivalFallback = () => (
 
 const TAB_TITLES = { discover: 'Deck', matches: 'Letters', roulette: 'Roulette', profile: 'Profile' };
 
+/**
+ * 📱 CHROME COLOUR PER SCREEN — the browser's status bar and the strip above
+ * the home indicator are painted from these, so the app reads as one continuous
+ * surface instead of a page floating between two browser-owned bands.
+ *
+ * Every tab is dark (`neu.desk`) EXCEPT Profile, which is cream, because that
+ * is genuinely what each screen renders — this is not decoration invented to
+ * make the bars look nice, it is reporting the screen's own background. Change a
+ * screen's background in neu.js and this follows it in the same commit.
+ *
+ * The chat overlay takes the tab's colour rather than a third one: Chat is
+ * rendered on top of the tab it was opened from, and giving it its own colour
+ * would flash the bars a different shade every time a conversation opens.
+ */
+const TAB_CHROME = {
+  discover: neu.desk,
+  matches: neu.desk,
+  roulette: neu.desk,
+  profile: neu.paper,
+};
+
 const AppShell = ({ onSignOut }) => {
   const isDesktop = useIsDesktop();
   const [activeTab, setActiveTab] = useState('discover');
@@ -64,6 +86,11 @@ const AppShell = ({ onSignOut }) => {
      read as overlapping furniture. */
   const [toastUp, setToastUp] = useState(false);
   const headerVisible = headerWanted && !toastUp;
+
+  // Paint the browser's status bar and overscroll gutter to match the screen
+  // underneath. Falls back to the desk colour for any tab not in the map, so a
+  // future tab cannot leave the bars showing a stale colour.
+  useChromeColor(TAB_CHROME[activeTab] || neu.desk);
 
   /* Subscribe to toast presence. Kept separate from the render handler so this
      effect doesn't re-register on every toast that fires. */

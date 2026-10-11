@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { api } from '../utils/api';
+import { useChromeColor } from '../utils/chrome';
 import socket from '../utils/socket';
 import { triggerHaptic } from '../utils/haptics';
 import { CheckCircle2, Search } from 'lucide-react';
@@ -983,6 +984,11 @@ const AuthArtwork = ({ kind }) => {
 
 const Auth = ({ onSuccess, reverifyOnly = false }) => {
   const reduceMotion = useReducedMotion();
+
+  // Auth is cream where the splash is near-black, so the browser's status bar
+  // and the strip around the app must switch with it or the transition reads as
+  // two different apps.
+  useChromeColor(C.paper);
 
   const [step, setStep] = useState(reverifyOnly ? 'otp' : 'college');
   const [colleges, setColleges] = useState([]);

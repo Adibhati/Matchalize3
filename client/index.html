@@ -4,8 +4,14 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <meta name="theme-color" content="#fdfbf7" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <!-- Initial chrome colour, replaced per-screen at runtime by utils/chrome.js.
+         Defaults to the Deck's night desk so there is no white flash on first paint. -->
+    <meta name="theme-color" content="#131313" />
+    <!-- black-translucent (not "default"): this is what lets the page's own
+         background paint UNDER the iOS status bar. With "default" iOS draws an
+         opaque bar and the top edge can never match the screen below it, which
+         is the seam this whole mechanism exists to hide. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="apple-touch-icon" href="/icons/icon-192.png" />
     <link rel="manifest" href="/manifest.json" />
     

@@ -1,5 +1,6 @@
 
 import React, { useEffect, useRef } from 'react';
+import { useChromeColor } from '../utils/chrome';
 
 const C = {
   black: '#111211',
@@ -1734,6 +1735,12 @@ const CSS = `
 export default function Splash({ onEnter }) {
   const pageRef = useRef(null);
   const scrollRef = useRef(null);
+
+  // The status bar and the overscroll gutter belong to the browser but are
+  // painted from values this page supplies. Without this, the splash would run
+  // with whatever colour the previous screen left behind — which is the visible
+  // seam at the exact moment the app opens.
+  useChromeColor(C.black);
 
   const enter = () => {
     if (typeof onEnter === 'function') onEnter();

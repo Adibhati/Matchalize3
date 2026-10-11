@@ -14,6 +14,64 @@ html, body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   THE PAGE MUST NOT SCROLL. THE APP MUST.
+   ═══════════════════════════════════════════════════════════════════
+
+   Symptom this fixes: on a phone, dragging anywhere on the Deck drags the
+   WHOLE page — header, nav bar and all — instead of moving the card deck
+   underneath them. It reads as the app itself being scrollable, which it is
+   not: every screen scrolls its own inner `overflow-y: auto` container.
+
+   Three properties, each covering a different browser behaviour, and none of
+   them is sufficient alone:
+
+   1. `overscroll-behavior: none` on html — stops the RUBBER BAND. Without it,
+      dragging past the top of the page stretches it, reveals the page behind,
+      and on Android triggers the pull-to-refresh spinner. This is the
+      pull-to-refresh half of the bug.
+
+   2. `position: fixed; inset: 0` on body — makes the document itself
+      unscrollable. `overscroll-behavior` alone still lets the page scroll if it
+      is taller than the viewport, which it is during page transitions. Because
+      every screen scrolls an inner container rather than the document, this
+      removes nothing the user can see.
+
+   3. `touch-action: manipulation` — drops the ~300ms double-tap-to-zoom delay
+      without disabling pinch-zoom, which `touch-action: none` would do and
+      which would break zooming for anyone who needs it.
+
+   `height: 100%` is deliberately NOT used. The dynamic viewport height is what
+   makes this correct when the on-screen keyboard opens or a sheet slides up:
+   `100dvh` follows the real visible area, whereas `100%` resolves against the
+   html element and can leave a dead strip that is not scrollable.
+
+   The background is `var(--app-bg, var(--n-paper))` so the area above and below
+   the app is painted by the active screen's colour — see utils/chrome.js.
+   ═══════════════════════════════════════════════════════════════════ */
+html {
+  overscroll-behavior: none;
+  background-color: var(--app-bg, var(--n-paper));
+}
+
+body {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  min-height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+  background-color: var(--app-bg, var(--n-paper));
+}
+
+/* Inner scrollers are still allowed to overscroll normally in the direction
+   they cannot go, so a list that ends still feels like a list rather than
+   hitting a wall — while the pull-to-refresh gesture stays gone. */
+.app-container {
+  overscroll-behavior-y: contain;
+}
+
 #root {
   height: 100%;
 }
