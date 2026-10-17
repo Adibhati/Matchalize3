@@ -1,7 +1,7 @@
-# Chunk 03 — Config
+# Chunk 04 — Config
 
-> Matchalize · `config` · files 3 of 25 chunks · 15 file(s) · 29 KB · ~8,580 tokens
-> Generated 2026-10-09 14:03.
+> Matchalize · `config` · files 4 of 27 chunks · 15 file(s) · 30 KB · ~8,779 tokens
+> Generated 2026-10-17 20:14.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -219,15 +219,22 @@ dist-ssr
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <meta name="theme-color" content="#fdfbf7" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <!-- Initial chrome colour, replaced per-screen at runtime by utils/chrome.js.
+         Defaults to the Deck's night desk so there is no white flash on first paint. -->
+    <meta name="theme-color" content="#131313" />
+    <!-- black-translucent (not "default"): this is what lets the page's own
+         background paint UNDER the iOS status bar. With "default" iOS draws an
+         opaque bar and the top edge can never match the screen below it, which
+         is the seam this whole mechanism exists to hide. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="apple-touch-icon" href="/icons/icon-192.png" />
     <link rel="manifest" href="/manifest.json" />
     
-    <!-- Vintage Story Fonts -->
+    <!-- Neo-Brutalist Type System: Archivo Black (display) · Inter (body) · Space Mono (labels) · Caveat (hand).
+         Playfair/Special Elite/Dancing Script remain only until the last sunlit screens are converted. -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Special+Elite&family=Inter:wght@400;500;600;700&family=Archivo+Black&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Caveat:wght@700&family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Special+Elite&family=Dancing+Script:wght@700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=block" />
     
     <title>Matchalize — Your Campus. Your Story.</title>

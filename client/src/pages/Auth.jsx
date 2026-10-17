@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { api } from '../utils/api';
@@ -8,6 +7,11 @@ import { triggerHaptic } from '../utils/haptics';
 import { CheckCircle2, Search } from 'lucide-react';
 import AccountSuspendedScreen from '../components/AccountSuspendedScreen';
 import { useAuth } from '../utils/AuthContext';
+import neu from '../styles/neu';
+import { useIsDesktop } from '../utils/useIsDesktop';
+import campusPhoto from '../assets/college-town-aesthetic-cute-college-town.jpg';
+
+const M = neu;
 
 const C = {
   ink: '#111211',
@@ -25,8 +29,13 @@ const C = {
   mono: "'IBM Plex Mono', monospace",
 };
 
-const AUTH_CSS = `
-  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+/* ============================================================
+   AUTH_CSS — desktop + shared foundation.
+   Mobile used to override this in three stacked layers; all
+   mobile styling now lives in one sheet: MOBILE_AUTH_CSS.
+   ============================================================ */
+export const AUTH_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Bowlby+One+SC&family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
   .au-root {
     --ink: ${C.ink};
@@ -738,137 +747,6 @@ const AUTH_CSS = `
     }
   }
 
-  @media (max-width: 700px) {
-    .au-panel {
-      justify-content: flex-start;
-      padding:
-        max(28px, env(safe-area-inset-top))
-        20px
-        max(25px, env(safe-area-inset-bottom));
-    }
-
-    .au-step {
-      grid-template-columns: minmax(0, 1fr);
-      align-content: start;
-      gap: 17px;
-    }
-
-    .au-step > .au-headline,
-    .au-step > .au-sub,
-    .au-step > .au-art,
-    .au-step > *:not(.au-headline):not(.au-sub):not(.au-art) {
-      grid-column: 1;
-      grid-row: auto;
-    }
-
-    .au-headline {
-      font-size: clamp(52px, 12.5vw, 72px);
-      line-height: .88;
-    }
-
-    .au-headline::after {
-      width: 54px;
-      height: 6px;
-      margin-top: 13px;
-    }
-
-    .au-sub {
-      font-size: 14px;
-      line-height: 1.75;
-    }
-
-    .au-art {
-      justify-self: end;
-      width: min(58%, 270px);
-      min-width: 175px;
-      height: 125px;
-      border-radius: 25px 25px 7px 25px;
-    }
-
-    .au-art::before {
-      width: 95px;
-      height: 95px;
-      right: -35px;
-      top: -42px;
-    }
-
-    .au-search,
-    .au-input {
-      height: 66px;
-      padding: 0 17px;
-      font-size: 17px;
-    }
-
-    .au-search {
-      padding-left: 63px;
-    }
-
-    .au-results {
-      grid-template-columns: minmax(0, 1fr);
-      max-height: 52dvh;
-      gap: 9px;
-    }
-
-    .au-result {
-      min-height: 76px;
-      padding: 14px 41px 14px 15px;
-      border-radius: 14px;
-    }
-
-    .au-result-name {
-      font-size: 15px;
-    }
-
-    .au-otp {
-      gap: 8px;
-    }
-
-    .au-box {
-      height: 61px;
-      font-size: 27px;
-      border-radius: 13px;
-    }
-
-    .au-form {
-      gap: 16px;
-    }
-
-    .au-root::before {
-      width: 220px;
-      height: 220px;
-      top: -135px;
-      right: -100px;
-    }
-
-    .au-root::after {
-      width: 180px;
-      height: 180px;
-      bottom: -130px;
-      left: -90px;
-    }
-  }
-
-  @media (max-width: 360px) {
-    .au-panel {
-      padding-left: 15px;
-      padding-right: 15px;
-    }
-
-    .au-headline {
-      font-size: 46px;
-    }
-
-    .au-art {
-      min-width: 155px;
-      height: 112px;
-    }
-
-    .au-box {
-      height: 53px;
-      font-size: 23px;
-    }
-  }
-
   @media (prefers-reduced-motion: reduce) {
     .au-art .art-float,
     .au-art .art-late,
@@ -890,109 +768,855 @@ const AUTH_CSS = `
       animation: none;
     }
   }
+
+  /* Mobile-only chrome: hidden on desktop, revealed by MOBILE_AUTH_CSS. */
+  .au-brandbar { display: none; }
+  .au-campus-scene,
+  .au-campus-blur,
+  .au-backdrop { display: none; }
+  .au-mobile-field-label,
+  .au-mobile-sub { display: none; }
 `;
 
+/* ============================================================
+   MOBILE_AUTH_CSS — the single, consolidated mobile sheet.
+   This is the final computed result of the old three-layer
+   stack (base skin + campus scene + smooth polish), with the
+   dead rules removed: the per-step photo grading and washes
+   were fully overridden by the full-bleed photo rules, and the
+   hand-built campus SVG was never visible (display:none on
+   every breakpoint).
+   ============================================================ */
+export const MOBILE_AUTH_CSS = `
+  @media (max-width: 700px) {
+    /* ---- tokens & root ---- */
+    .au-root {
+      --ink: ${M.ink};
+      --ink2: ${M.ink2};
+      --muted: ${M.ink2};
+      --paper: ${M.paper};
+      --card: ${M.card};
+      --accent: ${M.yellow};
+      --tint: rgba(255,212,61,.14);
+      --red: ${M.red};
+      --line: ${M.ink};
+      --body: ${M.fontBody};
+      --display: ${M.fontHeavy};
+      --mono: ${M.fontMono};
+      background: ${M.paper};
+      color: ${M.ink};
+      font-family: var(--body);
+    }
+
+    /* Desktop per-step palettes are replaced by one uniform skin. */
+    .au-root.au-root-college,
+    .au-root.au-root-request,
+    .au-root.au-root-email,
+    .au-root.au-root-otp,
+    .au-root.au-root-verify {
+      --ink: ${M.ink};
+      --ink2: ${M.ink2};
+      --muted: ${M.ink2};
+      --paper: ${M.paper};
+      --card: ${M.card};
+      --accent: ${M.yellow};
+      --tint: rgba(255,212,61,.14);
+      --red: ${M.red};
+      --line: ${M.ink};
+      background: ${M.paper};
+      color: ${M.ink};
+    }
+
+    .au-root::before,
+    .au-root::after { display: none; content: none; }
+
+    /* ---- layout frame ---- */
+    .au-fit {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 430px;
+      min-height: 100dvh;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .au-panel {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      min-height: 100dvh;
+      flex: 1 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+      gap: 0;
+      margin: 0;
+      padding:
+        max(18px, env(safe-area-inset-top, 0px))
+        22px
+        max(28px, env(safe-area-inset-bottom, 0px));
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    /* ---- brand: the product wordmark, set directly on the canvas ---- */
+    .au-brandbar {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      width: 100%;
+      max-width: 380px;
+      margin: 7px 0 0;
+      min-height: 0;
+      transition: opacity .35s ease, transform .5s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-wordmark {
+      display: inline-block;
+      color: ${M.ink};
+      font-family: 'Bowlby One SC', ${M.fontHeavy};
+      font-size: clamp(37px, 10vw, 47px);
+      font-weight: 400;
+      letter-spacing: -.065em;
+      line-height: .92;
+      text-shadow: 2px 2px 0 ${M.yellow};
+    }
+
+    .au-brand-question {
+      display: inline-block;
+      color: ${M.coral};
+      margin-left: .015em;
+      transform: rotate(7deg) translateY(-.015em);
+      transform-origin: 60% 65%;
+    }
+
+    .au-brand-whisper {
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .015em;
+      line-height: 1.35;
+    }
+
+    /* ---- step: content sits directly on the paper, pushed to the bottom ---- */
+    .au-step {
+      position: relative;
+      isolation: isolate;
+      z-index: 1;
+      width: 100%;
+      max-width: 380px;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+      margin: auto auto max(10px, env(safe-area-inset-bottom, 0px));
+      padding: 18px 0 max(8px, env(safe-area-inset-bottom, 0px));
+      background: transparent;
+      color: ${M.ink};
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    /* Soft veil so text never fights the photo directly behind it. */
+    .au-step::before {
+      content: '';
+      position: absolute;
+      z-index: -1;
+      pointer-events: none;
+      top: -34px;
+      right: -22px;
+      bottom: -24px;
+      left: -22px;
+      background: linear-gradient(180deg, rgba(241,237,226,0) 0%, rgba(241,237,226,.76) 18%, rgba(241,237,226,.92) 46%, ${M.paper} 100%);
+      opacity: .94;
+      transition: opacity .4s cubic-bezier(.32,.72,0,1);
+    }
+
+    /* The long request form gets extra breathing room at the bottom. */
+    .au-panel:has(.au-step .au-form .au-field:nth-of-type(3)) .au-step {
+      margin-bottom: max(28px, env(safe-area-inset-bottom, 0px));
+    }
+
+    .au-step .au-headline {
+      max-width: 21ch;
+      margin: 0;
+      color: ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: clamp(30px, 8.3vw, 36px);
+      font-weight: 800;
+      line-height: 1.04;
+      letter-spacing: -.06em;
+      text-transform: none;
+      overflow-wrap: anywhere;
+      text-wrap: balance;
+    }
+
+    .au-headline::after { display: none; content: none; }
+
+    .au-headline .au-huh-inline {
+      font-family: 'Bowlby One SC', ${M.fontHeavy};
+      font-size: 1.02em;
+      font-weight: 400;
+      letter-spacing: -.055em;
+      white-space: nowrap;
+      text-shadow: 1.5px 1.5px 0 ${M.yellow};
+    }
+
+    .au-step .au-sub {
+      max-width: 31ch;
+      margin: -2px 0 0;
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 13.5px;
+      font-weight: 400;
+      line-height: 1.48;
+      overflow-wrap: anywhere;
+    }
+
+    .au-sub b { color: ${M.ink}; font-weight: 700; }
+    .au-sub b.low { overflow-wrap: anywhere; text-transform: lowercase; }
+
+    .au-mobile-sub { display: block; }
+
+    .au-mobile-field-label {
+      display: block;
+      margin: 4px 0 -3px;
+      color: ${M.ink2};
+      font-family: ${M.fontMono};
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+
+    /* Mobile replaces the framed illustration with the full-bleed photo. */
+    .au-step > .au-art { display: none !important; }
+
+    /* ---- search field ---- */
+    .au-searchwrap { position: relative; z-index: 2; width: 100%; }
+
+    .au-searchicon {
+      position: absolute;
+      z-index: 1;
+      left: 15px;
+      top: 50%;
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      transform: translateY(-50%);
+      color: ${M.ink};
+      background: transparent;
+      pointer-events: none;
+    }
+
+    .au-search {
+      display: block;
+      width: 100%;
+      height: 56px;
+      padding: 0 14px 0 47px;
+      color: ${M.ink};
+      background: rgba(255,253,247,.97);
+      border: 2px solid ${M.ink};
+      border-radius: 15px;
+      outline: none;
+      box-shadow: 4px 4px 0 ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: 16px;
+      font-weight: 500;
+      -webkit-appearance: none;
+      appearance: none;
+      transition: box-shadow .2s cubic-bezier(.32,.72,0,1), background .2s ease, transform .2s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-search:focus {
+      background: #FFFEFA;
+      border-color: ${M.ink};
+      box-shadow: 4px 4px 0 ${M.ink};
+      transform: none;
+    }
+
+    /* ---- inputs & fields ---- */
+    .au-input,
+    .au-field input {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      height: 54px;
+      padding: 0 14px;
+      color: ${M.ink};
+      background: rgba(255,255,255,.94);
+      border: 2px solid ${M.ink};
+      border-radius: 12px;
+      outline: none;
+      box-shadow: 3px 3px 0 ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: 16px;
+      font-weight: 500;
+      -webkit-appearance: none;
+      appearance: none;
+      transition: box-shadow .2s cubic-bezier(.32,.72,0,1), background .2s ease, transform .2s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-search::placeholder,
+    .au-input::placeholder,
+    .au-field input::placeholder {
+      color: ${M.ink2};
+      opacity: .8;
+      font-weight: 400;
+    }
+
+    .au-input:focus,
+    .au-field input:focus {
+      background: #FFFFFF;
+      border-color: ${M.ink};
+      box-shadow: 4px 4px 0 ${M.ink};
+      transform: none;
+    }
+
+    .au-input:disabled,
+    .au-field input:disabled { opacity: .65; }
+
+    .au-input:-webkit-autofill,
+    .au-field input:-webkit-autofill {
+      -webkit-box-shadow: 0 0 0 60px ${M.card} inset, 3px 3px 0 ${M.ink};
+      -webkit-text-fill-color: ${M.ink};
+    }
+
+    /* ---- results: calm full-width rows, not a grid of cards ---- */
+    .au-results {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      width: 100%;
+      max-height: min(30dvh, 250px);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      padding: 0;
+      border-top: 1px solid rgba(17,18,17,.24);
+      scrollbar-width: thin;
+      scrollbar-color: ${M.ink2} transparent;
+    }
+
+    .au-result,
+    .au-result:nth-child(5n + 2),
+    .au-result:nth-child(5n + 4) {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 3px;
+      width: 100%;
+      min-height: 52px;
+      padding: 9px 34px 9px 2px;
+      text-align: left;
+      color: ${M.ink};
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid ${M.hair};
+      border-radius: 0;
+      box-shadow: none;
+      cursor: pointer;
+      transition: background .12s ease;
+    }
+
+    .au-result::after {
+      content: '→';
+      position: absolute;
+      top: 50%;
+      right: 10px;
+      transform: translateY(-50%);
+      color: ${M.ink};
+      font: 20px/1 ${M.fontBody};
+    }
+
+    .au-result:active { background: #FFF1AE; }
+
+    .au-result-name {
+      color: ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: 13.5px;
+      font-weight: 700;
+      line-height: 1.32;
+      overflow-wrap: anywhere;
+    }
+
+    .au-result-meta {
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 11px;
+      font-weight: 400;
+      line-height: 1.4;
+    }
+
+    .au-result.chosen { background: #E5F3E7; }
+    .au-result.chosen::after { content: '✓'; color: ${M.ink}; font-weight: 700; }
+
+    .au-empty {
+      margin: 0;
+      padding: 8px 0;
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.6;
+    }
+
+    /* ---- form controls ---- */
+    .au-form { width: 100%; display: flex; flex-direction: column; gap: 14px; }
+
+    .au-cta {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 52px;
+      width: 100%;
+      padding: 13px 18px;
+      color: ${M.ink};
+      background: ${M.yellow};
+      border: 2px solid ${M.ink};
+      border-radius: 12px;
+      box-shadow: 4px 4px 0 ${M.ink};
+      cursor: pointer;
+      font-family: ${M.fontBody};
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+      text-align: center;
+      transition: transform .08s steps(2), box-shadow .08s steps(2), background .12s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .au-cta:active:not(:disabled) {
+      transform: translate(4px, 4px);
+      box-shadow: 0 0 0 ${M.ink};
+      background: ${M.yellowDeep};
+    }
+
+    .au-cta:disabled {
+      color: ${M.ink2};
+      background: ${M.hair};
+      border-color: ${M.ink2};
+      box-shadow: 3px 3px 0 ${M.ink2};
+      cursor: not-allowed;
+      opacity: 1;
+    }
+
+    .au-ghost {
+      align-self: flex-start;
+      min-height: 42px;
+      padding: 9px 0;
+      color: ${M.ink2};
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid ${M.ink2};
+      border-radius: 0;
+      box-shadow: none;
+      cursor: pointer;
+      font-family: ${M.fontBody};
+      font-size: 13px;
+      font-weight: 600;
+      transition: color .12s ease;
+    }
+
+    .au-ghost:active:not(:disabled) { color: ${M.ink}; }
+    .au-ghost:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ---- OTP boxes ---- */
+    .au-otp {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      justify-content: stretch;
+      gap: clamp(5px, 1.7vw, 9px);
+      width: 100%;
+    }
+
+    .au-box {
+      width: 100%;
+      min-width: 0;
+      max-width: none;
+      height: 50px;
+      padding: 0;
+      text-align: center;
+      color: ${M.ink};
+      background: rgba(255,255,255,.94);
+      border: 2px solid ${M.ink};
+      border-radius: 12px;
+      box-shadow: 3px 3px 0 ${M.ink};
+      font-family: ${M.fontHeavy};
+      font-size: 23px;
+      font-weight: 400;
+      outline: none;
+      caret-color: ${M.ink};
+      transition: background .2s cubic-bezier(.32,.72,0,1), box-shadow .2s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-box:focus {
+      background: #FFF1AE;
+      border-color: ${M.ink};
+      box-shadow: 3px 3px 0 ${M.ink};
+      transform: none;
+    }
+
+    .au-box:disabled:not(.ok) { opacity: .65; }
+    .au-box.err { border-color: ${M.red}; animation: au-shake .3s steps(2) 2; }
+    .au-box.ok { background: #E5F3E7; color: ${M.ink}; border-color: ${M.ink}; transform: none; }
+
+    /* ---- notes, banners, misc ---- */
+    .au-banner {
+      position: relative;
+      padding: 5px 0 5px 11px;
+      background: transparent;
+      border: 0;
+      border-left: 3px solid ${M.red};
+      border-radius: 0;
+      overflow: visible;
+    }
+
+    .au-banner p {
+      margin: 0;
+      color: ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+
+    .au-strip {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 6px 0;
+      color: ${M.ink};
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      font-family: ${M.fontBody};
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .au-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+    .au-field label {
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .au-revnote {
+      margin: 0;
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .au-search:focus-visible,
+    .au-input:focus-visible,
+    .au-box:focus-visible,
+    .au-result:focus-visible,
+    .au-cta:focus-visible,
+    .au-ghost:focus-visible,
+    .au-field input:focus-visible {
+      outline: 2px solid ${M.ink};
+      outline-offset: 3px;
+    }
+
+    /* ---- campus photo scene: the photo is the canvas, the form floats above ---- */
+    .au-campus-scene {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      overflow: hidden;
+      pointer-events: none;
+      background: ${M.paper};
+      transition: opacity .35s ease;
+    }
+
+    .au-campus-photo {
+      display: block;
+      position: absolute;
+      z-index: 0;
+      top: 0;
+      left: 50%;
+      width: 100vw;
+      max-width: none;
+      height: 100dvh;
+      object-fit: cover;
+      object-position: center 48%;
+      transform: translateX(-50%) scale(1.01);
+      filter: saturate(.92) contrast(.98) brightness(.96);
+      transition: filter .42s cubic-bezier(.2,.8,.2,1), transform .55s cubic-bezier(.2,.8,.2,1);
+      will-change: transform, filter;
+    }
+
+    /* College step runs the slower iOS curve so the search-open blur reads as depth. */
+    .au-root .au-campus-scene-college .au-campus-photo {
+      filter: blur(0px) saturate(.92) contrast(.98) brightness(.96);
+      transition: filter .6s cubic-bezier(.32,.72,0,1), transform .8s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-campus-wash {
+      position: absolute;
+      z-index: 1;
+      inset: 0;
+      background: linear-gradient(
+        180deg,
+        rgba(241,237,226,.06) 0%,
+        rgba(241,237,226,.03) 30%,
+        rgba(241,237,226,.15) 44%,
+        rgba(241,237,226,.62) 58%,
+        rgba(241,237,226,.93) 70%,
+        ${M.paper} 83%,
+        ${M.paper} 100%
+      );
+      transition: background .55s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-campus-blur {
+      display: block;
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      pointer-events: none;
+      opacity: 0;
+      background: rgba(241,237,226,.5);
+      -webkit-backdrop-filter: blur(26px) saturate(1.45);
+      backdrop-filter: blur(26px) saturate(1.45);
+      transition: opacity .55s cubic-bezier(.32,.72,0,1);
+      will-change: opacity;
+    }
+
+    .au-backdrop {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      background: transparent;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ---- search-open state ---- */
+    .au-root.is-search-open { overflow: hidden; }
+
+    .au-root.is-search-open .au-campus-blur { opacity: 1; }
+
+    .au-root.is-search-open .au-campus-scene-college .au-campus-photo {
+      filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
+      transform: translateX(-50%) scale(1.06);
+    }
+
+    .au-root.is-search-open .au-brandbar {
+      opacity: 0;
+      transform: translateY(-10px);
+      pointer-events: none;
+    }
+
+    .au-root.is-search-open .au-step {
+      margin-top: clamp(18px, 7dvh, 64px);
+      margin-bottom: 0;
+      padding-top: 0;
+    }
+
+    .au-root.is-search-open .au-step::before {
+      opacity: 0;
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+
+    .au-root.is-search-open .au-mobile-field-label { margin-top: 2px; }
+
+    .au-root.is-search-open .au-results { max-height: min(28dvh, 230px); }
+
+    /* ---- compact screens (order matters: height first, then width) ---- */
+    @media (max-height: 760px) {
+      .au-brandbar { margin-top: 2px; }
+      .au-wordmark { font-size: 36px; }
+      .au-brand-whisper { font-size: 10px; }
+      .au-step { gap: 8px; }
+      .au-step .au-headline { font-size: 29px; }
+      .au-input,
+      .au-field input { height: 50px; }
+    }
+
+    @media (max-width: 360px) {
+      .au-panel { padding-left: 18px; padding-right: 18px; }
+      .au-step .au-headline { font-size: 28px; }
+      .au-search { font-size: 15px; }
+      .au-box { height: 45px; font-size: 21px; }
+      .au-form { gap: 12px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .au-campus-photo,
+      .au-campus-wash,
+      .au-campus-blur,
+      .au-brandbar,
+      .au-step,
+      .au-step::before,
+      .au-searchwrap,
+      .au-search,
+      .au-input,
+      .au-field input,
+      .au-box,
+      .au-result,
+      .au-cta,
+      .au-ghost,
+      .au-results { transition: none !important; }
+      .au-box.err { animation: none !important; }
+      .au-root.is-search-open .au-campus-scene-college .au-campus-photo {
+        filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
+        transform: translateX(-50%);
+      }
+    }
+  }
+`;
+
+/* The scene and polish layers were merged into MOBILE_AUTH_CSS above.
+   Kept as empty exports so any other module importing them keeps working —
+   delete these two lines if nothing else imports them. */
+export const AUTH_SCENE_CSS = '';
+export const AUTH_SMOOTH_CSS = '';
+
+const AuthBrand = () => (
+  <div className="au-brandbar" aria-label="huh?">
+    <span className="au-wordmark" aria-hidden="true">
+      huh<span className="au-brand-question">?</span>
+    </span>
+    <span className="au-brand-whisper">campus, chemistry, and a little curiosity.</span>
+  </div>
+);
+
 const AuthArtwork = ({ kind }) => {
-  const { ink, paper, card, amber, coral, sage, concrete } = C;
+  const ink = M.ink;
+  const white = M.card;
+  const yellow = M.yellow;
+  const coral = M.coral;
+  const green = M.green;
 
   const scenes = {
     college: (
-      <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
-        <g className="art-float">
-          <path d="M48 80L145 33 242 80V169H48Z" fill={card} stroke={ink} strokeWidth="2" strokeLinejoin="round" />
-          <path d="M32 80L145 23 258 80" fill="none" stroke={coral} strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M80 96h20v24H80zM135 96h20v24h-20zM190 96h20v24h-20z" fill={sage} />
-          <path d="M128 134h34v35h-34z" fill={amber} />
-          <path d="M39 172h222" stroke={ink} strokeWidth="4" strokeLinecap="round" />
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          {/* Traditional academic pediment, labelled facade, columns and entrance. */}
+          <path d="M54 48 160 13 266 48Z" fill={yellow} />
+          <path d="M44 50H276" fill="none" strokeWidth="5" />
+          <path d="M62 54H258V119H62Z" fill={white} />
+          <path d="M104 58H216V76H104Z" fill={yellow} />
+          <text x="160" y="70.5" textAnchor="middle" fill={ink} stroke="none" fontFamily="Arial, sans-serif" fontSize="10" fontWeight="800" letterSpacing="1.3">COLLEGE</text>
+          {/* Five straight pillars and a centered entrance make the academic facade clear. */}
+          <path d="M77 82H94V111H77ZM111 82H128V111H111ZM145 82H162V111H145ZM179 82H196V111H179ZM213 82H230V111H213Z" fill={green} />
+          <path d="M142 91H178V119H142Z" fill={coral} />
+          <path d="M49 120H271M39 128H281M30 136H290" fill="none" strokeWidth="3.5" />
+          <path d="M244 16V4M244 5L264 11L244 17Z" fill={coral} strokeWidth="2.5" />
         </g>
-        <g className="art-late">
-          <circle cx="247" cy="40" r="27" fill={amber} />
-          <circle cx="247" cy="40" r="12" fill={card} />
-          <path d="M245 21v-8M265 40h8M247 59v8M227 40h-8" stroke={ink} strokeWidth="2.5" strokeLinecap="round" />
-        </g>
-        <circle cx="48" cy="39" r="7" fill={sage} />
+        <circle cx="38" cy="29" r="5" fill={coral} />
+        <path d="M284 34h11M289.5 28.5v11" stroke={ink} strokeWidth="2.5" strokeLinecap="round" />
       </svg>
     ),
     request: (
-      <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
-        <g className="art-float">
-          <path d="M63 83L153 34 245 83V169H63Z" fill={card} stroke={ink} strokeWidth="2" strokeLinejoin="round" />
-          <path d="M49 83L153 25 259 83" fill="none" stroke={sage} strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M93 96h23v27H93zM140 96h23v27h-23zM187 96h23v27h-23z" fill={amber} />
-          <path d="M135 139h36v30h-36z" fill={coral} />
-          <path d="M50 172h210" stroke={ink} strokeWidth="4" strokeLinecap="round" />
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          <path d="M90 15H202L235 48V127H90Z" fill={white} />
+          <path d="M202 15V48H235" fill={yellow} />
+          <path d="M111 58H186M111 70H205M111 82H177" fill="none" strokeWidth="3" />
+          <path d="M112 105 133 85 154 105V121H112Z" fill={green} />
+          <path d="M106 105 133 79 160 105" fill="none" strokeWidth="3" />
+          <path d="M126 105V121M139 105V121" fill="none" strokeWidth="2.5" />
+          <path d="M178 105h30v22h-30z" fill={coral} />
+          <path d="M184 116h18" fill="none" strokeWidth="2.5" />
         </g>
-        <g className="art-late">
-          <path d="M244 25v51" stroke={ink} strokeWidth="3" strokeLinecap="round" />
-          <path d="M246 27h36l-9 12 9 12h-36z" fill={coral} stroke={ink} strokeWidth="1.5" strokeLinejoin="round" />
-        </g>
-        <circle cx="42" cy="37" r="8" fill={amber} />
+        <circle cx="67" cy="37" r="16" fill={yellow} stroke={ink} strokeWidth="2.5" />
+        <path d="M60 37h14M67 30v14" stroke={ink} strokeWidth="2.5" strokeLinecap="round" />
       </svg>
     ),
     email: (
-      <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
-        <g className="art-float">
-          <rect x="49" y="49" width="222" height="123" rx="16" fill={card} stroke={ink} strokeWidth="2" />
-          <path d="M54 61l106 76L266 61" fill="none" stroke={coral} strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M54 160l71-58M266 160l-71-58" fill="none" stroke={ink} strokeWidth="2" opacity=".3" />
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          <path d="M58 42H244V125H58Z" fill={white} />
+          <path d="M61 45 151 100 241 45" fill={yellow} />
+          <path d="M61 122 119 80M241 122 183 80" fill="none" strokeWidth="2.5" />
+          <path d="M204 20h57v45h-57z" fill={green} />
+          <path d="M216 34h33M216 44h25M216 54h18" fill="none" strokeWidth="2.5" />
         </g>
-        <g className="art-late">
-          <rect x="181" y="19" width="67" height="59" rx="12" fill={sage} stroke={ink} strokeWidth="1.5" />
-          <path d="M197 38h35M197 48h27M197 58h18" stroke={paper} strokeWidth="3" strokeLinecap="round" />
-        </g>
-        <circle cx="72" cy="35" r="9" fill={amber} />
+        <circle cx="47" cy="29" r="6" fill={coral} />
       </svg>
     ),
     otp: (
-      <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
-        <g className="art-float">
-          <rect x="79" y="27" width="162" height="145" rx="22" fill="#20211F" stroke="rgba(241,237,226,.5)" strokeWidth="1.5" />
-          <rect x="101" y="48" width="118" height="31" rx="9" fill={sage} />
-          <path d="M116 63h87" stroke={ink} strokeWidth="3" strokeLinecap="round" />
-          {[0, 1, 2, 3].map((i) => (
-            <rect key={i} x={96 + i * 34} y="94" width="25" height="31" rx="7" fill={card} />
-          ))}
-          <rect x="130" y="136" width="60" height="7" rx="3.5" fill={concrete} />
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          <path d="M66 31H234V118H66Z" fill={white} />
+          <path d="M68 34 150 85 232 34" fill={yellow} />
+          <path d="M68 115 119 77M232 115 181 77" fill="none" strokeWidth="2.5" />
+          <path d="M199 18 222 27V46C222 59 212 67 199 73 186 67 176 59 176 46V27Z" fill={green} />
+          <path d="M188 44 196 52 210 36" fill="none" strokeWidth="3.5" />
         </g>
-        <g className="art-late">
-          <circle cx="252" cy="44" r="23" fill={amber} />
-          <path d="M241 44l7 7 14-16" fill="none" stroke={ink} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-        </g>
+        <circle cx="48" cy="104" r="7" fill={coral} />
+        <path d="M257 101h13M263.5 94.5v13" stroke={ink} strokeWidth="2.5" strokeLinecap="round" />
       </svg>
     ),
     verify: (
-      <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
-        <g className="art-pulse">
-          <path d="M160 25L229 50V99c0 39-27 59-69 77-42-18-69-38-69-77V50z" fill={sage} stroke="rgba(241,237,226,.7)" strokeWidth="2" strokeLinejoin="round" />
-          <path d="M127 100l22 22 45-48" fill="none" stroke={ink} strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" />
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          {/* Graduation cap is the most direct visual cue for student verification. */}
+          <path d="M66 56 160 20 254 56 160 93Z" fill={yellow} />
+          <path d="M99 70V97C132 118 188 118 221 97V70L160 95Z" fill={green} />
+          <path d="M254 56V91" fill="none" />
+          <circle cx="254" cy="96" r="5" fill={coral} />
+          <path d="M119 84V102C143 115 177 115 201 102V84" fill={white} />
         </g>
-        <g className="art-late">
-          <circle cx="238" cy="42" r="9" fill={amber} />
-          <circle cx="72" cy="145" r="12" fill={coral} />
-          <path d="M54 62h29M69 48v28" stroke={paper} strokeWidth="3" strokeLinecap="round" />
-        </g>
+        <path d="M43 34h15M50.5 26.5v15" stroke={ink} strokeWidth="2.5" strokeLinecap="round" />
+        <circle cx="275" cy="38" r="8" fill={coral} />
       </svg>
     ),
   };
 
-  return (
-    <div className="au-art" aria-hidden="true">
-      {scenes[kind]}
-    </div>
-  );
+  return <div className="au-art" aria-hidden="true">{scenes[kind]}</div>;
 };
+
+
+/* Mobile campus scene: the photo is the whole canvas, with a wash that
+   dissolves its lower edge into the paper color. The form stays live HTML
+   above it — never baked into the image. */
+const AuthCampusScene = ({ kind = 'college', verified = false }) => (
+  <div
+    className={`au-campus-scene au-campus-scene-${kind}${verified ? ' is-verified' : ''}`}
+    aria-hidden="true"
+  >
+    <img className="au-campus-photo" src={campusPhoto} alt="" draggable="false" />
+    <div className="au-campus-wash" />
+    <div className="au-campus-blur" />
+  </div>
+);
 
 const Auth = ({ onSuccess, reverifyOnly = false }) => {
   const reduceMotion = useReducedMotion();
+  const isDesktop = useIsDesktop();
 
   // Auth is cream where the splash is near-black, so the browser's status bar
   // and the strip around the app must switch with it or the transition reads as
   // two different apps.
-  useChromeColor(C.paper);
+  useChromeColor(M.paper);
 
   const [step, setStep] = useState(reverifyOnly ? 'otp' : 'college');
   const [colleges, setColleges] = useState([]);
   const [collegeQuery, setCollegeQuery] = useState('');
+  const [collegeSearchOpen, setCollegeSearchOpen] = useState(false);
+  const collegeSearchRef = useRef(null);
   const [college, setCollege] = useState(null);
   const [email, setEmail] = useState('');
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
@@ -1003,6 +1627,16 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
   const [graduatingYear, setGraduatingYear] = useState('');
   const inputRefs = useRef([]);
   const { login, user: authUser } = useAuth();
+
+  const openCollegeSearch = useCallback(() => {
+    if (isDesktop) return;
+    setCollegeSearchOpen(true);
+  }, [isDesktop]);
+
+  const closeCollegeSearch = useCallback(() => {
+    setCollegeSearchOpen(false);
+    collegeSearchRef.current?.blur();
+  }, []);
 
   const [requestForm, setRequestForm] = useState({
     collegeName: '',
@@ -1099,6 +1733,22 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     ? colleges.filter((c) => collegeMatches(c, collegeQuery))
     : colleges;
 
+  // On desktop the results are always inline under the field. On mobile they
+  // only exist while the search is open, and only once something is typed — an
+  // empty list is noise, not help.
+  const showResults = !!collegeQuery.trim() && (isDesktop || collegeSearchOpen);
+  const searchActive = collegeSearchOpen && !isDesktop;
+
+  const pickCollege = (c) => {
+    setCollege(c);
+    setCollegeQuery(c.name);
+    setCollegeSearchOpen(false);
+    setError('');
+    collegeSearchRef.current?.blur();
+    triggerHaptic('light');
+    setTimeout(() => setStep('email'), 220);
+  };
+
   const [suspendedData, setSuspendedData] = useState(() => {
     try {
       const data = JSON.parse(localStorage.getItem('matchalize_suspended'));
@@ -1129,7 +1779,9 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
   const reverifyCollege = authUser?.college || 'your college';
 
   const handleInputBlur = () => {
-    window.scrollTo(0, 0);
+    // Desktop keeps its existing reset behavior. On mobile, forcing the page to
+    // the top on blur fights keyboard dismissal and causes a visible jump.
+    if (!window.matchMedia('(max-width: 700px)').matches) window.scrollTo(0, 0);
   };
 
   const handleSendOtp = async (e) => {
@@ -1303,13 +1955,18 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     </AnimatePresence>
   );
 
-  const swapProps = {
+  const swapProps = isDesktop ? {
     initial: reduceMotion ? false : { opacity: 0, y: 12, scale: .985, filter: 'blur(2px)' },
     animate: { opacity: 1, y: 0, scale: 1, filter: 'blur(0px)' },
     exit: reduceMotion
       ? { opacity: 0 }
       : { opacity: 0, y: -8, scale: .99, filter: 'blur(2px)' },
     transition: { duration: .24, ease: [0.22, 1, 0.36, 1] },
+  } : {
+    initial: reduceMotion ? false : { opacity: 0, y: 6 },
+    animate: { opacity: 1, y: 0 },
+    exit: reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 },
+    transition: { duration: .18, ease: [0.22, 1, 0.36, 1] },
   };
 
   if (suspendedData) {
@@ -1335,10 +1992,12 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
   if (reverifyOnly) {
     return (
       <div className="au-root au-root-verify">
-        <style>{AUTH_CSS}</style>
+        <style>{AUTH_CSS}{MOBILE_AUTH_CSS}</style>
+        <AuthCampusScene kind="verify" verified={verified} />
 
         <div className="au-fit">
           <motion.div className="au-panel" {...swapProps}>
+            <AuthBrand />
             <div className="au-step">
               <h2 className="au-headline">Confirm you're still a student.</h2>
 
@@ -1398,36 +2057,84 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
   }
 
   return (
-    <div className={`au-root au-root-${step}`}>
-      <style>{AUTH_CSS}</style>
+    <div className={`au-root au-root-${step}${step === 'college' && collegeSearchOpen ? ' is-search-open' : ''}`}>
+      <style>{AUTH_CSS}{MOBILE_AUTH_CSS}</style>
+      <AuthCampusScene kind={step} verified={verified} />
 
       <div className="au-fit">
         <motion.div className="au-panel" {...swapProps}>
+          {searchActive && step === 'college' && (
+            <div className="au-backdrop" onClick={closeCollegeSearch} aria-hidden="true" />
+          )}
+          <AuthBrand />
           <AnimatePresence mode="wait" initial={false}>
             {step === 'college' ? (
-              <motion.section key="college" className="au-step" {...swapProps}>
-                <h2 className="au-headline">Enter your college.</h2>
+              <motion.section
+                key="college"
+                className="au-step"
+                {...swapProps}
+                layout={isDesktop ? false : 'position'}
+                transition={{
+                  ...swapProps.transition,
+                  layout: { type: 'spring', stiffness: 300, damping: 34, mass: 0.9 },
+                }}
+              >
+                <h2 className="au-headline">
+                  So, what&rsquo;s your college, <span className="au-huh-inline">huh?</span>
+                </h2>
+
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.p
+                    key={searchActive ? 'typing' : 'idle'}
+                    className="au-sub au-mobile-sub"
+                    initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.16 }}
+                  >
+                    {searchActive
+                      ? 'Start typing. We’ll bring your campus into view.'
+                      : 'Your campus. Your people. Your next good story.'}
+                  </motion.p>
+                </AnimatePresence>
 
                 <AuthArtwork kind="college" />
 
                 {errorBanner}
 
+                <label className="au-mobile-field-label" htmlFor="college-search">Find your campus</label>
                 <div className="au-searchwrap">
                   <span className="au-searchicon">
                     <Search size={20} strokeWidth={1.9} aria-hidden="true" />
                   </span>
 
                   <input
+                    id="college-search"
+                    ref={collegeSearchRef}
                     className="au-search"
                     type="text"
                     inputMode="text"
+                    enterKeyHint="search"
                     autoComplete="off"
                     autoCapitalize="words"
                     autoCorrect="off"
                     spellCheck="false"
                     placeholder="Search your college"
                     value={collegeQuery}
+                    onFocus={openCollegeSearch}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape' && collegeSearchOpen) {
+                        e.preventDefault();
+                        closeCollegeSearch();
+                      }
+                      if (e.key === 'Enter' && filteredColleges.length === 1) {
+                        e.preventDefault();
+                        pickCollege(filteredColleges[0]);
+                      }
+                    }}
                     onChange={(e) => setCollegeQuery(e.target.value)}
+                    aria-expanded={showResults}
+                    aria-controls="college-suggestions"
                     aria-label="Search your college"
                   />
                 </div>
@@ -1441,61 +2148,71 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                   </div>
                 )}
 
-                {collegeQuery.trim() && collegeLoadState !== 'error' && (
-                  <div className="au-results">
-                    {filteredColleges.length === 0 ? (
-                      <div style={{ gridColumn: '1 / -1' }}>
-                        <p className="au-empty">
-                          No college matches &ldquo;{collegeQuery.trim()}&rdquo;.
-                        </p>
+                <AnimatePresence>
+                  {showResults && collegeLoadState !== 'error' && (
+                    <motion.div
+                      key="results"
+                      className="au-results"
+                      id="college-suggestions"
+                      role="listbox"
+                      aria-label="College suggestions"
+                      initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 4 }}
+                      transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
+                    >
+                      {filteredColleges.length === 0 ? (
+                        <div style={{ gridColumn: '1 / -1' }}>
+                          <p className="au-empty">
+                            No college matches &ldquo;{collegeQuery.trim()}&rdquo;.
+                          </p>
 
-                        {requestDone ? (
-                          <div className="au-strip">
-                            <CheckCircle2 size={18} strokeWidth={2.5} /> Request received
-                          </div>
-                        ) : (
-                          <button
-                            className="au-cta"
-                            type="button"
-                            onClick={() => {
-                              setRequestForm((f) => ({
-                                ...f,
-                                collegeName: collegeQuery.trim(),
-                                email,
-                              }));
-                              triggerHaptic('light');
-                              setStep('request');
-                            }}
-                          >
-                            Request this college
-                          </button>
-                        )}
-                      </div>
-                    ) : (
-                      filteredColleges.map((c) => (
-                        <button
-                          key={c.code}
-                          type="button"
-                          className={`au-result${college?.code === c.code ? ' chosen' : ''}`}
-                          onClick={() => {
-                            setCollege(c);
-                            setCollegeQuery(c.name);
-                            setError('');
-                            triggerHaptic('light');
-                            setTimeout(() => setStep('email'), 120);
-                          }}
-                        >
-                          <span className="au-result-name">{c.name}</span>
-                          {(c.city || c.state) && (
-                            <span className="au-result-meta">
-                              {[c.city, c.state].filter(Boolean).join(', ')}
-                            </span>
+                          {requestDone ? (
+                            <div className="au-strip">
+                              <CheckCircle2 size={18} strokeWidth={2.5} /> Request received
+                            </div>
+                          ) : (
+                            <button
+                              className="au-cta"
+                              type="button"
+                              onClick={() => {
+                                setRequestForm((f) => ({
+                                  ...f,
+                                  collegeName: collegeQuery.trim(),
+                                  email,
+                                }));
+                                triggerHaptic('light');
+                                setCollegeSearchOpen(false);
+                                collegeSearchRef.current?.blur();
+                                setStep('request');
+                              }}
+                            >
+                              Request this college
+                            </button>
                           )}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
+                        </div>
+                      ) : (
+                        filteredColleges.slice(0, 12).map((c) => (
+                          <button
+                            key={c.code}
+                            type="button"
+                            role="option"
+                            aria-selected={college?.code === c.code}
+                            className={`au-result${college?.code === c.code ? ' chosen' : ''}`}
+                            onClick={() => pickCollege(c)}
+                          >
+                            <span className="au-result-name">{c.name}</span>
+                            {(c.city || c.state) && (
+                              <span className="au-result-meta">
+                                {[c.city, c.state].filter(Boolean).join(', ')}
+                              </span>
+                            )}
+                          </button>
+                        ))
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
                 {!collegeQuery.trim() && collegeLoadState === 'loading' && colleges.length === 0 && (
                   <p className="au-empty">Loading colleges…</p>
@@ -1612,8 +2329,9 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
 
                 <form className="au-form" onSubmit={handleSendOtp}>
                   {errorBanner}
-
+                  <label className="au-mobile-field-label" htmlFor="college-email">College email</label>
                   <input
+                    id="college-email"
                     className="au-input"
                     type="text"
                     inputMode="email"
@@ -1638,6 +2356,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                     className="au-ghost"
                     type="button"
                     onClick={() => {
+                      setCollegeSearchOpen(false);
                       setStep('college');
                       setError('');
                     }}

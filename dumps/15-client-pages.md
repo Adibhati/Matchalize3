@@ -1,1971 +1,2225 @@
 # Chunk 15 — Client Pages
 
-> Matchalize · `client-pages` · files 15 of 25 chunks · 1 file(s) · 93 KB · ~27,321 tokens
-> Generated 2026-10-09 14:03.
+> Matchalize · `client-pages` · files 15 of 27 chunks · 1 file(s) · 58 KB · ~16,927 tokens
+> Generated 2026-10-17 20:14.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
-> - `./client/src/pages/Profile.jsx`
+> - `./client/src/pages/Onboarding.jsx`
 
 ---
-### ./client/src/pages/Profile.jsx
+### ./client/src/pages/Onboarding.jsx
 
 ```
-import React, {
-  useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef,
-} from 'react';
-import {
-  AnimatePresence, motion, useMotionValue, useTransform, animate, useReducedMotion, useMotionValueEvent,
-} from 'framer-motion';
+
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
+import { Camera, LogOut, ChevronRight, ChevronLeft, Check, MoreVertical, X } from 'lucide-react';
 import { api } from '../utils/api';
-import { useQueryClient } from '@tanstack/react-query';
-import { useAppConfig } from '../utils/AppConfigContext';
-import { triggerHaptic } from '../utils/haptics';
-import { useAuth } from '../utils/AuthContext';
-import ShadowbanBanner from '../components/ShadowbanBanner';
-import LearnMoreSheet from '../components/LearnMoreSheet';
 import { toast } from '../utils/toast';
-import { PROMPT_ANSWER_MAX, PROMPT_QUESTION_MAX } from '../utils/promptLimits.js';
-import { readScore, bandFor } from '../utils/ladder.js';
+import { triggerHaptic } from '../utils/haptics';
+import { readLocationOnce, LOCATION_UNAVAILABLE } from '../utils/geolocation';
+import { useAuth } from '../utils/AuthContext';
+import { useAppConfig } from '../utils/AppConfigContext';
+import neu from '../styles/neu';
 
-// Server-side caps mirrored from models/User.js (and FIELD_LIMITS in
-// routes/users.js). Without maxLength here a user could type past the limit and
-// get back "Could not save. Please try again." with no indication why — the
-// server was answering 500, and now answers 400 with the exact limit.
-const PROFILE_LIMITS = {
-  name: 60,
-  pronouns: 30,
-  year: 40,
-  bio: 160,
-};
-import {
-  Sparkle, X, Pencil, Camera, Plus, CheckCircle2, Calendar,
-} from 'lucide-react';
-
-/**
- * Text field for the edit drawers, with a live character count.
- *
- * Every drawer field is CONTROLLED off `draft` and committed by the drawer's Save
- * button. These used to be uncontrolled (`defaultValue` + onBlur → PUT), which
- * meant tabbing out of a field — or just tapping past it — silently fired a write.
- * Each of those writes cost two requests (PUT /users/profile then GET /auth/me via
- * refreshUser), plus a haptic, so completing a 6-interest selection cost a dozen.
- *
- * `max` mirrors the server cap so the counter can go red as you approach it rather
- * than only after the 400 comes back.
- */
-function DraftField({ value, onChange, max, multiline = false, placeholder, minHeight }) {
-  const len = value.length;
-  const atLimit = len >= max;
-  const nearLimit = len > max * 0.9;
-  const cls = 'pr-' + (multiline ? 'textarea' : 'input');
-  const shared = {
-    className: cls,
-    value,
-    placeholder,
-    maxLength: max,
-    onChange: (e) => onChange(e.target.value),
-    style: multiline ? { minHeight: minHeight || 120 } : undefined,
-  };
-  return (
-    <>
-      {multiline ? <textarea {...shared} /> : <input {...shared} />}
-      <div style={{
-        alignSelf: 'flex-end', fontFamily: F.mono, fontSize: 10,
-        letterSpacing: '.12em', marginTop: -6,
-        color: atLimit ? C.red : nearLimit ? C.ink2 : C.ink3,
-      }}>
-        {len}/{max}
-      </div>
-    </>
-  );
-}
-
-/**
- * A slot that is always on the card but has nothing in it yet.
- *
- * Prompt, About and Interests used to unmount entirely when empty, so clearing one
- * deleted the card and the edit button with it — the only way back was another
- * pencil elsewhere. They now render this instead: same frame as a filled card,
- * dashed rather than solid, and the whole thing is the tap target.
- */
-const EmptySlot = ({ onClick, label, icon: Icon = Plus }) => (
-  <div className="pc-slot">
-    <button className="pr-empty" onClick={onClick} aria-label={label}>
-      <Icon size={22} strokeWidth={2.2} color={C.ink3} />
-      <span className="pc-slotlabel">{label}</span>
-    </button>
-  </div>
-);
-
-/* ───────────────────────── constants — identical to ProfileCard ───────────────────────── */
-
-const FALLBACK_IMG = 'https://placehold.co/600x800/fff3dc/191919?text=%C2%B7';
-
-const RUBBER = 0.3;
-const MOMENTUM_MS = 240;
-const SIDE_MARGIN = 12;
-const TOP_GAP = 16;
-const BOTTOM_GAP = 16;
-const PEEK_PAD = 10;
-const PEEK_FALLBACK = 148;
-
-/* How far below the header's bottom edge the sheet must be for the header to
-   start ducking. Small lead, so the header is fully clear on arrival. */
-const HEADER_LEAD = 12;
-
-/* Extra distance the sheet must travel back DOWN before the header returns.
-   Sits ABOVE the trigger (larger y), never below it. */
-const HEADER_RELEASE = 8;
-
-/* Used only if [data-deck-header] cannot be found: DECK_TOP (12) + DECK_BTN (42). */
-const HEADER_FALLBACK_BOTTOM = 54;
-
-const F = {
-  heavy: "'Archivo Black', 'Arial Black', sans-serif",
-  body: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  mono: "'Space Mono', 'Courier New', monospace",
+const T = {
+  ...neu,
+  ink: '#111211',
+  ink2: '#383832',
+  ink3: '#77766F',
+  paper: '#F1EDE2',
+  paper2: '#E8E2D6',
+  card: '#F8F5EC',
+  yellow: '#E0A15E',
+  yellowDeep: '#CB8848',
+  orange: '#C96F68',
+  green: '#779477',
+  red: '#A84F4A',
+  concrete: '#A3A3A1',
+  fontHeavy: "'Barlow Condensed', sans-serif",
+  fontBody: "'Space Grotesk', sans-serif",
+  fontMono: "'IBM Plex Mono', monospace",
 };
 
-const C = {
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  pink: '#FFA3C6',
-  red: '#E5484D',
-};
+const STEPS = [
+  {
+    key: 'name',
+    title: 'What do your friends call you?',
+    hint: 'First name is plenty. Make yourself at home.',
+  },
+  {
+    key: 'dob',
+    title: "When's your birthday?",
+    hint: 'You need to be 18–40 to join. Only your age is shown.',
+    foot: 'Your birthday stays private.',
+  },
+  {
+    key: 'photo',
+    title: 'Give them a face to remember.',
+    hint: 'Choose a photo that feels like you. You can change it later.',
+  },
+  {
+    key: 'gender',
+    title: 'How do you identify?',
+    hint: 'Choose what feels right to you.',
+  },
+  {
+    key: 'interestedIn',
+    title: 'Who would you like to meet?',
+    hint: 'Choose every option that fits.',
+  },
+  {
+    key: 'year',
+    title: 'What chapter are you in?',
+    hint: 'Undergrad or postgrad?',
+  },
+  {
+    key: 'intent',
+    title: 'What are you hoping to find?',
+    hint: 'No wrong answers. This helps shape your deck.',
+  },
+  {
+    key: 'location',
+    title: "Who's in your orbit?",
+    hint: 'Find people nearby, beyond your campus.',
+    foot: 'Your location is never shown to other people.',
+    optional: true,
+  },
+];
 
-const TILE = ['coral', 'yellow', 'green', 'pink'];
+const CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
-const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
+  .ob-root {
+    --page: ${T.paper};
+    --main: ${T.ink};
+    --sub: ${T.ink2};
+    --surface: ${T.card};
+    --line: rgba(17,18,17,.13);
+    --accent: ${T.orange};
+    --tint: rgba(201,111,104,.15);
+    --heavy: ${T.fontHeavy};
+    --body: ${T.fontBody};
+    --mono: ${T.fontMono};
 
-/* ───────────────────────── styles ───────────────────────── */
-
-const PROFILE_CSS = `
-  .pc-root {
-    --paper: ${C.paper};
-    --card: ${C.card};
-    --ink: ${C.ink};
-    --ink-2: ${C.ink2};
-    --ink-3: ${C.ink3};
-    --hair: ${C.hair};
-    --yellow: ${C.yellow};
-    --coral: ${C.coral};
-    --green: ${C.green};
-    --pink: ${C.pink};
-    --red: ${C.red};
-    --bw: 2px;
-    --r: 14px;
-    --ease: cubic-bezier(.2,0,0,1);
-
-    position: relative; width: 100%; height: 100%; overflow: hidden;
-    background: #131313;
-    font-family: ${F.body}; color: var(--ink);
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+    isolation: isolate;
+    position: relative;
+    background-color: var(--page);
+    color: var(--main);
+    font-family: var(--body);
     -webkit-font-smoothing: antialiased;
-  }
-  .pc-root ::selection { background: var(--yellow); color: var(--ink); }
-
-  .pc-heroWrap { position: absolute; inset: 0; z-index: 0; transform-origin: 50% 30%; will-change: transform, opacity; }
-  .pc-hero { width: 100%; height: 100%; object-fit: cover; display: block;
-    opacity: 0; transition: opacity .4s ease-out; -webkit-user-drag: none; }
-  .pc-hero.is-loaded { opacity: 1; }
-  .pc-shade { position: absolute; inset: 0; pointer-events: none;
-    background: linear-gradient(to top, rgba(15,13,10,.4) 0%, rgba(15,13,10,.08) 42%, rgba(15,13,10,.18) 100%); }
-
-  /* SMOOTHNESS: own compositor layer + paint containment, so the 8px shadow
-     and all children never force full-page repaints while dragging */
-  .pc-sheet { position: absolute; left: ${SIDE_MARGIN}px; right: ${SIDE_MARGIN}px; top: 0; z-index: 30;
-    background: var(--paper); border: var(--bw) solid var(--ink); border-radius: 22px;
-    box-shadow: 8px 8px 0 var(--ink);
-    transform: translateZ(0); backface-visibility: hidden;
-    contain: layout paint style;
-    touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
-    padding: 14px 20px calc(28px + env(safe-area-inset-bottom));
-    display: flex; flex-direction: column; gap: 22px; will-change: transform; }
-  .pc-sheet:active { cursor: grabbing; }
-  .pc-sheet img { -webkit-user-drag: none; }
-
-  .pc-grabber { width: 48px; height: 6px; border-radius: 999px; margin: 0 auto 0; flex-shrink: 0;
-    background: var(--ink); transition: none; }
-  .pc-sheet:active .pc-grabber { background: var(--yellow); }
-
-  .pc-notetext { display: block; text-align: center; margin-bottom: 6px;
-    font-family: ${F.mono}; font-size: 9px; font-weight: 700; letter-spacing: .2em;
-    text-transform: uppercase; color: var(--ink-3); pointer-events: none; }
-
-  .pc-id { position: relative; }
-  .pc-idrow { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-  .pc-name { font-family: ${F.heavy}; font-size: 34px; font-weight: 400; letter-spacing: -.01em;
-    line-height: 1.08; color: var(--ink); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    background-image: linear-gradient(180deg, transparent 58%, var(--yellow) 58%);
-    padding: 0 6px 3px 0; }
-  .pc-meta { font-family: ${F.mono}; font-size: 11px; font-weight: 700; letter-spacing: .1em;
-    text-transform: uppercase; color: var(--ink-2); font-variant-numeric: tabular-nums;
-    margin: 12px 0 0; display: flex; align-items: center; flex-wrap: wrap; row-gap: 4px; }
-  .pc-slash { color: var(--ink-3); font-weight: 400; margin: 0 8px; }
-
-  .pc-sec { display: flex; flex-direction: column; flex-shrink: 0; }
-  .pc-shead { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
-  .pc-mark { width: 11px; height: 11px; flex-shrink: 0; border: var(--bw) solid var(--ink); border-radius: 3px; }
-  .pc-mark.yellow { background: var(--yellow); }
-  .pc-mark.coral { background: var(--coral); }
-  .pc-mark.green { background: var(--green); }
-  .pc-mark.pink { background: var(--pink); }
-  .pc-stitle { font-family: ${F.mono}; font-size: 12px; font-weight: 700; letter-spacing: .18em;
-    text-transform: uppercase; color: var(--ink); }
-  .pc-scount { font-family: ${F.mono}; font-size: 10px; font-weight: 400; color: var(--ink-3);
-    font-variant-numeric: tabular-nums; }
-
-  .pc-card { background: var(--card); border: var(--bw) solid var(--ink); border-radius: var(--r);
-    box-shadow: 5px 5px 0 var(--ink); position: relative; }
-  .pc-card.padded { padding: 16px; }
-
-  /* '.pc-compat' was the compatibility score block's positioning hook.
-     Renamed to say what it now wraps: the profile-strength readout.
-     NOTE: no backticks in this comment — this whole block is a JS template
-     literal, so a single backtick here terminates the string early and the
-     remaining ~9k characters get parsed as JavaScript. That is not a
-     theoretical hazard: it shipped as "ReferenceError: compat is not
-     defined" and took the entire Profile page with it. */
-  .pc-strengthhead { position: relative; }
-  .pc-scorehead { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
-  .pc-scorenum { display: flex; align-items: flex-start; }
-  .pc-num { font-family: ${F.heavy}; font-size: 54px; font-weight: 400; letter-spacing: -.02em;
-    line-height: .9; color: var(--ink); font-variant-numeric: tabular-nums; }
-  .pc-pct { font-family: ${F.mono}; font-size: 13px; font-weight: 700; color: var(--ink-3); margin: 4px 0 0 4px; }
-  .pc-statust { font-family: ${F.mono}; font-size: 10.5px; font-weight: 700; letter-spacing: .12em;
-    text-transform: uppercase; color: var(--ink-2); text-align: right; line-height: 1.7; }
-  .pc-star { color: var(--coral); font-size: 12px; }
-  .pc-bar { height: 16px; border: var(--bw) solid var(--ink); border-radius: 6px; background: var(--paper);
-    overflow: hidden; margin-top: 14px; }
-  .pc-barfill { width: 100%; height: 100%; background: var(--yellow); transform-origin: left center; }
-
-  .pc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; }
-  .pc-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .pc-tile { width: 34px; height: 34px; flex-shrink: 0; border: var(--bw) solid var(--ink); border-radius: 10px;
-    display: flex; align-items: center; justify-content: center; color: var(--ink); }
-  .pc-tile.yellow { background: var(--yellow); }
-  .pc-tile.coral { background: var(--coral); }
-  .pc-tile.green { background: var(--green); }
-  .pc-tile.pink { background: var(--pink); }
-  .pc-cellinfo { min-width: 0; }
-  .pc-clabel { font-family: ${F.mono}; font-size: 9px; font-weight: 700; letter-spacing: .16em;
-    text-transform: uppercase; color: var(--ink-3); }
-  .pc-cval { font-size: 14px; font-weight: 700; color: var(--ink); margin-top: 2px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
-
-  .pc-bio { font-size: 15px; font-weight: 500; line-height: 1.65; color: var(--ink-2);
-    margin: 0; word-break: break-word; text-wrap: pretty; padding-right: 38px; }
-
-  .pc-pills { display: flex; flex-wrap: wrap; gap: 9px; padding-right: 38px; }
-  .pc-chip { display: inline-block; padding: 8px 15px; border: var(--bw) solid var(--ink); border-radius: 999px;
-    font-family: ${F.mono}; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
-    background: var(--card); color: var(--ink); transition: none; }
-  .pc-chip.acc { background: var(--yellow); }
-
-  /* prompt card: question is the SETUP, answer is the PAYOFF — so the answer
-     carries the type weight. padding-right keeps both clear of the edit tile. */
-  .pc-prompt { padding: 14px 16px; transition: none; }
-  .pc-promptq { font-family: ${F.mono}; font-size: 11.5px; font-weight: 700; line-height: 1.55;
-    color: var(--ink-3); margin: 0 0 8px; word-break: break-word; padding-right: 38px; }
-  .pc-prompta { font-size: 17px; font-weight: 700; line-height: 1.5; color: var(--ink);
-    margin: 0; word-break: break-word; overflow-wrap: anywhere; text-wrap: pretty;
-    padding-right: 38px; }
-
-  .pc-ph { background: var(--card); border: var(--bw) solid var(--ink); border-radius: var(--r);
-    box-shadow: 4px 4px 0 var(--ink); padding: 6px; position: relative;
-    transition: transform .08s steps(2), box-shadow .08s steps(2); }
-  .pc-ph-in { border-radius: 9px; overflow: hidden; aspect-ratio: 1 / 1; background: var(--hair); }
-  .pc-ph-in.wide { aspect-ratio: 16 / 10; }
-  .pc-ph-in img { width: 100%; height: 100%; object-fit: cover; display: block;
-    opacity: 0; transition: opacity .3s ease-out; -webkit-user-drag: none; }
-  .pc-ph-in img.is-loaded { opacity: 1; }
-
-  /* ── THE one constant edit button: same 30px yellow corner tile everywhere ── */
-  .pr-slotbtn { position: absolute; top: 8px; right: 8px; z-index: 5;
-    display: flex; align-items: center; justify-content: center; cursor: pointer;
-    width: 30px; height: 30px; background: var(--yellow); border: 1.5px solid var(--ink);
-    border-radius: 9px; color: var(--ink); box-shadow: 2.5px 2.5px 0 var(--ink);
-    transition: transform .08s steps(2), box-shadow .08s steps(2);
-    -webkit-tap-highlight-color: transparent; }
-  .pr-slotbtn:active { transform: translate(2.5px, 2.5px); box-shadow: 0 0 0 var(--ink); }
-
-  /* hero variant — same tile, anchored to the hero's top-right */
-  .pr-herobtn { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 68px); right: 20px; z-index: 5;
-    display: flex; align-items: center; justify-content: center; cursor: pointer;
-    width: 30px; height: 30px; background: var(--yellow); border: 1.5px solid var(--ink);
-    border-radius: 9px; color: var(--ink); box-shadow: 2.5px 2.5px 0 var(--ink);
-    transition: transform .08s steps(2), box-shadow .08s steps(2);
-    -webkit-tap-highlight-color: transparent; }
-  .pr-herobtn:active { transform: translate(2.5px, 2.5px); box-shadow: 0 0 0 var(--ink); }
-
-  .pr-empty { width: 100%; height: 100%; border-radius: 9px; border: 2px dashed var(--ink-3);
-    background: var(--hair); display: flex; flex-direction: column; align-items: center;
-    justify-content: center; gap: 8px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-
-  /* ── upload progress: indeterminate sweep, pinned to the tile's inner edge ──
-     fetch() + FormData cannot report upload bytes, so this deliberately does NOT
-     show a fake percentage. It signals "in flight" and sweeps until resolve. */
-  .pr-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 5px; z-index: 7;
-    background: var(--hair); overflow: hidden; pointer-events: none;
-    border-radius: 0 0 8px 8px; }
-  .pr-bar::after { content: ''; position: absolute; inset: 0; width: 45%;
-    background: var(--yellow); border-top: 1px solid var(--ink);
-    border-bottom: 1px solid var(--ink);
-    animation: prSweep 1.05s cubic-bezier(.5,0,.5,1) infinite; }
-  @keyframes prSweep {
-    0%   { transform: translateX(-110%); }
-    100% { transform: translateX(240%); }
+    transition: background-color .45s ease, color .35s ease;
   }
 
-  /* per-photo action tray — the pencil opens Replace / Remove rather than
-     re-picking immediately, so removal is discoverable without putting a second
-     button permanently on every tile. */
-  .pr-tray { position: absolute; inset: 0; z-index: 6;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 7px; border-radius: 9px; background: rgba(25,25,25,.62); padding: 6px; }
-  .pr-traybtn { display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-    width: 100%; padding: 7px 4px; border-radius: 8px;
-    border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink);
-    box-shadow: 2px 2px 0 var(--ink);
-    font-family: ${F.mono}; font-size: 9px; font-weight: 700;
-    letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
-    -webkit-tap-highlight-color: transparent; }
-  .pr-traybtn:active { transform: translate(2px, 2px); box-shadow: 0 0 0 var(--ink); }
-  .pr-traybtn.danger { background: var(--red); color: #fff; }
+  .ob-root *,
+  .ob-root *::before,
+  .ob-root *::after {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
 
-  /* hero tray — anchored to the photo strip, never covered by the sheet */
-  .pr-herotray { position: absolute; z-index: 8; right: 20px;
-    top: calc(env(safe-area-inset-top, 0px) + 106px);
-    display: flex; flex-direction: column; gap: 9px; width: 148px; }
+  .ob-root::before {
+    content: '';
+    position: fixed;
+    z-index: -1;
+    pointer-events: none;
+    width: min(65vw, 550px);
+    aspect-ratio: 1;
+    right: -25%;
+    top: 2%;
+    border-radius: 50%;
+    background: var(--tint);
+    filter: blur(80px);
+    opacity: .8;
+    transition: background .45s ease;
+  }
 
-  /* Hero variants of the tray buttons. The tile trays sit on photos a fraction
-     of the screen wide and have to stay small; the hero tray floats over empty
-     background with room to spare, so these are scaled up to roughly a 44px
-     touch target — the same as the app's other primary controls — which is what
-     they were missing on the main photo. */
-  .pr-traybtn.big { padding: 12px 8px; gap: 7px; border-radius: 10px;
-    border-width: 2px; box-shadow: 3px 3px 0 var(--ink);
-    font-size: 11.5px; letter-spacing: .1em; }
-  .pr-traybtn.big:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink); }
-  .pr-traybtn.big svg { width: 15px; height: 15px; flex: none; }
+  .ob-root ::selection {
+    background: var(--accent);
+    color: ${T.ink};
+  }
 
-  /* Wrapper that gives the hero pencil + tray one element to hang the
-     tap-outside-dismiss ref on. display:contents keeps both children
-     absolutely positioned against .pc-heroWrap exactly as before — the wrapper
-     generates no box of its own and never appears in hit-testing. */
-  .pc-herocontrols { display: contents; }
+  .ob-root-name {
+    --page: #111211;
+    --main: #F1EDE2;
+    --sub: rgba(241,237,226,.76);
+    --surface: #20211F;
+    --line: rgba(241,237,226,.16);
+    --accent: #C96F68;
+    --tint: rgba(201,111,104,.15);
+  }
 
-  /* hero upload pill — a direct child of .pc-root, NOT of .pc-heroWrap.
-     The hero wrap sits at z-index 0 and the sheet at 30, so an indicator drawn
-     inside the hero is covered wherever the sheet reaches the bottom of the
-     screen — which is exactly where it sat, i.e. invisible at rest. This is
-     pinned to the photo strip at the top, which stays visible at every sheet
-     position. The transform property is deliberately NOT set here: framer-motion
-     owns the transform for the enter/exit slide, and a CSS translateX(-50%) would
-     be overwritten by it, knocking the pill off-centre on mount. Centering is
-     supplied via the x:"-50%" motion prop instead. */
-  .pr-uploadpill { position: absolute;
-    top: calc(env(safe-area-inset-top, 0px) + 118px); left: 50%;
-    z-index: 60; overflow: hidden;
-    display: inline-flex; align-items: center; gap: 9px;
-    padding: 9px 14px; background: var(--paper);
-    border: 2px solid var(--ink); border-radius: 999px;
-    box-shadow: 3px 3px 0 var(--ink);
-    font-family: ${F.mono}; font-size: 10px; font-weight: 700;
-    letter-spacing: .14em; text-transform: uppercase; color: var(--ink);
-    pointer-events: none; }
-  .pr-uploadpill::after { content: ''; position: absolute; left: 0; bottom: 0;
-    height: 4px; width: 45%; background: var(--yellow);
-    border-top: 1.5px solid var(--ink);
-    animation: prSweep 1.05s cubic-bezier(.5,0,.5,1) infinite; }
+  .ob-root-dob {
+    --page: #F1EDE2;
+    --main: #111211;
+    --sub: #5F5E57;
+    --surface: #F8F5EC;
+    --line: rgba(17,18,17,.13);
+    --accent: #E0A15E;
+    --tint: rgba(224,161,94,.22);
+  }
 
-  .pr-input, .pr-select, .pr-textarea { width: 100%; box-sizing: border-box;
-    padding: 13px 14px; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 11px;
-    font-family: ${F.body}; font-size: 14px; font-weight: 500; color: var(--ink); outline: none; }
-  .pr-textarea { resize: none; line-height: 1.55; }
-  .pr-input:focus, .pr-select:focus, .pr-textarea:focus { box-shadow: 3px 3px 0 var(--ink); }
+  .ob-root-photo {
+    --page: #E1E7D9;
+    --main: #111211;
+    --sub: #50574C;
+    --surface: #F1EDE2;
+    --line: rgba(17,18,17,.13);
+    --accent: #779477;
+    --tint: rgba(119,148,119,.22);
+  }
 
-  .pr-chipbtn { padding: 9px 15px; border: var(--bw) solid var(--ink); border-radius: 999px;
-    font-family: ${F.mono}; font-size: 11px; font-weight: 700; letter-spacing: .08em;
-    text-transform: uppercase; background: var(--card); color: var(--ink); cursor: pointer;
-    transition: none; -webkit-tap-highlight-color: transparent; }
-  .pr-chipbtn.on { background: var(--coral); color: #fff; }
-  .pr-chipbtn:disabled { opacity: .35; cursor: not-allowed; }
-  .pr-chipbtn:active:not(:disabled) { background: var(--ink); color: var(--paper); }
+  .ob-root-gender {
+    --page: #F0DCD3;
+    --main: #111211;
+    --sub: #5F514D;
+    --surface: #F8F5EC;
+    --line: rgba(17,18,17,.13);
+    --accent: #C96F68;
+    --tint: rgba(201,111,104,.18);
+  }
 
-  .pr-slam { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-    width: 100%; padding: 14px; background: var(--card); color: var(--ink);
-    border: var(--bw) solid var(--ink); border-radius: 12px; box-shadow: 4px 4px 0 var(--ink);
-    font-family: ${F.mono}; font-size: 12px; font-weight: 700; letter-spacing: .12em;
-    text-transform: uppercase; cursor: pointer;
-    transition: transform .08s steps(2), box-shadow .08s steps(2), background .08s steps(2);
-    -webkit-tap-highlight-color: transparent; }
-  .pr-slam:active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--ink); }
-  .pr-slam.yellow { background: var(--yellow); }
-  .pr-slam.danger { color: var(--red); }
-  /* Save stays visible but inert until something actually changes — that is the
-     feedback that tells you the drawer has nothing to commit. */
-  .pr-slam:disabled { opacity: .34; cursor: not-allowed; }
-  .pr-slam:disabled:active { transform: none; box-shadow: 4px 4px 0 var(--ink); }
+  .ob-root-interestedin {
+    --page: #F1EDE2;
+    --main: #111211;
+    --sub: #55554E;
+    --surface: #F8F5EC;
+    --line: rgba(17,18,17,.13);
+    --accent: #779477;
+    --tint: rgba(119,148,119,.18);
+  }
 
-  /* ── always-visible "addable" slot ──
-     A prompt / bio / interests slot keeps its place on the card whether or not it
-     has content, so clearing one never makes the layout jump. Filled slots use the
-     real card chrome; empty ones use this dashed frame around the shared .pr-empty,
-     so every empty slot in the sheet looks the same however it was reached. */
-  .pc-slot { background: var(--card); border: var(--bw) dashed var(--ink-3);
-    border-radius: var(--r); padding: 6px; position: relative; box-shadow: none; }
-  .pc-slot .pr-empty { min-height: 68px; }
+  .ob-root-year {
+    --page: #E0A15E;
+    --main: #111211;
+    --sub: #493728;
+    --surface: #F8F5EC;
+    --line: rgba(17,18,17,.15);
+    --accent: #C96F68;
+    --tint: rgba(241,237,226,.25);
+  }
 
-  .pc-slotlabel { font-family: ${F.mono}; font-size: 10px; font-weight: 700;
-    letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); }
+  .ob-root-intent {
+    --page: #111211;
+    --main: #F1EDE2;
+    --sub: rgba(241,237,226,.76);
+    --surface: #20211F;
+    --line: rgba(241,237,226,.16);
+    --accent: #779477;
+    --tint: rgba(119,148,119,.17);
+  }
 
-  /* ── drawer commit bar: sticky, always reachable above the keyboard ── */
-  .pr-drawerfoot { display: flex; gap: 10px; padding: 14px 20px;
-    padding-bottom: calc(14px + env(safe-area-inset-bottom));
-    border-top: var(--bw) solid var(--ink); background: var(--paper); flex-shrink: 0; }
-  .pr-drawerfoot .pr-slam { flex: 1; }
+  .ob-root-location {
+    --page: #E1E7D9;
+    --main: #111211;
+    --sub: #50574C;
+    --surface: #F8F5EC;
+    --line: rgba(17,18,17,.13);
+    --accent: #779477;
+    --tint: rgba(119,148,119,.2);
+  }
 
-  /* ── header duck: literal easing, no var() dependency ── */
-  [data-deck-header] { transition: transform .3s cubic-bezier(.2,0,0,1), opacity .3s ease;
-    will-change: transform, opacity; }
-  body[data-sheet-near-top="1"] [data-deck-header] {
-    transform: translateY(-140%); opacity: 0; pointer-events: none; }
+  .ob-head {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding:
+      max(12px, env(safe-area-inset-top))
+      clamp(17px, 4vw, 36px)
+      12px;
+    background: var(--page);
+    border-bottom: 1px solid var(--line);
+    transition: background-color .4s ease, border-color .4s ease;
+  }
+
+  .ob-headspacer {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+  }
+
+  .ob-hbtn {
+    width: 46px;
+    height: 46px;
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--main);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: 0 3px 0 rgba(17,18,17,.05);
+    transition: transform .16s ease, background .16s ease;
+  }
+
+  .ob-hbtn:active {
+    transform: scale(.93);
+    background: var(--tint);
+  }
+
+  .ob-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+  }
+
+  .ob-menu {
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    z-index: 100;
+    min-width: 180px;
+    padding: 6px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: 0 12px 32px rgba(17,18,17,.13);
+    overflow: hidden;
+    transform-origin: top right;
+  }
+
+  .ob-menuitem {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 46px;
+    padding: 12px;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    text-align: left;
+    border-radius: 11px;
+    font-family: var(--body);
+    font-size: 14px;
+    font-weight: 600;
+    color: ${T.red};
+    transition: background .15s ease;
+  }
+
+  .ob-menuitem:active {
+    background: rgba(168,79,74,.1);
+  }
+
+  .ob-fit {
+    width: 100%;
+    max-width: 1040px;
+    min-height: calc(100dvh - 70px);
+    flex: 1 0 auto;
+    margin: 0 auto;
+    padding:
+      clamp(30px, 6vh, 68px)
+      clamp(22px, 5vw, 58px)
+      0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: clamp(20px, 3vh, 32px);
+  }
+
+  .ob-screen {
+    --screen-accent: var(--accent);
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(200px, .78fr);
+    grid-template-areas:
+      "title art"
+      "hint art"
+      "field field";
+    column-gap: clamp(24px, 4vw, 48px);
+    row-gap: 19px;
+    align-items: center;
+    align-content: center;
+    isolation: isolate;
+  }
+
+  .ob-screen-photo {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "title"
+      "hint"
+      "field";
+  }
+
+  .ob-title {
+    grid-area: title;
+    width: fit-content;
+    max-width: 100%;
+    margin: 0;
+    color: var(--main);
+    font-family: var(--heavy);
+    font-size: clamp(56px, 7.2vw, 92px);
+    font-weight: 800;
+    line-height: .86;
+    letter-spacing: -.035em;
+    text-transform: uppercase;
+    overflow-wrap: anywhere;
+    text-wrap: balance;
+    transition: color .3s ease;
+  }
+
+  .ob-title::after {
+    content: '';
+    display: block;
+    width: clamp(55px, 8vw, 82px);
+    height: 7px;
+    margin-top: 17px;
+    border-radius: 999px;
+    background: var(--screen-accent);
+    transition: background-color .3s ease;
+  }
+
+  .ob-hint {
+    grid-area: hint;
+    align-self: start;
+    max-width: 480px;
+    margin: 0;
+    color: var(--sub);
+    font-family: var(--body);
+    font-size: 15px;
+    font-weight: 400;
+    line-height: 1.8;
+    transition: color .3s ease;
+  }
+
+  .ob-art {
+    grid-area: art;
+    position: relative;
+    align-self: center;
+    justify-self: stretch;
+    width: 100%;
+    min-width: 0;
+    aspect-ratio: 1.32 / 1;
+    max-height: 300px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--tint);
+    border: 1px solid var(--line);
+    border-radius: 34px 34px 12px 34px;
+    transition: background .35s ease, border-color .35s ease;
+  }
+
+  .ob-art::before {
+    content: '';
+    position: absolute;
+    width: 125px;
+    height: 125px;
+    right: -47px;
+    top: -54px;
+    border: 1px solid var(--screen-accent);
+    border-radius: 50%;
+    opacity: .4;
+    pointer-events: none;
+  }
+
+  .ob-art::after {
+    content: '';
+    position: absolute;
+    width: 70px;
+    height: 70px;
+    bottom: -35px;
+    left: -22px;
+    background: var(--screen-accent);
+    border-radius: 24px;
+    opacity: .13;
+    transform: rotate(-18deg);
+    pointer-events: none;
+  }
+
+  .ob-art svg {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+
+  .ob-art .art-float {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: ob-float 4s ease-in-out infinite;
+  }
+
+  .ob-art .art-float-late {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: ob-float 4.7s ease-in-out -1.7s infinite;
+  }
+
+  .ob-art .art-pulse {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: ob-pulse 3.5s ease-in-out infinite;
+  }
+
+  @keyframes ob-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+
+  @keyframes ob-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.035); }
+  }
+
+  .ob-field {
+    grid-area: field;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 17px;
+    width: 100%;
+    min-width: 0;
+    padding-top: 5px;
+  }
+
+  .ob-input {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    height: 74px;
+    padding: 0 22px;
+    background: var(--surface);
+    color: var(--main);
+    border: 1.5px solid var(--line);
+    border-radius: 18px;
+    font-family: var(--body);
+    font-size: 21px;
+    font-weight: 500;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+    transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+  }
+
+  .ob-input::placeholder {
+    color: var(--ink3);
+    font-weight: 400;
+  }
+
+  .ob-root-name .ob-input::placeholder,
+  .ob-root-intent .ob-input::placeholder {
+    color: rgba(241,237,226,.48);
+  }
+
+  .ob-input:focus,
+  .ob-input:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--screen-accent);
+  }
+
+  .ob-dob {
+    height: 70px;
+    padding: 0 6px;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: clamp(17px, 2.4vw, 23px);
+    font-weight: 600;
+  }
+
+  .ob-slash {
+    color: var(--sub);
+    font-family: var(--mono);
+    font-size: 20px;
+    font-weight: 400;
+    flex-shrink: 0;
+  }
+
+  .ob-age {
+    align-self: flex-start;
+    padding: 10px 15px;
+    color: ${T.red};
+    background: #F0DCD3;
+    border: 1px solid rgba(168,79,74,.2);
+    border-radius: 13px;
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .ob-age.ok {
+    color: #405B40;
+    background: #E3E9DC;
+    border-color: rgba(119,148,119,.35);
+  }
+
+  .ob-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 13px;
+  }
+
+  .ob-chip {
+    min-height: 66px;
+    padding: 17px 25px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 11px;
+    background: var(--surface);
+    color: var(--main);
+    border: 1.5px solid var(--line);
+    border-radius: 16px;
+    cursor: pointer;
+    font-family: var(--body);
+    font-size: 18px;
+    font-weight: 600;
+    box-shadow: 0 3px 0 rgba(17,18,17,.035);
+    transition: background .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
+  }
+
+  .ob-chip:nth-child(3n + 2) {
+    border-radius: 23px 15px 21px 15px;
+  }
+
+  .ob-chip.on {
+    background: var(--screen-accent);
+    color: ${T.ink};
+    border-color: transparent;
+    box-shadow: 0 3px 0 rgba(17,18,17,.09);
+  }
+
+  .ob-chip:active:not(:disabled) {
+    transform: scale(.96);
+  }
+
+  .ob-chip:disabled {
+    opacity: .4;
+    cursor: not-allowed;
+  }
+
+  .ob-photo {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: min(100%, 480px);
+    aspect-ratio: 4 / 5;
+    max-height: 555px;
+    min-height: 0;
+    padding: 0;
+    overflow: hidden;
+    cursor: pointer;
+    background:
+      radial-gradient(circle at 20% 20%, rgba(224,161,94,.2), transparent 34%),
+      radial-gradient(circle at 85% 80%, rgba(119,148,119,.23), transparent 35%),
+      var(--surface);
+    border: 1.5px dashed var(--line);
+    border-radius: 25px;
+    transition: border-color .16s ease, background .16s ease;
+  }
+
+  .ob-photo.filled {
+    border-style: solid;
+    cursor: default;
+    background: var(--surface);
+  }
+
+  .ob-photo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .ob-photoempty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 17px;
+    padding: 20px;
+    color: var(--sub);
+    font-family: var(--body);
+    font-size: 16px;
+    font-weight: 600;
+    text-align: center;
+  }
+
+  .ob-cam {
+    width: 82px;
+    height: 82px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--screen-accent);
+    border: 1px solid var(--line);
+    border-radius: 24px 24px 24px 9px;
+    color: ${T.ink};
+    transform: rotate(-4deg);
+    box-shadow: 0 5px 0 rgba(17,18,17,.06);
+  }
+
+  .ob-photohit {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    appearance: none;
+  }
+
+  .ob-photox {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 3;
+    width: 46px;
+    height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(248,245,236,.96);
+    color: ${T.ink};
+    border: 1px solid rgba(17,18,17,.12);
+    border-radius: 14px;
+    cursor: pointer;
+    transition: transform .15s ease, background .15s ease;
+  }
+
+  .ob-photox:active {
+    transform: scale(.92);
+    background: #F0DCD3;
+    color: ${T.red};
+  }
+
+  .ob-uploading {
+    position: absolute;
+    left: 50%;
+    bottom: 16px;
+    z-index: 3;
+    transform: translateX(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+    padding: 11px 16px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: 0 5px 16px rgba(17,18,17,.1);
+    font-family: var(--body);
+    font-size: 13px;
+    font-weight: 600;
+    color: ${T.ink};
+  }
+
+  .ob-spin {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid var(--screen-accent);
+    border-top-color: transparent;
+    animation: obspin .7s linear infinite;
+  }
+
+  @keyframes obspin {
+    to { transform: rotate(360deg); }
+  }
+
+  .ob-location {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    max-width: 560px;
+  }
+
+  .ob-location-copy {
+    margin: 0;
+    color: var(--sub);
+    font-family: var(--body);
+    font-size: 15px;
+    line-height: 1.8;
+  }
+
+  .ob-location-ok {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 0;
+    color: var(--main);
+    font-family: var(--body);
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.7;
+  }
+
+  .ob-location-ok svg {
+    flex-shrink: 0;
+    margin-top: 4px;
+    color: ${T.green};
+  }
+
+  .ob-loc-btn {
+    width: 100%;
+    min-height: 59px;
+    padding: 14px 20px;
+    background: var(--screen-accent);
+    color: ${T.ink};
+    border: 1px solid var(--line);
+    border-radius: 17px;
+    cursor: pointer;
+    font-family: var(--body);
+    font-size: 15px;
+    font-weight: 700;
+    box-shadow: 0 3px 0 rgba(17,18,17,.07);
+    transition: transform .15s ease, filter .15s ease;
+  }
+
+  .ob-loc-btn:active:not(:disabled) {
+    transform: translateY(2px);
+  }
+
+  .ob-loc-btn:disabled,
+  .ob-loc-alt:disabled {
+    opacity: .55;
+    cursor: default;
+  }
+
+  .ob-loc-alt {
+    width: 100%;
+    min-height: 56px;
+    padding: 13px 20px;
+    background: var(--surface);
+    color: var(--main);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    cursor: pointer;
+    font-family: var(--body);
+    font-size: 14px;
+    font-weight: 600;
+    transition: background .15s ease, border-color .15s ease;
+  }
+
+  .ob-loc-alt:active {
+    background: var(--tint);
+  }
+
+  .ob-loc-note {
+    margin: 0;
+    color: var(--sub);
+    font-family: var(--body);
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  .ob-actions {
+    position: static;
+    inset: auto;
+    width: 100%;
+    margin: 10px 0 0;
+    padding: 0 0 max(24px, env(safe-area-inset-bottom));
+    background: transparent;
+    transition: background .35s ease;
+  }
+
+  .ob-cta {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 11px;
+    width: 100%;
+    min-height: 68px;
+    padding: 16px 22px;
+    background: var(--accent);
+    color: ${T.ink};
+    border: 1px solid rgba(17,18,17,.13);
+    border-radius: 18px 18px 7px 18px;
+    cursor: pointer;
+    font-family: var(--body);
+    font-size: 17px;
+    font-weight: 700;
+    box-shadow: 0 4px 0 rgba(17,18,17,.09);
+    transition: transform .16s ease, box-shadow .16s ease, opacity .16s ease, background .3s ease;
+  }
+
+  .ob-cta:active:not(:disabled) {
+    transform: translateY(3px);
+    box-shadow: 0 1px 0 rgba(17,18,17,.09);
+  }
+
+  .ob-cta:disabled {
+    opacity: .42;
+    cursor: default;
+  }
+
+  .ob-cta svg {
+    transition: transform .18s ease;
+  }
+
+  .ob-foot {
+    margin: 12px 0 0;
+    color: var(--sub);
+    text-align: center;
+    font-family: var(--body);
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.65;
+    opacity: .9;
+  }
+
+  .ob-banner {
+    padding: 14px 16px;
+    background: #F0DCD3;
+    border: 1px solid rgba(168,79,74,.2);
+    border-radius: 14px;
+  }
+
+  .ob-banner p {
+    margin: 0;
+    color: ${T.ink};
+    font-family: var(--body);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.6;
+  }
+
+  .ob-root input,
+  .ob-root textarea,
+  .ob-root select {
+    -webkit-user-select: auto;
+    user-select: auto;
+  }
+
+  .ob-root img {
+    pointer-events: none;
+  }
+
+  .ob-chip:focus-visible,
+  .ob-cta:focus-visible,
+  .ob-photo:focus-visible,
+  .ob-photohit:focus-visible,
+  .ob-photox:focus-visible,
+  .ob-hbtn:focus-visible,
+  .ob-menuitem:focus-visible,
+  .ob-loc-btn:focus-visible,
+  .ob-loc-alt:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
 
   @media (hover: hover) and (pointer: fine) {
-    .pr-slotbtn:hover, .pr-herobtn:hover { filter: brightness(1.05); }
-    .pc-prompt:hover { background: #FFFDF6; }
+    .ob-hbtn:hover {
+      background: var(--tint);
+    }
+
+    .ob-menuitem:hover {
+      background: rgba(168,79,74,.08);
+    }
+
+    .ob-chip:hover:not(:disabled):not(.on) {
+      background: var(--tint);
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+
+    .ob-chip.on:hover {
+      filter: brightness(.97);
+    }
+
+    .ob-cta:hover:not(:disabled) {
+      filter: brightness(.96);
+    }
+
+    .ob-cta:hover:not(:disabled) svg {
+      transform: translateX(4px);
+    }
+
+    .ob-photo:hover:not(.filled) {
+      border-color: var(--accent);
+    }
+
+    .ob-loc-btn:hover:not(:disabled) {
+      filter: brightness(.96);
+    }
+
+    .ob-loc-alt:hover:not(:disabled) {
+      background: var(--tint);
+      border-color: var(--accent);
+    }
   }
 
-  .pc-sheet:focus-visible, .pr-slotbtn:focus-visible, .pr-herobtn:focus-visible,
-  .pr-prompt:focus-visible { outline: 3px solid var(--yellow); outline-offset: 2px; }
+  @media (min-width: 681px) {
+    .ob-fit {
+      justify-content: center;
+    }
+  }
+
+  @media (min-width: 1050px) {
+    .ob-fit {
+      padding-top: 42px;
+      padding-bottom: 24px;
+    }
+
+    .ob-screen {
+      column-gap: 54px;
+      row-gap: 20px;
+    }
+
+    .ob-art {
+      max-height: 320px;
+    }
+  }
+
+  @media (max-width: 680px) {
+    .ob-head {
+      padding-left: 17px;
+      padding-right: 17px;
+    }
+
+    .ob-fit {
+      min-height: calc(100dvh - 70px);
+      flex: 0 0 auto;
+      padding: 32px 21px max(25px, env(safe-area-inset-bottom));
+      gap: 18px;
+      justify-content: flex-start;
+    }
+
+    .ob-screen {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas:
+        "title"
+        "hint"
+        "art"
+        "field";
+      row-gap: 14px;
+      align-content: start;
+    }
+
+    .ob-screen-photo {
+      grid-template-areas:
+        "title"
+        "hint"
+        "field";
+    }
+
+    .ob-title {
+      font-size: clamp(52px, 12.8vw, 76px);
+      line-height: .88;
+    }
+
+    .ob-title::after {
+      width: 54px;
+      height: 6px;
+      margin-top: 13px;
+    }
+
+    .ob-hint {
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .ob-art {
+      justify-self: end;
+      width: min(58%, 270px);
+      min-width: 175px;
+      max-height: 148px;
+      aspect-ratio: 1.65 / 1;
+      border-radius: 26px 26px 8px 26px;
+    }
+
+    .ob-art::before {
+      width: 95px;
+      height: 95px;
+      right: -35px;
+      top: -42px;
+    }
+
+    .ob-field {
+      gap: 14px;
+      padding-top: 3px;
+    }
+
+    .ob-input {
+      height: 70px;
+      padding: 0 18px;
+      font-size: 20px;
+      border-radius: 15px;
+    }
+
+    .ob-dob {
+      height: 65px;
+      padding: 0 4px;
+      font-size: clamp(16px, 4.8vw, 22px);
+    }
+
+    .ob-chips {
+      gap: 10px;
+    }
+
+    .ob-chip {
+      min-height: 60px;
+      padding: 15px 19px;
+      border-radius: 14px;
+      font-size: 16px;
+    }
+
+    .ob-photo {
+      width: 100%;
+      aspect-ratio: 4 / 5;
+      max-height: 46.5dvh;
+      min-height: min(285px, 46.5dvh);
+      border-radius: 21px;
+    }
+
+    .ob-photoempty {
+      font-size: 15px;
+    }
+
+    .ob-cam {
+      width: 74px;
+      height: 74px;
+    }
+
+    .ob-actions {
+      margin: 8px 0 0;
+      padding: 0 0 max(25px, env(safe-area-inset-bottom));
+    }
+
+    .ob-cta {
+      min-height: 64px;
+      border-radius: 16px 16px 6px 16px;
+      font-size: 16px;
+    }
+
+    .ob-foot {
+      font-size: 11px;
+    }
+
+    .ob-root::before {
+      width: 85vw;
+      right: -35%;
+      top: 10%;
+      filter: blur(65px);
+    }
+  }
+
+  @media (max-width: 390px) {
+    .ob-fit {
+      padding-left: 17px;
+      padding-right: 17px;
+    }
+
+    .ob-title {
+      font-size: clamp(48px, 12.3vw, 58px);
+    }
+
+    .ob-art {
+      min-width: 160px;
+      max-height: 132px;
+    }
+
+    .ob-chip {
+      padding-left: 13px;
+      padding-right: 13px;
+      font-size: 14px;
+    }
+
+  }
+
+  @media (max-height: 700px) and (max-width: 680px) {
+    .ob-fit {
+      padding-top: 21px;
+    }
+
+    .ob-screen {
+      row-gap: 11px;
+    }
+
+    .ob-title {
+      font-size: clamp(43px, 10vw, 58px);
+    }
+
+    .ob-title::after {
+      margin-top: 9px;
+      height: 5px;
+    }
+
+    .ob-art {
+      max-height: 105px;
+      min-width: 140px;
+    }
+
+    .ob-photo {
+      min-height: 220px;
+      max-height: 46.5dvh;
+    }
+
+    .ob-input {
+      height: 70px;
+    }
+
+    .ob-chip {
+      min-height: 60px;
+    }
+
+    .ob-actions {
+      position: static;
+      padding-top: 0;
+    }
+  }
 
   @media (prefers-reduced-motion: reduce) {
-    .pc-hero, .pc-ph-in img, .pr-slotbtn, .pr-herobtn { transition: none; }
-    .pr-bar::after { animation: none; width: 100%; }
-    .pr-uploadpill::after { animation: none; width: 100%; }
-    [data-deck-header] { transition: none; }
+    .ob-root *,
+    .ob-root *::before,
+    .ob-root *::after {
+      transition: none !important;
+      animation: none !important;
+    }
   }
 `;
 
-/* ───────────────────────── small pieces ───────────────────────── */
+const StepArtwork = ({ step }) => {
+  const { ink, paper, card, yellow, orange, green, concrete } = T;
 
-const AnimatedNumber = ({ mv }) => {
-  const [text, setText] = useState('0');
-  useMotionValueEvent(mv, 'change', (v) => setText(String(Math.round(v))));
-  return <>{text}</>;
-};
+  switch (step) {
+    case 'name':
+      return (
+        <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
+          <g className="art-float">
+            <rect x="61" y="31" width="188" height="132" rx="22" fill={paper} transform="rotate(-5 155 97)" />
+            <rect x="85" y="57" width="102" height="11" rx="5.5" fill={ink} />
+            <rect x="85" y="79" width="135" height="7" rx="3.5" fill={concrete} />
+            <rect x="85" y="94" width="111" height="7" rx="3.5" fill={concrete} opacity=".7" />
+            <rect x="85" y="117" width="58" height="24" rx="8" fill={orange} />
+            <path d="M160 128h46" stroke={yellow} strokeWidth="5" strokeLinecap="round" />
+          </g>
+          <g className="art-float-late">
+            <circle cx="238" cy="39" r="21" fill={yellow} />
+            <path d="M230 39l6 6 11-13" fill="none" stroke={ink} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+          </g>
+          <circle cx="52" cy="157" r="7" fill={orange} />
+          <circle cx="266" cy="151" r="5" fill={green} />
+        </svg>
+      );
 
-const FieldCell = ({ icon: Icon, color, label, value }) => (
-  <div className="pc-cell">
-    <span className={`pc-tile ${color}`}><Icon size={16} strokeWidth={2.4} /></span>
-    <span className="pc-cellinfo">
-      <span className="pc-clabel" style={{ display: 'block' }}>{label}</span>
-      <span className="pc-cval" style={{ display: 'block' }}>{value}</span>
-    </span>
-  </div>
-);
+    case 'dob':
+      return (
+        <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
+          <g className="art-float">
+            <rect x="64" y="26" width="190" height="144" rx="20" fill={card} stroke={ink} strokeWidth="2" transform="rotate(4 159 98)" />
+            <path d="M64 48a22 22 0 0 1 22-22h146a22 22 0 0 1 22 22v20H64z" fill={yellow} />
+            <path d="M106 19v22M212 19v22" stroke={ink} strokeWidth="5" strokeLinecap="round" />
+            <g fill={concrete} opacity=".7">
+              <rect x="87" y="82" width="25" height="21" rx="6" />
+              <rect x="124" y="82" width="25" height="21" rx="6" />
+              <rect x="161" y="82" width="25" height="21" rx="6" />
+              <rect x="198" y="82" width="25" height="21" rx="6" />
+              <rect x="87" y="115" width="25" height="21" rx="6" />
+              <rect x="124" y="115" width="25" height="21" rx="6" />
+              <rect x="198" y="115" width="25" height="21" rx="6" />
+            </g>
+            <rect x="161" y="115" width="25" height="21" rx="6" fill={orange} />
+          </g>
+          <circle cx="258" cy="43" r="18" fill={green} />
+          <path d="M249 43l6 6 11-13" fill="none" stroke={ink} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M46 141l8-14 8 14z" fill={orange} />
+        </svg>
+      );
 
-/* plain head — NO edit button here; the button lives on the component itself */
-const SectionHead = ({ mark = 'yellow', count, children }) => (
-  <div className="pc-shead">
-    <span className={`pc-mark ${mark}`} aria-hidden="true" />
-    <span className="pc-stitle">{children}</span>
-    {count > 0 && <span className="pc-scount">/ {count}</span>}
-  </div>
-);
+    case 'photo':
+      return null;
 
-/**
- * One of the three prompt slots.
- *
- * Always mounted. A slot with a question shows the card (question small and
- * muted, answer large and bold); a slot without one shows the dashed add-target.
- * The answer line only appears when there is an answer, so a half-finished prompt
- * doesn't render an empty gap where the reply should be.
- */
-const PromptSlot = ({ slot, prompt, onEdit }) => {
-  if (!prompt?.question) {
-    return <EmptySlot onClick={onEdit} label="Add a question" icon={Pencil} />;
+    case 'gender':
+      return (
+        <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
+          <g className="art-pulse">
+            <circle cx="160" cy="100" r="67" fill="none" stroke={ink} strokeWidth="1.5" opacity=".25" />
+            <circle cx="160" cy="100" r="49" fill="none" stroke={orange} strokeWidth="2" />
+            <circle cx="160" cy="100" r="31" fill={yellow} />
+            <circle cx="160" cy="100" r="12" fill={ink} />
+          </g>
+          <g className="art-float">
+            <circle cx="83" cy="61" r="21" fill={green} />
+            <circle cx="241" cy="62" r="16" fill={orange} />
+            <circle cx="83" cy="144" r="14" fill={yellow} />
+            <circle cx="244" cy="145" r="23" fill={green} />
+          </g>
+          <path d="M100 70l28 17M224 73l-27 16M103 136l31-22M221 136l-26-22" stroke={ink} strokeWidth="1.5" strokeLinecap="round" opacity=".45" />
+        </svg>
+      );
+
+    case 'interestedIn':
+      return (
+        <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
+          <g className="art-float-late" transform="rotate(-8 94 104)">
+            <rect x="41" y="40" width="93" height="126" rx="20" fill={yellow} />
+            <circle cx="87" cy="81" r="19" fill={ink} />
+            <path d="M58 135q29-54 58 0v10H58z" fill={paper} />
+          </g>
+          <g className="art-float" transform="rotate(5 160 101)">
+            <rect x="113" y="27" width="96" height="145" rx="21" fill={card} stroke={ink} strokeWidth="1.5" />
+            <circle cx="161" cy="76" r="20" fill={orange} />
+            <path d="M128 128q33-46 66 0v17h-66z" fill={green} />
+            <rect x="139" y="151" width="44" height="5" rx="2.5" fill={concrete} />
+          </g>
+          <g className="art-float-late" transform="rotate(10 242 112)">
+            <rect x="211" y="53" width="67" height="111" rx="17" fill={green} />
+            <circle cx="245" cy="86" r="13" fill={paper} />
+            <path d="M220 131q25-37 50 0v8h-50z" fill={yellow} />
+          </g>
+          <circle cx="46" cy="27" r="6" fill={orange} />
+          <circle cx="271" cy="28" r="7" fill={yellow} />
+        </svg>
+      );
+
+    case 'year':
+      return (
+        <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
+          <g className="art-float">
+            <path d="M53 139h69v28H53z" fill={green} stroke={ink} strokeWidth="1.5" />
+            <path d="M68 109h69v30H68z" fill={card} stroke={ink} strokeWidth="1.5" />
+            <path d="M84 80h69v29H84z" fill={orange} stroke={ink} strokeWidth="1.5" />
+            <path d="M99 53h69v27H99z" fill={ink} stroke={ink} strokeWidth="1.5" />
+            <path d="M109 62h47" stroke={paper} strokeWidth="3" strokeLinecap="round" />
+            <path d="M78 119h48M63 149h49" stroke={ink} strokeWidth="2" strokeLinecap="round" opacity=".5" />
+          </g>
+          <g className="art-float-late">
+            <path d="M188 65l52-23 52 23-52 24z" fill={card} stroke={ink} strokeWidth="2" strokeLinejoin="round" />
+            <path d="M208 76v38q32 20 64 0V76" fill={yellow} stroke={ink} strokeWidth="2" strokeLinejoin="round" />
+            <path d="M292 66v43" stroke={ink} strokeWidth="2" strokeLinecap="round" />
+            <circle cx="292" cy="115" r="5" fill={orange} stroke={ink} strokeWidth="1.5" />
+          </g>
+          <circle cx="197" cy="141" r="8" fill={orange} />
+        </svg>
+      );
+
+    case 'intent':
+      return (
+        <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
+          <g className="art-pulse">
+            <circle cx="151" cy="101" r="69" fill="none" stroke={paper} strokeWidth="1.5" opacity=".27" />
+            <circle cx="151" cy="101" r="52" fill="none" stroke={green} strokeWidth="3" />
+            <circle cx="151" cy="101" r="34" fill="none" stroke={yellow} strokeWidth="3" />
+            <circle cx="151" cy="101" r="14" fill={orange} />
+          </g>
+          <g className="art-float">
+            <path d="M177 75l61-34-31 63-9-21z" fill={yellow} stroke={paper} strokeWidth="2" strokeLinejoin="round" />
+            <path d="M207 83l-31 30" stroke={paper} strokeWidth="4" strokeLinecap="round" />
+          </g>
+          <circle cx="67" cy="50" r="8" fill={orange} />
+          <circle cx="254" cy="145" r="13" fill={green} />
+          <path d="M50 153h46" stroke={paper} strokeWidth="3" strokeLinecap="round" opacity=".55" />
+        </svg>
+      );
+
+    case 'location':
+      return (
+        <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
+          <g className="art-float">
+            <path d="M44 52l62-17 51 17 60-17 58 17v102l-58 17-60-17-51 17-62-17z" fill={card} stroke={ink} strokeWidth="1.8" strokeLinejoin="round" />
+            <path d="M106 35v119M157 52v102M217 35v119M44 86h231M44 121h231" stroke={green} strokeWidth="1.4" opacity=".7" />
+            <path d="M45 87h61l51 34h60l58-35" fill="none" stroke={orange} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+          </g>
+          <g className="art-pulse">
+            <path d="M158 45c-19 0-34 15-34 34 0 26 34 60 34 60s34-34 34-60c0-19-15-34-34-34z" fill={orange} stroke={ink} strokeWidth="2" />
+            <circle cx="158" cy="79" r="12" fill={card} stroke={ink} strokeWidth="2" />
+          </g>
+          <circle cx="248" cy="31" r="9" fill={yellow} />
+          <circle cx="75" cy="169" r="6" fill={green} />
+        </svg>
+      );
+
+    default:
+      return null;
   }
-  return (
-    <div className="pc-card pc-prompt">
-      <button className="pr-slotbtn" aria-label={`Edit question ${slot + 1}`} onClick={onEdit}>
-        <Pencil size={13} strokeWidth={2.8} />
-      </button>
-      <p className="pc-promptq">{prompt.question}</p>
-      {prompt.answer && <p className="pc-prompta">{prompt.answer}</p>}
-    </div>
-  );
 };
 
-/**
- * Close `onDismiss` when a tap lands outside `ref`.
- *
- * The Replace/Remove trays used to only close by picking one of their two
- * buttons, so a mis-tap left a dark scrim sitting on the photo with no obvious
- * way out. This dismisses on the next tap anywhere else instead.
- *
- * Uses pointerdown rather than click so the tray is gone before the tap's own
- * click target is handled — otherwise a tap on another tile's pencil would
- * dismiss this tray and then immediately open that one. `pointerdown` is also
- * what fires on iOS before the click synthesised after touchend, so the listener
- * is attached from the commit of the opening tap onward and never sees the tap
- * that opened the tray.
- */
-const useDismissOnOutsideTap = (ref, open, onDismiss) => {
-  useEffect(() => {
-    if (!open) return undefined;
-    const onPointerDown = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) onDismiss();
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [ref, open, onDismiss]);
-};
+const useScreenVariants = (reduceMotion) => ({
+  screen: {
+    enter: (direction) => reduceMotion
+      ? { opacity: 1, x: 0, scale: 1 }
+      : { opacity: 0, x: direction * 65, scale: .97, filter: 'blur(3px)' },
+    center: {
+      opacity: 1,
+      x: 0,
+      scale: 1,
+      filter: 'blur(0px)',
+      transition: {
+        type: 'spring',
+        stiffness: 300,
+        damping: 29,
+        staggerChildren: .055,
+        delayChildren: .025,
+      },
+    },
+    exit: (direction) => reduceMotion
+      ? { opacity: 0, transition: { duration: .12 } }
+      : {
+          opacity: 0,
+          x: direction * -48,
+          scale: .985,
+          filter: 'blur(2px)',
+          transition: { duration: .18, ease: 'easeIn' },
+        },
+  },
+  item: {
+    enter: () => reduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 12 },
+    center: {
+      opacity: 1,
+      y: 0,
+      transition: { type: 'spring', stiffness: 400, damping: 30 },
+    },
+  },
+});
 
-/* Three states on the corner tile:
-     no photo   → pencil opens the picker (add)
-     photo      → pencil opens the Replace/Remove tray
-     uploading  → ✕ cancels
+const MAX_DIM = 1280;
+const JPEG_QUALITY = 0.85;
+const SKIP_BELOW = 400 * 1024;
 
-   Remove is only offered when the tile actually holds a photo. */
-const PhotoTile = ({ src, wide = false, onEdit, onRemove, onCancel, emptyLabel, loading = false }) => {
-  const [tray, setTray] = useState(false);
-  const tileRef = useRef(null);
-  const closeTray = useCallback(() => setTray(false), []);
-  useDismissOnOutsideTap(tileRef, tray && !loading, closeTray);
-  return (
-    <div className="pc-ph" ref={tileRef}>
-      <button
-        className="pr-slotbtn"
-        onClick={loading ? onCancel : (src ? () => setTray((t) => !t) : onEdit)}
-        aria-label={loading ? 'Cancel upload' : (src ? 'Photo options' : (emptyLabel || 'Add photo'))}
-        aria-expanded={src ? tray : undefined}
-      >
-        {loading ? <X size={13} strokeWidth={3} /> : <Pencil size={13} strokeWidth={2.8} />}
-      </button>
-      <div className={`pc-ph-in${wide ? ' wide' : ''}`}>
-        {src ? (
-          <img
-            src={src}
-            alt=""
-            draggable={false}
-            loading="lazy"
-            decoding="async"
-            onLoad={(e) => e.currentTarget.classList.add('is-loaded')}
-            onError={(e) => {
-              const img = e.currentTarget;
-              if (img.dataset.err) { img.classList.add('is-loaded'); return; }
-              img.dataset.err = '1';
-              img.src = FALLBACK_IMG;
-            }}
-          />
-        ) : (
-          <button className="pr-empty" onClick={onEdit} disabled={loading}>
-            <Camera size={22} strokeWidth={2.2} color={C.ink3} />
-            <span style={{ fontFamily: F.mono, fontSize: 8.5, fontWeight: 700, letterSpacing: '.16em', textTransform: 'uppercase', color: C.ink3 }}>
-              {emptyLabel || 'Add photo'}
-            </span>
-          </button>
-        )}
-      </div>
-      {loading && <span className="pr-bar" role="status" aria-label="Uploading photo" />}
-      {tray && !loading && (
-        <div className="pr-tray">
-          <button className="pr-traybtn" onClick={() => { setTray(false); onEdit(); }}>
-            <Pencil size={11} strokeWidth={2.8} /> Replace
-          </button>
-          <button className="pr-traybtn danger" onClick={() => { setTray(false); onRemove(); }}>
-            <X size={11} strokeWidth={3} /> Remove
-          </button>
-        </div>
-      )}
-    </div>
-  );
-};
-
-/* ───────────────────────── main ───────────────────────── */
-
-/* Mirrors server/config/appData.js APP_CONSTANTS. The server enforces this
-   regardless — it only stops the UI offering a pick that would be discarded on
-   save.
-
-   ⚠️ There is deliberately NO MAX_INTENTS here any more; all three may be held.
-   Kept as a single constant rather than inline so there is one number to change
-   if the interest limit ever moves. */
-const MAX_INTERESTS = 10;
-
-const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocused }) => {  const config = useAppConfig();
-  const queryClient = useQueryClient();
-  const rootRef = useRef(null);
-  const sheetRef = useRef(null);
-  const idRef = useRef(null);
-  const heroImgRef = useRef(null);
-  const fileInputRef = useRef(null);
-
-  const [userData, setUserData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState(null);
-  const [heroLoaded, setHeroLoaded] = useState(false);
-
-  const [drawerConfig, setDrawerConfig] = useState(null); // { type, slot }
-  // Pending edits for the open drawer, seeded from userData on open and written
-  // to the server ONLY by the drawer's Save button. Null means no drawer is open.
-  const [draft, setDraft] = useState(null);
-
-  // `photoSlot` is the PICKER target, cleared the moment the picker hands over a
-  // file. `uploadSlot` is the slot currently in flight (null when idle) — these
-  // have to be separate, otherwise clearing the target on completion also wipes
-  // the "which tile is busy" signal while the request is still running.
-  const [photoSlot, setPhotoSlot] = useState(null);
-  const [uploadSlot, setUploadSlot] = useState(null);
-  // Whether a tile's Replace/Remove tray is open. Separate from uploadSlot so
-  // picking a file can dismiss the tray without needing to know which opened it.
-  const [heroTray, setHeroTray] = useState(false);
-  // Dismiss target for the hero tray: spans the pencil and the tray itself so
-  // their own buttons don't count as outside taps.
-  const heroControlsRef = useRef(null);
-  const closeHeroTray = useCallback(() => setHeroTray(false), []);
-  useDismissOnOutsideTap(
-    heroControlsRef,
-    heroTray && uploadSlot !== 0 && Boolean(userData.photos?.[0]),
-    closeHeroTray
-  );
-  // Lets the tile's pencil cancel an in-flight upload instead of forcing the
-  // user to wait out a slow connection.
-  const abortRef = useRef(null);
-
-  // Scrollable body of the edit drawer. Ref'd so picking a prompt from the bank
-  // at the bottom can jump back up to the question/answer it just changed.
-  const drawerBodyRef = useRef(null);
-  const scrollDrawerToTop = () => {
-    const el = drawerBodyRef.current;
-    if (!el) return;
-    // 'smooth' so the jump reads as a return rather than a jump cut. Cancels any
-    // scroll still in flight from the tap's own momentum, so a fast re-tap on the
-    // bank doesn't fight the animation.
-    el.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const { user: authUser, refreshUser } = useAuth();
-  const [showLearnMore, setShowLearnMore] = useState(false);
-
-  // Always-fresh mirror of userData. Async handlers (photo upload, prompt
-  // commit) read this instead of the render closure, so two edits in quick
-  // succession build on the latest state rather than the state captured when
-  // the handler was created — which silently dropped the first edit.
-  const userDataRef = useRef(null);
-  userDataRef.current = userData;
-
-  // Monotonic save counter. Each PUT captures the sequence number it started
-  // with; a response is discarded if a newer save has since begun. Without
-  // this, two rapid edits can resolve out of order and the slower (older)
-  // response overwrites the newer one — the server has the right data, the
-  // client shows the old value, and only a refresh fixes it.
-  const saveSeq = useRef(0);
-  const contentFreezeMessage = 'Edits are paused while your account is under review.';
-  // With an action the toast runs 7s instead of 4s, and the user gets a way to
-  // actually reach support instead of a dead end.
-  const contentFreezeAction = {
-    label: 'Contact support',
-    onClick: () => { window.location.href = 'mailto:support@matchalize.com'; },
-  };
-
-  const contentFrozen = userData?.contentFrozen ?? authUser?.contentFrozen ?? false;
-  const shadowbanScore = userData?.shadowbanScore ?? authUser?.shadowbanScore ?? 0;
-
-  /* True when the draft differs from what's on the server. Drives both the Save
-     button's enabled state and the discard-on-close guard.
-     Reads `userData` directly rather than the ref so it recomputes if a save
-     lands from elsewhere while the drawer is open — otherwise Save could stay
-     disabled, or stay enabled after matching the server. */
-  const isDrawerDirty = useMemo(() => {
-    if (!drawerConfig || !draft || !userData) return false;
-    const u = userData;
-    const type = drawerConfig.type;
-    if (type === 'interests' || type === 'intent') {
-      const saved = [...(u[type] || [])].sort();
-      return JSON.stringify([...draft.list].sort()) !== JSON.stringify(saved);
+const compressImage = (file) =>
+  new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) {
+      reject(new Error('not an image'));
+      return;
     }
-    if (type === 'prompt') {
-      const p = u.prompts?.[drawerConfig.slot] || {};
-      return draft.question !== (p.question || '') || draft.answer !== (p.answer || '');
+
+    if (file.size < SKIP_BELOW) {
+      resolve(file);
+      return;
     }
-    // Text fields: compare against the stored value, treating '' and undefined
-    // as the same thing so clearing an already-empty box is not "dirty".
-    if ('gapYear' in draft && !!draft.gapYear !== !!u.gapYear) return true;
-    return ['name', 'year', 'gender', 'pronouns', 'bio']
-      .filter((k) => k in draft)
-      .some((k) => draft[k] !== (u[k] || ''));
-  }, [drawerConfig, draft, userData]);
 
-  /* Snapshot the current values for whichever drawer is opening. Every drawer reads
-     from `draft` after this, so nothing is committed until Save is pressed. */
-  const seedDraft = (cfg) => {
-    const u = userDataRef.current;
-    switch (cfg.type) {
-      case 'identity':
-        return { name: u.name || '', year: u.year || '' };
-      case 'vitals':
-        return { gender: u.gender || '', pronouns: u.pronouns || '', gapYear: !!u.gapYear };
-      case 'bio':
-        return { bio: u.bio || '' };
-      case 'prompt': {
-        const p = u.prompts?.[cfg.slot] || {};
-        return { question: p.question || '', answer: p.answer || '' };
-      }
-      case 'interests':
-        return { list: [...(u.interests || [])] };
-      case 'intent':
-        return { list: [...(u.intent || [])] };
-      default:
-        return {};
-    }
-  };
+    const src = URL.createObjectURL(file);
+    const img = new Image();
 
-  const openEditDrawer = (cfg) => {
-    if (contentFrozen) { toast.error(contentFreezeMessage, contentFreezeAction); return; }
-    setDraft(seedDraft(cfg));
-    setDrawerConfig(cfg);
-  };
+    img.onload = () => {
+      URL.revokeObjectURL(src);
 
-  /* Close, but never silently throw away an edit. The drawer is also dismissible
-     by tapping the backdrop and by the ✕, and those three paths all route here so
-     the guard can't be bypassed by using a different gesture. */
-  const requestCloseDrawer = () => {
-    if (isDrawerDirty && !window.confirm('Discard your unsaved changes?')) return;
-    setDrawerConfig(null);
-    setDraft(null);
-  };
+      try {
+        const scale = Math.min(1, MAX_DIM / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
 
-  const openPhotoSlot = (slot) => {
-    if (contentFrozen) { toast.error(contentFreezeMessage, contentFreezeAction); return; }
-    // One upload at a time: abortRef holds a single controller, so a second
-    // concurrent pick would orphan the first abort path.
-    if (uploadSlot !== null) { toast.error('Wait for the current upload to finish.'); return; }
-    setHeroTray(false);
-    setPhotoSlot(slot);
-    fileInputRef.current?.click();
-  };
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
 
-  const cancelUpload = () => {
-    if (!abortRef.current) return;
-    triggerHaptic('light');
-    abortRef.current.abort();
-  };
-
-  /**
-   * Remove the photo at `slot`.
-   *
-   * `photos` is a DENSE array — the server runs `filter(Boolean)` before saving
-   * (routes/users.js:368), so a hole is not representable and would silently
-   * collapse into a left-shift on the next save anyway. Removal therefore has to
-   * splice: the photo after it slides up to take its place. That is also what
-   * the deck card expects, since it renders photos positionally
-   * (photos[0] = hero, photos[1..3] = tiles).
-   *
-   * Consequence, and it is the correct one: removing the hero promotes the next
-   * photo to hero. There is no "gap" the UI could ever hold.
-   */
-  const removePhoto = (slot) => {
-    if (contentFrozen) { toast.error(contentFreezeMessage, contentFreezeAction); return; }
-    const photos = [...(userDataRef.current.photos || [])];
-    if (slot < 0 || slot >= photos.length) return;
-    const isHero = slot === 0;
-    const label = isHero ? 'your main photo' : 'this photo';
-    if (!window.confirm(`Remove ${label}? The next photo will move up.`)) return;
-    photos.splice(slot, 1);
-    updateProfile({ photos });
-  };
-
-  /* ── completion score ──
-     READ FROM THE SERVER, never computed here.
-
-     This used to be a local `targetScore` useMemo: a flat 30 plus 10 for each
-     of eight conditions, one of which was `hostel`. That formula disagreed with
-     the deck and with itself — the thresholds that gated the deck were nowhere
-     in it, and a profile could read "Exemplary" while the deck still treated it
-     as unpublished.
-
-     `User.profileScore` is computed by server/utils/ladder.js and recomputed on
-     every profile write. Rendering it is the whole job here. Until the backfill
-     runs, a pre-existing user has no score and reads 0 — correct, because an
-     unbackfilled document genuinely has nothing computed for it yet. */
-  const targetScore = readScore(userData);
-
-  /* ── geometry ── */
-  const [rootH, setRootH] = useState(0);
-  const [sheetH, setSheetH] = useState(0);
-
-  /* True only once the actual card tree is on screen.
-     The measure effects need a dep that flips when the sheet first EXISTS,
-     because while the fetch is in flight the component renders the
-     "Loading your card…" screen, so sheetRef is null and the effect bails out
-     with no observer attached. It must NOT key on `userData` itself: that object
-     gets a new identity on every optimistic save and every PUT response, so
-     keying on it tore down the ResizeObserver mid-entrance and reopened the
-     re-clamp window — which is what made the slide-up land differently
-     depending on whether you refreshed or switched tabs. */
-  const cardMounted = !loading && Boolean(userData) && !fetchError;
-  const rootHRef = useRef(0);
-  const sheetHRef = useRef(0);
-  const entranceTimer = useRef(null);
-  const entranceUntil = useRef(0);        // timestamp: re-clamp stays off until here
-  /* Set-once marker for the sheet entrance, mirroring the deck card.
-     Identity of the profile the entrance has already played for; nulled on
-     teardown so a remount replays it. */
-  const entranceDoneFor = useRef(null);
-  /* Set once the strength-bar placement has happened for a given profile. */
-  const focusPlacedFor = useRef(null);
-  /* Mirrors `focusStrength` for the measure pass to read. A ref, not the prop
-     itself, because the measure effect is deliberately gated on `[cardMounted]`
-     — adding focusStrength to its deps would re-run every measurement, and the
-     re-clamp at the end of that pass would fight the glide it had just started.
-     Assigning during render keeps it current without touching the deps. */
-  const focusStrengthRef = useRef(false);
-  focusStrengthRef.current = focusStrength;
-  const peekHRef = useRef(0);
-
-  const computeBounds = (h, w) => {
-    if (!h || !w) return { lo: 0, hi: 0, ready: false, short: true };
-    const lo = Math.min(TOP_GAP, h - BOTTOM_GAP - w);
-    const peek = peekHRef.current || PEEK_FALLBACK;
-    const short = w <= h - BOTTOM_GAP - TOP_GAP;
-    const hi = Math.max(lo, h - BOTTOM_GAP - (short ? w : peek));
-    return { lo, hi, ready: true, short };
-  };
-
-  /* SMOOTHNESS FIX: bounds now computed in an effect (not on every render),
-     and memoized so the drag handlers read stable values */
-  const boundsRef = useRef({ lo: 0, hi: 0, ready: false });
-  /* The "Profile strength" section, for the focus-on-arrival glide. */
-  const strengthRef = useRef(null);
-
-  /* ── motion values ── */
-  const yMV = useMotionValue(0);
-  const scoreMV = useMotionValue(0);
-  const barFill = useTransform(scoreMV, (v) => clamp(v, 0, 100) / 100);
-
-  const photoScale = useTransform(yMV, (y) => {
-    const { lo, hi, ready } = boundsRef.current;
-    if (!ready || hi <= lo) return 1;
-    const p = clamp((hi - y) / (hi - lo), 0, 1);
-    return 1 + 0.06 * p;
-  });
-  const photoOpacity = useTransform(yMV, (y) => {
-    const { lo, hi, ready } = boundsRef.current;
-    if (!ready || hi <= lo) return 1;
-    const p = clamp((hi - y) / (hi - lo), 0, 1);
-    return 1 - 0.4 * p;
-  });
-
-  /* ── entrance ──
-     Opacity + scale only. This used to animate `filter: blur(12px) → 0` on the
-     hero wrapper, which re-rasterises a full-bleed photo every frame and — worse —
-     because `filter` creates a containing block, the wrapper's own edit pencil was
-     blurred along with the image for the whole 500ms. `will-change: transform,
-     filter` also promoted the layer permanently. Both now compositor-only. */
-  const entranceOpacity = useMotionValue(0);
-  const entranceScale = useTransform(entranceOpacity, [0, 1], [0.92, 1]);
-  const combinedPhotoOpacity = useTransform(
-    [entranceOpacity, photoOpacity],
-    ([entrance, drag]) => entrance * drag
-  );
-  const combinedPhotoScale = useTransform(
-    [entranceScale, photoScale],
-    ([entrance, drag]) => entrance * drag
-  );
-
-  /* ── glide helpers ── */
-  const reduceMotion = useReducedMotion();
-  const SPRING = useRef(null);
-  SPRING.current = reduceMotion
-    ? { glide: { duration: 0 }, bounce: { duration: 0 }, wheel: { duration: 0 } }
-    : {
-        glide: { type: 'spring', stiffness: 170, damping: 30 },
-        bounce: { type: 'spring', stiffness: 380, damping: 32 },
-        wheel: { duration: 0.25, ease: 'easeOut' },
-      };
-  const glideControls = useRef(null);
-  const stopGlide = () => {
-    if (glideControls.current) { glideControls.current.stop(); glideControls.current = null; }
-  };
-  const glideTo = (target, kind) => {
-    stopGlide();
-    glideControls.current = animate(yMV, target, SPRING.current[kind] || SPRING.current.glide);
-  };
-
-  /* ── fetch ── */
-  // Extracted so the error state can offer a real retry. This used to be an
-  // anonymous inner function inside useEffect, and its catch only logged — so a
-  // single failed request left `loading === false && userData === null`, which
-  // the render guard below reported as "Loading your card…" FOREVER. The user got
-  // one transient toast and then a screen that insisted it was still loading, with
-  // no error, no retry and no way forward except a reload.
-  const fetchProfile = useCallback(async () => {
-    setLoading(true);
-    setFetchError(null);
-    try {
-      const data = await api.get('/users/profile');
-      if (!data.photos) data.photos = [];
-      if (!data.prompts) data.prompts = [{}, {}, {}];
-      if (!data.interests) data.interests = [];
-      if (!data.intent) data.intent = [];
-      setUserData(data);
-    } catch (err) {
-      console.error('Failed to fetch profile', err);
-      setFetchError(err?.message || 'Could not load your profile.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchProfile();
-  }, [fetchProfile]);
-
-  /* ── count-up ──
-     Keyed on the SCORE, not the profile id.
-
-     This was keyed on `userData?._id`, which meant it ran exactly once per
-     mount — so the number froze at whatever it was when the page loaded. Add a
-     photo, write a prompt, edit a bio, and the bar never moved until a full
-     browser refresh remounted the component. The ladder is supposed to be
-     live feedback ("you are 12 points from unlocking"), so a number that only
-     updates on reload actively works against the thing it is measuring.
-
-     The original reason for keying on the id was that this effect used to
-     contain `entranceOpacity.set(0)`, so any re-run reset the photo and made
-     it fade out and back in on every keystroke. Entrance now lives in its own
-     effect below keyed on reduceMotion alone, so re-running THIS one only
-     re-animates the number — the photo is untouched.
-
-     No `scoreMV.set(0)` either: the motion value starts at 0, so mount still
-     counts up from zero, and later changes animate from the current value
-     instead of snapping back to zero first. */
-  const firstScoreRun = useRef(true);
-  useEffect(() => {
-    if (!userData) return undefined;
-    // The 250ms hold is only for the first count-up, so it lands after the
-    // card entrance. Applying it to every update would make the bar feel like
-    // it was lagging a quarter-second behind each edit.
-    const isFirst = firstScoreRun.current;
-    firstScoreRun.current = false;
-    const c = animate(scoreMV, targetScore, reduceMotion
-      ? { duration: 0 }
-      : { duration: 1.2, delay: isFirst ? 0.25 : 0, ease: [0.22, 1, 0.36, 1] });
-    return () => c.stop();
-  }, [targetScore, reduceMotion, userData?._id]);
-
-  /* ── entrance animation: photo fade-in + slight scale-up ──
-     Keyed on reduceMotion ALONE, so it plays exactly once per mount and is never
-     replayed by a data update. The deck card keys this the same way. */
-  useEffect(() => {
-    if (reduceMotion) {
-      entranceOpacity.set(1);
-      return undefined;
-    }
-    const controls = animate(entranceOpacity, 1, { duration: 0.5, ease: 'easeOut' });
-    return () => controls.stop();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reduceMotion]);
-
-  /* An image restored from cache can be `complete` before React attaches onLoad,
-     in which case onLoad never fires and the hero sits at opacity 0 — a blank
-     photo strip. That is a "sometimes the card doesn't come in" case, and it is
-     exactly the refresh-vs-tab-switch difference. The deck guards it the same way. */
-  const heroSrc = userData?.photos?.[0];
-  useEffect(() => {
-    if (heroImgRef.current?.complete) setHeroLoaded(true);
-  }, [heroSrc]);
-
-  /* ── SHEET ENTRANCE ──
-     The sheet starts a full screen-height below the fold, then glides up 300ms
-     later — identical to the deck card.
-
-     Deliberately a useLayoutEffect, not useEffect: the sheet becomes visible as
-     soon as it is measured, and yMV still sits at 0 until an effect parks it. A
-     passive effect runs AFTER paint, so the sheet briefly painted at y=0 —
-     covering the photo, which is what made it look like it arrived before the
-     photo. A layout effect runs before paint, so it is parked and never flashes.
-
-     Deliberately NOT driven from measure(): ResizeObserver timing varies on a
-     real device, so the entrance could start before the geometry settled and
-     then be cancelled by the next observer tick. Keyed on the profile and gated
-     on real measurements, it fires exactly once per card. The timer is stored
-     and cleared, so switching profiles mid-entrance cannot leave a stale glide
-     pointing at the previous card's rest position. */
-  const cancelEntrance = useCallback(() => {
-    if (entranceTimer.current) { clearTimeout(entranceTimer.current); entranceTimer.current = null; }
-    entranceUntil.current = 0;
-  }, []);
-
-  /* ── measure root + sheet ── */
-  useLayoutEffect(() => {
-    const el = rootRef.current;
-    if (!el) return undefined;
-    const ro = new ResizeObserver(() => { rootHRef.current = el.clientHeight; setRootH(el.clientHeight); });
-    ro.observe(el);
-    rootHRef.current = el.clientHeight;
-    setRootH(el.clientHeight);
-    return () => ro.disconnect();
-  }, [cardMounted]);
-
-  useLayoutEffect(() => {
-    const el = sheetRef.current;
-    if (!el) return undefined;
-    const measure = () => {
-      const w = el.offsetHeight;
-      sheetHRef.current = w;
-      setSheetH(w);
-      const idEl = idRef.current;
-      if (idEl) peekHRef.current = idEl.offsetTop + idEl.offsetHeight + PEEK_PAD;
-      const h = rootHRef.current;
-      if (!h || !w) return;
-      const bounds = computeBounds(h, w);
-      boundsRef.current = bounds;                 // ← computed HERE, once per measure
-
-      /* ── ENTRANCE, here in the measure pass ──
-         Identical to the deck card. The sheet is positioned by the SAME layout
-         effect that measures it, so the park can neither be missed nor reordered
-         against the measurement. Driven from a separate effect it raced this
-         one and the sheet painted at y=0 — covering the whole photo — for ~300ms
-         before the park landed, which read as the sheet arriving before the
-         photo. Gated on a set-once ref rather than a dep array so it plays
-         exactly once per mount, on every mount, instead of once per dep change. */
-      const id = userDataRef.current?._id ?? null;
-      const focusing = focusStrengthRef.current && focusPlacedFor.current !== id;
-
-      /* Where "show me Profile strength" wants to land, given live geometry.
-         Null until the bar is laid out — we measure it rather than hardcoding an
-         offset, because the sheet's height varies with photos, prompts and
-         interests and any fixed number is wrong on some profile. */
-      const focusDest = (b) => {
-        const el = strengthRef.current;
-        if (!el) return null;
-        return clamp(b.hi - el.offsetTop, b.lo, b.hi);
-      };
-
-      /* ── ENTRANCE, here in the measure pass ──
-         Identical to the deck card. The sheet is positioned by the SAME layout
-         effect that measures it, so the park can neither be missed nor reordered
-         against the measurement. Driven from a separate effect it raced this
-         one and the sheet painted at y=0 — covering the whole photo — for ~300ms
-         before the park landed, which read as the sheet arriving before the
-         photo. Gated on a set-once ref rather than a dep array so it plays
-         exactly once per mount, on every mount, instead of once per dep change.
-
-         The entrance still PLAYS when we've been asked to show Profile strength —
-         only its destination changes, from the rest/peek position to the bar.
-         Skipping it entirely left the sheet at y=0, so it slid DOWN into place,
-         which reads as the sheet being pushed down rather than rising to reveal
-         the section. The reveal is the point, so we keep the motion and retarget
-         it. */
-      if (entranceDoneFor.current !== id) {
-        entranceDoneFor.current = id;
-        cancelEntrance();
-        entranceUntil.current = performance.now() + 900;   // self-expiring guard
-        yMV.set(h);                                        // park below the fold
-        entranceTimer.current = setTimeout(() => {
-          entranceTimer.current = null;
-          /* Re-read geometry at glide time: fonts/images may have settled since,
-             and a stale peek lands the sheet at the wrong rest position. */
-          const hh = rootHRef.current, ww = sheetHRef.current;
-          const b = (hh && ww) ? computeBounds(hh, ww) : bounds;
-          /* If we're focusing but the bar hasn't been measured yet, fall back to
-             the rest position WITHOUT marking it placed — the focus block below
-             then lands on the bar as soon as it exists, instead of the flag
-             claiming success on a peek position. */
-          const dest = focusing ? focusDest(b) : b.hi;
-          entranceUntil.current = 0;
-          glideTo(dest ?? b.hi, 'glide');
-          if (focusing && dest != null) {
-            focusPlacedFor.current = id;
-            onStrengthFocused?.();
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            resolve(file);
+            return;
           }
-        }, 300);
-        return;
-      }
 
-      /* ── FOCUS: land on Profile strength ──
-         Placed HERE, in the measure pass, rather than from a separate effect.
-         The effect version raced this one: it fired on the first frame when
-         `boundsRef` was still `{ready:false}`, did nothing, and had no second
-         chance — so the sheet sat at the entrance's rest position and the scroll
-         either never happened or got overwritten. Here, bounds are computed two
-         lines above and are guaranteed current.
-
-         Set-once, same as the entrance: a later resize re-measures, and without
-         this guard every photo upload would yank the sheet back to the score
-         after the user had scrolled away from it. */
-      if (focusing) {
-        const dest = focusDest(bounds);
-        if (dest != null) {
-          focusPlacedFor.current = id;
-          glideTo(dest, 'glide');
-          onStrengthFocused?.();
-          return;
-        }
-        // Bar not laid out yet — fall through. The ResizeObserver re-runs
-        // measure(), and this is where the placement finally lands.
-      }
-
-      /* Stay out of the way while the entrance glide is in flight. A TIMESTAMP
-         rather than a boolean, so a dropped timer can never wedge the re-clamp
-         off permanently. */
-      if (performance.now() < entranceUntil.current) return;
-      /* Only intervene when genuinely out of bounds, and never mid-glide. A
-         blanket yMV.set() here snapped the sheet the instant content resized —
-         which is what a save, a photo upload or a font settling all do — and it
-         did so with no epsilon test, so sub-pixel drift fought the glide and
-         killed the slide. */
-      const cur = yMV.get();
-      const target = clamp(cur, bounds.lo, bounds.hi);
-      if (Math.abs(target - cur) > 0.5) { stopGlide(); yMV.set(target); }
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    /* Cancel the entrance wholesale and forget that it ran, so a remount
-       (StrictMode's double-invoke, or returning to the tab) re-does it from
-       scratch. Only zeroing the timestamp used to leave the pending timer alive
-       while reopening the re-clamp, which yanked the sheet to rest ~20ms in and
-       killed the slide. */
-    return () => { ro.disconnect(); cancelEntrance(); entranceDoneFor.current = null; focusPlacedFor.current = null; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cardMounted]);
-
-  /* ── mutations ── */
-  /**
-   * Apply an update locally IMMEDIATELY, then PUT it.
-   *
-   * The optimistic patch is applied for every field, not just chips: previously
-   * only interests/intent updated instantly, so editing a name, bio, prompt or
-   * photo left the card frozen until the response landed — and a photo edit is
-   * two round trips (upload, then save), so it read as broken.
-   *
-   * The draft drawers no longer need a functional-patch escape hatch: taps are
-   * composed into `draft` in React state, and the whole drawer lands as one PUT.
-   */
-  const updateProfile = async (updates) => {
-    if (contentFrozen) { toast.error(contentFreezeMessage, contentFreezeAction); return; }
-    const current = userDataRef.current;
-    if (!current) return;
-
-    // Apply the change locally first so the UI responds immediately, and keep the
-    // pre-patch snapshot so a failed save can be rolled back rather than left
-    // showing something the server never accepted.
-    const snapshot = current;
-    const optimistic = { ...current, ...updates };
-    setUserData(optimistic);
-    const payload = updates;
-
-    // Tag this save so an out-of-order response can be recognised and dropped.
-    const seq = ++saveSeq.current;
-
-    try {
-      const updated = await api.put('/users/profile', payload);
-      // A newer save has started since this one — its response carries the newer
-      // state, so don't let this older snapshot clobber it.
-      if (seq !== saveSeq.current) return;
-      setUserData(prev => ({ ...prev, ...updated }));
-      queryClient.invalidateQueries({ queryKey: ['matches'] });
-      triggerHaptic('light');
-      // Keep AuthContext and localStorage in sync so Matches, Chat and the
-      // deck's "me" detection stop rendering the pre-edit profile.
-      refreshUser();
-    } catch (err) {
-      if (seq !== saveSeq.current) return;
-      setUserData(snapshot); // don't leave the UI lying about what's saved
-      // api.js already toasted the server's message when there was one; only a
-      // non-toasted error (a real network drop) needs local copy. Never use
-      // err.message here — on a network drop it is "Failed to fetch".
-      if (!err?.toasted) toast.error('Could not save. Please try again.');
-    }
-  };
-
-  /**
-   * Commit the open drawer's draft as a SINGLE PUT.
-   *
-   * Every field the user actually touched goes out in one request, so opening a
-   * drawer, editing three things and saving costs one PUT + one /auth/me instead
-   * of three of each. Fields left untouched are omitted entirely so the server is
-   * never asked to revalidate a value that did not change.
-   */
-  const saveDrawer = async () => {
-    const cfg = drawerConfig;
-    const d = draft;
-    if (!cfg || !d || !isDrawerDirty) { setDrawerConfig(null); setDraft(null); return; }
-    const u = userDataRef.current;
-
-    let patch = null;
-    if (cfg.type === 'interests' || cfg.type === 'intent') {
-      patch = { [cfg.type]: d.list };
-    } else if (cfg.type === 'prompt') {
-      // Always exactly 3 slots: a short array here would serialise as a sparse
-      // list of nulls and drop the trailing slots the card still renders.
-      const prompts = [0, 1, 2].map((i) => ({ ...(u.prompts?.[i] || {}) }));
-      const prev = prompts[cfg.slot];
-      const question = d.question.trim();
-      // photoUrl is preserved: this route only edits text, and dropping it would
-      // orphan an attached image.
-      // An empty question takes the answer with it — an answer with no question
-      // above it is orphaned text that reappears if a question is ever picked
-      // again. Clearing the question is also how you reset a prompt, so Save
-      // must not be able to store one half of a pair.
-      prompts[cfg.slot] = question
-        ? { ...prev, question, answer: d.answer.trim() }
-        : { ...prev, question: '', answer: '' };
-      patch = { prompts };
-    } else {
-      patch = {};
-      ['name', 'year', 'gender', 'pronouns', 'bio']
-        .filter((k) => k in d)
-        .forEach((k) => { if (d[k] !== (u[k] || '')) patch[k] = d[k].trim(); });
-      if ('gapYear' in d && !!d.gapYear !== !!u.gapYear) patch.gapYear = !!d.gapYear;
-    }
-
-    // Close immediately. updateProfile already applies the change optimistically
-    // and rolls back with a toast if the PUT fails, so there is nothing to wait
-    // for — and waiting would make Save feel slower than the autosave it replaced.
-    setDrawerConfig(null);
-    setDraft(null);
-    await updateProfile(patch);
-  };
-
-  const handlePhotoSelect = async (e) => {
-    const files = Array.from(e.target.files);
-    // Capture the slot BEFORE clearing state — the picker target is spent either
-    // way, and reading photoSlot after a re-render would race the picker reopen.
-    const slot = photoSlot;
-    setPhotoSlot(null);
-    e.target.value = '';
-    if (files.length === 0 || slot === null) return;
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setUploadSlot(slot);
-    triggerHaptic('medium');
-    try {
-      const { url } = await api.upload(files[0], { signal: controller.signal });
-      const current = [...(userDataRef.current.photos || [])];
-      // Replace in place when the slot is occupied, otherwise APPEND.
-      //
-      // This used to do `current[slot] = url` unconditionally, which punched a
-      // hole whenever the tapped tile was beyond the end of the array (tap the
-      // wide tile with only one photo saved). The server then ran filter(Boolean)
-      // and closed the hole — so the photo silently moved UP a slot on save,
-      // visibly jumping out from under the tile that was just tapped. Appending
-      // keeps the array dense and the photo where the server will keep it.
-      const next = slot < current.length
-        ? current.map((p, i) => (i === slot ? url : p))
-        : [...current, url];
-      await updateProfile({ photos: next });
-    } catch {
-      // An abort is a deliberate user action, not a failure — stay silent.
-      // If the cancel landed after the upload resolved, the save is already
-      // running and updateProfile reports its own errors.
-      if (controller.signal.aborted) {
-        triggerHaptic('light');
-      } else {
-        toast.error('Upload failed. Check your connection, or try a smaller image.');
-      }
-    } finally {
-      if (abortRef.current === controller) abortRef.current = null;
-      setUploadSlot(null);
-    }
-  };
-
-  /* ════ THE DRAG — identical to ProfileCard ════ */
-  const drag = useRef(null);
-  const yBaseRef = useRef(0);
-  const dragged = useRef(false);
-
-  useEffect(() => {
-    const sheet = sheetRef.current;
-    if (!sheet) return;
-
-    const onDown = (e) => {
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      if (drag.current) return;
-      stopGlide();
-      drag.current = { id: e.pointerId, startY: e.clientY, lastY: e.clientY, lastT: performance.now(), vel: 0, moved: 0 };
-      yBaseRef.current = yMV.get();
-      dragged.current = false;
-    };
-
-    const onMove = (e) => {
-      const d = drag.current;
-      if (!d || e.pointerId !== d.id) return;
-      if (e.pointerType === 'mouse' && e.buttons === 0) { finish(e, false); return; }
-      const { lo, hi, ready } = boundsRef.current;
-      if (!ready) return;
-      const dy = e.clientY - d.lastY;
-      d.lastY = e.clientY;
-      d.moved += Math.abs(dy);
-      if (d.moved > 5) dragged.current = true;
-      const now = performance.now();
-      d.vel = d.vel * 0.7 + (dy / Math.max(1, now - d.lastT)) * 0.3;
-      d.lastT = now;
-
-      const raw = yBaseRef.current + (e.clientY - d.startY);
-      if (raw < lo) {
-        const over = lo - raw;
-        yMV.set(lo - over * RUBBER);
-      } else if (raw > hi) {
-        const over = raw - hi;
-        yMV.set(hi + over * RUBBER);
-      } else {
-        yMV.set(raw);
+          resolve(
+            blob.size < file.size
+              ? new File([blob], 'photo.jpg', { type: 'image/jpeg' })
+              : file,
+          );
+        }, 'image/jpeg', JPEG_QUALITY);
+      } catch {
+        resolve(file);
       }
     };
 
-    const finish = (e, withMomentum) => {
-      const d = drag.current;
-      if (!d) return;
-      if (e && e.pointerId !== undefined && e.pointerId !== d.id) return;
-      const vel = withMomentum ? d.vel : 0;
-      drag.current = null;
-      const { lo, hi, ready } = boundsRef.current;
-      if (!ready) return;
-      const y = yMV.get();
-      if (y < lo || y > hi) { glideTo(clamp(y, lo, hi), 'bounce'); return; }
-      const projected = clamp(y + vel * MOMENTUM_MS, lo, hi);
-      if (Math.abs(projected - y) > 1) glideTo(projected, 'glide');
+    img.onerror = () => {
+      URL.revokeObjectURL(src);
+      resolve(file);
     };
 
-    const onUp = (e) => finish(e, true);
-    const onCancel = (e) => finish(e, false);
-
-    sheet.addEventListener('pointerdown', onDown, true);
-    window.addEventListener('pointermove', onMove, { passive: true });
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onCancel);
-    return () => {
-      sheet.removeEventListener('pointerdown', onDown, true);
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onCancel);
-    };
-  }, [cardMounted]);
-
-  const onClickCapture = (e) => {
-    if (dragged.current) {
-      dragged.current = false;
-      e.preventDefault();
-      e.stopPropagation();
-    }
-  };
-
-  useEffect(() => {
-    const sheet = sheetRef.current;
-    if (!sheet) return;
-    const onWheel = (e) => {
-      const { lo, hi, ready } = boundsRef.current;
-      if (!ready) return;
-      e.preventDefault();
-      glideTo(clamp(yMV.get() - e.deltaY, lo, hi), 'wheel');
-    };
-    sheet.addEventListener('wheel', onWheel, { passive: false });
-    return () => sheet.removeEventListener('wheel', onWheel);
-  }, [cardMounted]);
-
-  const onSheetKeyDown = (e) => {
-    const { lo, hi, ready } = boundsRef.current;
-    if (!ready) return;
-    const step = 90;
-    if (e.key === 'ArrowUp') { e.preventDefault(); glideTo(clamp(yMV.get() - step, lo, hi), 'glide'); }
-    if (e.key === 'ArrowDown') { e.preventDefault(); glideTo(clamp(yMV.get() + step, lo, hi), 'glide'); }
-  };
-
-  /* ════ HEADER DUCK ════
-     The header is a position:fixed row. The sheet's top edge sits at
-     `rootTop + y`, so the header must duck once
-        y  <  (headerBottom - rootTop - HEADER_LEAD)
-     Both edges are measured ONCE, with the header at rest, and cached.
-     Re-measuring live is self-defeating (mid-animation the header's rect is
-     80px higher → trigger shrinks → state flips → header returns → loop), and
-     the handler is pure arithmetic on yMV so there is no per-frame layout read
-     to stall the drag.
-
-     `short` is deliberately NOT consulted: when the sheet fits its container
-     computeBounds also caps `lo` at TOP_GAP, so travel ends at the header and
-     the guard blocked the feature outright.
-
-     The callback MUST be held in a ref, never in an effect dep. AppShell hands
-     us a fresh arrow on every render, so depending on it re-runs the unmount
-     cleanup each time — resetting the ref and re-showing the header the instant
-     it ducks. That is an infinite self-cancelling loop and the header never
-     actually moves. */
-  const headerTriggerRef = useRef(null);
-  const headerHiddenRef = useRef(false);
-  const onHeaderHiddenRef = useRef(onHeaderHiddenChange);
-  useEffect(() => { onHeaderHiddenRef.current = onHeaderHiddenChange; });
-
-  const setHeaderHidden = useCallback((hidden) => {
-    if (headerHiddenRef.current === hidden) return;
-    headerHiddenRef.current = hidden;
-    onHeaderHiddenRef.current?.(hidden);
-  }, []);
-
-  const measureHeaderTrigger = useCallback(() => {
-    if (headerHiddenRef.current) return;          // never measure mid-animation
-    const root = rootRef.current;
-    if (!root) return;
-    const bar = document.querySelector('[data-deck-header]');
-    let headerBottom;
-    if (bar) {
-      headerBottom = bar.getBoundingClientRect().bottom;
-    } else {
-      console.warn('[header-duck] [data-deck-header] not found — assuming 54px (DECK_TOP 12 + DECK_BTN 42)');
-      headerBottom = HEADER_FALLBACK_BOTTOM;
-    }
-    const rootTop = root.getBoundingClientRect().top;
-    headerTriggerRef.current = headerBottom - rootTop - HEADER_LEAD;
-  }, []);
-
-  useMotionValueEvent(yMV, 'change', (y) => {
-    const trigger = headerTriggerRef.current;
-    if (trigger == null) return;
-    /* Two fixed numbers — the two directions cannot disagree. */
-    if (headerHiddenRef.current) {
-      if (y > trigger + HEADER_RELEASE) setHeaderHidden(false);
-    } else if (y < trigger) {
-      setHeaderHidden(true);
-    }
+    img.src = src;
   });
 
-  useLayoutEffect(() => {
-    if (!cardMounted) return undefined;
-    const raf = requestAnimationFrame(() => { measureHeaderTrigger(); setHeaderHidden(false); });
-    window.addEventListener('resize', measureHeaderTrigger);
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener('resize', measureHeaderTrigger);
-    };
-    /* Keyed on cardMounted, not userData. Re-running this on every save called
-       setHeaderHidden(false) mid-scroll, so the header popped back into view the
-       moment you saved an edit — the same class of bug as the card re-entering. */
-  }, [cardMounted, measureHeaderTrigger]);
+const Onboarding = ({ onComplete }) => {
+  const reduceMotion = useReducedMotion();
+  const config = useAppConfig();
+  const { logout, login } = useAuth();
+  const fileRef = useRef(null);
+  const rootRef = useRef(null);
+  const previewRef = useRef(null);
+  const V = useScreenVariants(reduceMotion);
 
-  /* Unmount ONLY (empty deps) — see the note above. Leaving the tab must always
-     restore the header, and this must not be able to re-run on every parent
-     render. */
-  useEffect(() => () => {
-    headerHiddenRef.current = false;
-    onHeaderHiddenRef.current?.(false);
+  const [step, setStep] = useState(0);
+  const [dir, setDir] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [error, setError] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [preview, setPreview] = useState(null);
+
+  const [formData, setFormData] = useState({
+    name: '',
+    dob: '',
+    gender: '',
+    year: '',
+    intent: [],
+    interestedIn: [],
+    photos: [],
+    prompts: [],
+    interests: [],
+    currentLatLng: undefined,
+  });
+
+  const resumeDraft = useCallback(async () => {
+    try {
+      const res = await api.get('/users/onboarding/resume');
+      if (!res?.data || !Object.keys(res.data).length) return;
+
+      const saved = res.data;
+
+      setFormData((prev) => ({
+        ...prev,
+        ...saved,
+        name: prev.name || saved.name || '',
+        gender: prev.gender || saved.gender || '',
+        year: prev.year || saved.year || '',
+        dob: prev.dob || saved.dob || '',
+        photos: prev.photos?.length ? prev.photos : (Array.isArray(saved.photos) ? saved.photos : prev.photos),
+        intent: prev.intent?.length ? prev.intent : (Array.isArray(saved.intent) ? saved.intent : prev.intent),
+        interestedIn: prev.interestedIn?.length ? prev.interestedIn : (Array.isArray(saved.interestedIn) ? saved.interestedIn : prev.interestedIn),
+        interests: prev.interests?.length ? prev.interests : (Array.isArray(saved.interests) ? saved.interests : prev.interests),
+        prompts: prev.prompts?.length ? prev.prompts : (Array.isArray(saved.prompts) ? saved.prompts : prev.prompts),
+      }));
+
+      const idx = Number(saved.__step);
+      if (Number.isFinite(idx) && idx >= 0 && idx < STEPS.length) setStep(idx);
+    } catch {
+      // Draft unavailable — the next online/visible event retries.
+    }
   }, []);
 
-  if (loading || (!userData && !fetchError)) {
-    return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#131313' }}>
-        <p style={{ fontFamily: F.mono, fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: C.ink3 }}>
-          Loading your card…
-        </p>
-      </div>
+  useEffect(() => {
+    resumeDraft();
+
+    const onOnline = () => resumeDraft();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') resumeDraft();
+    };
+
+    window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      window.removeEventListener('online', onOnline);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [resumeDraft]);
+
+  useEffect(() => {
+    const { name, gender, dob } = formData;
+    if (!name && !gender && !dob) return undefined;
+
+    const t = setTimeout(() => {
+      api.put('/users/onboarding/save', {
+        step: step + 1,
+        data: { ...formData, __step: step },
+      }).catch(() => {});
+    }, 800);
+
+    return () => clearTimeout(t);
+  }, [formData, step]);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [menuOpen]);
+
+  const update = (patch) => setFormData((f) => ({ ...f, ...patch }));
+
+  const toggleIn = (field, item, max = null) => {
+    setFormData((f) => {
+      const arr = f[field] || [];
+      const on = arr.includes(item);
+
+      if (on) return { ...f, [field]: arr.filter((i) => i !== item) };
+
+      if (max && arr.length >= max) {
+        triggerHaptic('heavy');
+        return f;
+      }
+
+      const next = field === 'interestedIn'
+        ? ['Everyone']
+        : (item === 'Everyone' ? [] : arr.filter((i) => i !== 'Everyone'));
+
+      return { ...f, [field]: [...next, item] };
+    });
+
+    triggerHaptic('light');
+  };
+
+  const dobParts = (formData.dob || '--').split('-');
+  const dobY = dobParts[0] === '--' ? '' : dobParts[0];
+  const dobM = dobParts[1] === '--' ? '' : dobParts[1];
+  const dobD = dobParts[2] === '--' ? '' : dobParts[2];
+
+  const dayRef = useRef(null);
+  const monRef = useRef(null);
+  const yrRef = useRef(null);
+
+  const age = (() => {
+    if (dobY.length !== 4 || dobM.length !== 2 || dobD.length !== 2) return null;
+
+    const today = new Date();
+    const birth = new Date(`${dobY}-${dobM}-${dobD}`);
+
+    if (Number.isNaN(birth.getTime())) return null;
+
+    let a = today.getFullYear() - birth.getFullYear();
+    const m = today.getMonth() - birth.getMonth();
+
+    return (m < 0 || (m === 0 && today.getDate() < birth.getDate())) ? a - 1 : a;
+  })();
+
+  const setDob = (part, raw) => {
+    const num = raw.replace(/\D/g, '');
+    let d = dobD;
+    let m = dobM;
+    let y = dobY;
+
+    if (part === 'd') {
+      d = num.slice(0, 2);
+      if (d.length === 2) {
+        if (+d > 31) d = '31';
+        if (+d === 0) d = '01';
+        monRef.current?.focus();
+      }
+    }
+
+    if (part === 'm') {
+      m = num.slice(0, 2);
+      if (m.length === 2) {
+        if (+m > 12) m = '12';
+        if (+m === 0) m = '01';
+        yrRef.current?.focus();
+      }
+    }
+
+    if (part === 'y') y = num.slice(0, 4);
+
+    update({ dob: `${y}-${m}-${d}` });
+  };
+
+  const clearPreview = () => {
+    if (previewRef.current) {
+      URL.revokeObjectURL(previewRef.current);
+      previewRef.current = null;
+    }
+
+    setPreview(null);
+  };
+
+  useEffect(() => () => {
+    if (previewRef.current) URL.revokeObjectURL(previewRef.current);
+  }, []);
+
+  const pickPhoto = () => {
+    triggerHaptic('light');
+    fileRef.current?.click();
+  };
+
+  const removePhoto = () => {
+    triggerHaptic('light');
+    clearPreview();
+    update({ photos: [] });
+  };
+
+  const onFile = async (e) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+
+    setUploading(true);
+    setError('');
+    triggerHaptic('medium');
+
+    const localUrl = URL.createObjectURL(f);
+    previewRef.current = localUrl;
+    setPreview(localUrl);
+
+    try {
+      const toUpload = await compressImage(f);
+      const { url } = await api.upload(toUpload);
+      update({ photos: [url] });
+      triggerHaptic('success');
+    } catch {
+      toast.error('Upload failed. Check your connection, or try a smaller image.');
+      triggerHaptic('heavy');
+    } finally {
+      setUploading(false);
+      clearPreview();
+    }
+  };
+
+  const [locBusy, setLocBusy] = useState(false);
+  const [locationReading, setLocationReading] = useState(false);
+  const [locError, setLocError] = useState('');
+  const [locDeclined, setLocDeclined] = useState(false);
+
+  const done = {
+    name: !!formData.name.trim(),
+    dob: age !== null && age >= 18 && age <= 40,
+    photo: !!formData.photos[0],
+    gender: !!formData.gender,
+    interestedIn: formData.interestedIn.length > 0,
+    year: !!formData.year,
+    intent: formData.intent.length > 0,
+    location: locationReading || locDeclined,
+  };
+
+  const stepDone = (i) => done[STEPS[i].key];
+  const allDone = STEPS.every((st) => done[st.key]);
+
+  const grantLocation = useCallback(async () => {
+    if (locBusy) return;
+
+    setLocBusy(true);
+    setLocError('');
+
+    const res = await readLocationOnce();
+    setLocBusy(false);
+
+    if (res.ok) {
+      setFormData((f) => ({ ...f, currentLatLng: res.latLng }));
+      setLocationReading(true);
+      return;
+    }
+
+    setLocError(
+      res.reason === LOCATION_UNAVAILABLE.DENIED
+        ? 'Location permission was declined.'
+        : res.reason === LOCATION_UNAVAILABLE.INSECURE
+          ? 'Location needs a secure (https) connection.'
+          : "We couldn't get a location reading.",
     );
-  }
+  }, [locBusy]);
 
+  const publish = async () => {
+    if (!allDone || uploading || publishing) {
+      triggerHaptic('heavy');
+      return;
+    }
 
-  /* Whether the sheet has measurable geometry. Declared BEFORE the effect above
-     so the dependency array can read it — `const` is in the temporal dead zone
-     until its declaration executes, so referencing it earlier threw
-     "Cannot access 'sheetReady' before initialization" and took the whole
-     Profile tab down with it. */
-  const sheetReady = rootH > 0 && sheetH > 0;
+    setPublishing(true);
+    setError('');
+    triggerHaptic('heavy');
 
-  // Shown when the fetch failed. Previously unreachable — the guard above
-  // swallowed it and displayed the loading message instead.
-  if (fetchError && !userData) {
-    return (
-      <div style={{
-        flex: 1, display: 'flex', flexDirection: 'column', gap: 16,
-        alignItems: 'center', justifyContent: 'center',
-        backgroundColor: '#131313', padding: 24, textAlign: 'center',
-      }}>
-        <p style={{ fontFamily: F.mono, fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: C.red }}>
-          Card unavailable
-        </p>
-        <p style={{ fontFamily: F.body, fontSize: 13, color: C.ink3, maxWidth: 280, lineHeight: 1.6 }}>
-          {fetchError}
-        </p>
-        <button
-          onClick={fetchProfile}
-          className="tactile-btn"
-          style={{
-            padding: '10px 20px', borderRadius: 6, cursor: 'pointer',
-            border: `2px solid ${C.ink}`, backgroundColor: C.yellow,
-            color: C.ink, fontFamily: F.mono, fontSize: 11, fontWeight: 700,
-            letterSpacing: '.12em', textTransform: 'uppercase',
-          }}
+    try {
+      const res = await api.post('/users/setup', {
+        ...formData,
+        age,
+        prompts: (formData.prompts || []).slice(0, 3),
+      });
+
+      await api.delete('/users/onboarding/clear').catch(() => {});
+
+      const stored = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
+      const updated = res?.user || res?.data?.user || res || {
+        ...stored,
+        isSetup: true,
+        isOnboarded: true,
+        profileCompleted: true,
+        onboardingCompleted: true,
+      };
+
+      login(updated);
+      onComplete();
+    } catch (err) {
+      if (!err?.toasted) {
+        toast.error('Could not publish your profile. Check your connection and try again.');
+      }
+      setPublishing(false);
+    }
+  };
+
+  const scrollToTop = () => {
+    rootRef.current?.scrollTo({
+      top: 0,
+      behavior: reduceMotion ? 'auto' : 'smooth',
+    });
+  };
+
+  const next = () => {
+    if (!stepDone(step)) {
+      triggerHaptic('heavy');
+      return;
+    }
+
+    triggerHaptic('light');
+    setError('');
+    setDir(1);
+    setStep((s) => Math.min(s + 1, STEPS.length - 1));
+    scrollToTop();
+  };
+
+  const back = () => {
+    triggerHaptic('light');
+    setError('');
+    setDir(-1);
+    setStep((s) => Math.max(0, s - 1));
+    scrollToTop();
+  };
+
+  const s = STEPS[step];
+  const isLast = step === STEPS.length - 1;
+
+  const genders = config?.genders || ['Male', 'Female', 'Non-binary', 'Other'];
+  const showOptions = [...genders, 'Everyone'];
+  const intentOptions = config?.intents || [];
+
+  const banner = (
+    <AnimatePresence>
+      {error && (
+        <motion.div
+          key="b"
+          role="alert"
+          initial={reduceMotion ? false : { opacity: 0, height: 0, y: -4 }}
+          animate={{ opacity: 1, height: 'auto', y: 0 }}
+          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0, y: -4 }}
+          transition={{ duration: .2 }}
+          style={{ overflow: 'hidden' }}
         >
-          Try again
-        </button>
-      </div>
-    );
-  }
-
-  /* Labels are now the ladder's own bands. They used to be hardcoded 85 / 50,
-     which matched nothing — not the deck's 75, not publish's 45. A profile at
-     85 could be called Exemplary while the deck still had it locked, so these
-     two numbers and the gate have to come from the same source. */
-  const scoreBand = bandFor(targetScore, config);
-  const completion =
-    scoreBand === 'aspirational'
-      ? 'Exemplary'
-      : scoreBand === 'interactable' || scoreBand === 'published'
-        ? 'Standard'
-        : 'Incomplete';
-  const isAspirational = scoreBand === 'aspirational';
-  const heroUploading = uploadSlot === 0;
-  const prompts = userData.prompts || [];
-  const interests = userData.interests || [];
-
-  /* Real content only.
-     This used to be `[prompts[0..2], photos[1..3]].filter(Boolean).length`, but
-     `prompts` is always three objects (fetchProfile defaults it to `[{}, {}, {}]`)
-     and an empty object is truthy — so all three empty slots were always counted
-     and the header read "/ 3" on a profile with nothing filled in. The hero is
-     photos[0], so it is subtracted out: it is not an exhibit. */
-  const exhibitsCount = Math.max(
-    0,
-    prompts.filter((p) => p?.question).length +
-      Math.max(0, (userData.photos || []).filter(Boolean).length - 1)
+          <div className="ob-banner">
+            <p>{error}</p>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 
   return (
-    <div ref={rootRef} className="pc-root">
-      <style>{PROFILE_CSS}</style>
-      <input type="file" accept="image/*" ref={fileInputRef} style={{ display: 'none' }} onChange={handlePhotoSelect} />
+    <div className={`ob-root ob-root-${s.key.toLowerCase()}`} ref={rootRef}>
+      <style>{CSS}</style>
 
-      <div style={{ position: 'relative', zIndex: 45 }}>
-        <ShadowbanBanner score={shadowbanScore} onLearnMore={() => setShowLearnMore(true)} />
-        {showLearnMore && <LearnMoreSheet onClose={() => setShowLearnMore(false)} />}
-      </div>
-
-      {/* ════ PHOTO — full-bleed background, entrance fade + drag recede ════ */}
-      <motion.div
-        className="pc-heroWrap"
-        style={{ scale: combinedPhotoScale, opacity: combinedPhotoOpacity }}
-      >
-        <img
-          ref={heroImgRef}
-          src={userData.photos?.[0] || FALLBACK_IMG}
-          alt="Your portrait"
-          draggable={false}
-          onLoad={() => setHeroLoaded(true)}
-          onError={(e) => {
-            const img = e.currentTarget;
-            if (!img.dataset.err) { img.dataset.err = '1'; img.src = FALLBACK_IMG; }
-          }}
-          decoding="async"
-          className={`pc-hero${heroLoaded ? ' is-loaded' : ''}`}
-        />
-        <div className="pc-shade" aria-hidden="true" />
-        {/* The pencil and its tray are one dismiss target: the ref spans both, so
-            a tap on the tray's own buttons is NOT treated as an outside tap and
-            still runs the action. */}
-        <div className="pc-herocontrols" ref={heroControlsRef}>
+      <header className="ob-head">
+        {step > 0 ? (
           <button
-            className="pr-herobtn"
-            aria-label={heroUploading ? 'Cancel upload' : (userData.photos?.[0] ? 'Photo options' : 'Add main photo')}
-            title={heroUploading ? 'Cancel upload' : (userData.photos?.[0] ? 'Photo options' : 'Add main photo')}
-            aria-expanded={userData.photos?.[0] ? heroTray : undefined}
-            onClick={heroUploading ? cancelUpload : (userData.photos?.[0] ? () => setHeroTray((t) => !t) : () => openPhotoSlot(0))}
+            type="button"
+            className="ob-hbtn"
+            aria-label="Previous question"
+            onClick={back}
           >
-            {heroUploading ? <X size={13} strokeWidth={3} /> : <Pencil size={13} strokeWidth={2.8} />}
+            <ChevronLeft size={22} strokeWidth={2.4} />
           </button>
-          {heroTray && !heroUploading && userData.photos?.[0] && (
-            <div className="pr-herotray">
-              <button className="pr-traybtn big" onClick={() => { setHeroTray(false); openPhotoSlot(0); }}>
-                <Pencil size={14} strokeWidth={2.8} /> Replace
-              </button>
-              <button className="pr-traybtn danger big" onClick={() => { setHeroTray(false); removePhoto(0); }}>
-                <X size={14} strokeWidth={3} /> Remove
-              </button>
-            </div>
-          )}
-        </div>
-      </motion.div>
-
-      {/* hero upload pill — lives OUTSIDE the hero wrap so the sheet can't cover
-          it. `x: '-50%'` is set in all three states because framer-motion owns the
-          transform here; a CSS translateX(-50%) would be clobbered on mount. */}
-      <AnimatePresence>
-        {heroUploading && (
-          <motion.div
-            className="pr-uploadpill"
-            initial={{ opacity: 0, y: -10, x: '-50%' }}
-            animate={{ opacity: 1, y: 0, x: '-50%' }}
-            exit={{ opacity: 0, y: -10, x: '-50%' }}
-            transition={{ duration: 0.18 }}
-            role="status"
-            aria-live="polite"
-          >
-            Uploading…
-          </motion.div>
+        ) : (
+          <span className="ob-headspacer" />
         )}
-      </AnimatePresence>
 
-      {/* ════ THE SHEET ════ */}
-      <motion.div
-        ref={sheetRef}
-        className="pc-sheet"
-        style={{ y: yMV, visibility: sheetReady ? 'visible' : 'hidden' }}
-        onClickCapture={onClickCapture}
-        onKeyDown={onSheetKeyDown}
-        tabIndex={0}
-        role="region"
-        aria-label="Your profile — drag or use arrow keys to move the card"
-      >
-        {/* the note — plain text at the top of the sheet, no background */}
-        <span className="pc-notetext">As others see you</span>
-        <div className="pc-grabber" aria-hidden="true" />
+        <div style={{ position: 'relative' }}>
+          <button
+            type="button"
+            className="ob-hbtn"
+            aria-label="More options"
+            aria-expanded={menuOpen}
+            onClick={() => {
+              triggerHaptic('light');
+              setMenuOpen((v) => !v);
+            }}
+          >
+            <MoreVertical size={20} strokeWidth={2.4} />
+          </button>
 
-        {/* IDENTITY — one edit button */}
-        <div ref={idRef} className="pc-id">
-          <div className="pc-idrow">
-            <div style={{ minWidth: 0 }}>
-              <h2 className="pc-name">{userData.name || 'Anonymous'}</h2>
-              <p className="pc-meta">
-                {userData.age || '—'}<span className="pc-slash">/</span>
-                {userData.year || '—'}
-              </p>
-            </div>
-            <button className="pr-slotbtn" aria-label="Edit basics" title="Edit basics" onClick={() => openEditDrawer({ type: 'identity' })}>
-              <Pencil size={13} strokeWidth={2.8} />
-            </button>
-          </div>
+          <AnimatePresence>
+            {menuOpen && (
+              <>
+                <div
+                  className="ob-scrim"
+                  onClick={() => setMenuOpen(false)}
+                  aria-hidden="true"
+                />
+
+                <motion.div
+                  className="ob-menu"
+                  initial={reduceMotion ? false : { opacity: 0, scale: .94, y: -6 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: .94, y: -6 }}
+                  transition={{ duration: .13, ease: 'easeOut' }}
+                >
+                  <button
+                    type="button"
+                    className="ob-menuitem"
+                    onClick={() => {
+                      if (window.confirm('Log out? Your progress is saved as a draft.')) {
+                        triggerHaptic('medium');
+                        logout();
+                      }
+                    }}
+                  >
+                    <LogOut size={16} strokeWidth={2.4} />
+                    Log out
+                  </button>
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
         </div>
+      </header>
 
-        {/* PROFILE STRENGTH — score lives HERE and nowhere else; not editable */}
-        <div className="pc-sec" ref={strengthRef}>
-          <SectionHead mark="yellow">Profile strength</SectionHead>
-          <div className="pc-card padded">
-            <div className="pc-strengthhead">
-              <div className="pc-scorehead">
-                <div className="pc-scorenum">
-                  <span className="pc-num"><AnimatedNumber mv={scoreMV} /></span>
-                  <span className="pc-pct">%</span>
-                </div>
-                <div className="pc-statust">
-                  {isAspirational && <span className="pc-star">✦ </span>}
-                  {completion}
-                  {isAspirational && (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 6, padding: '3px 8px', background: C.green, border: '1.5px solid var(--ink)', borderRadius: 6, color: C.ink, fontSize: 8.5 }}>
-                      <CheckCircle2 size={10} strokeWidth={3} /> Complete
+      <div className="ob-fit">
+        <AnimatePresence mode="wait" custom={dir} initial={false}>
+          <motion.div
+            key={s.key}
+            className={`ob-screen ob-screen-${s.key.toLowerCase()}`}
+            custom={dir}
+            variants={V.screen}
+            initial="enter"
+            animate="center"
+            exit="exit"
+          >
+            <motion.h1 className="ob-title" variants={V.item}>
+              {s.title}
+            </motion.h1>
+
+            {s.hint && (
+              <motion.p className="ob-hint" variants={V.item}>
+                {s.hint}
+              </motion.p>
+            )}
+
+            {s.key !== 'photo' && (
+              <motion.div className="ob-art" variants={V.item}>
+                <StepArtwork step={s.key} />
+              </motion.div>
+            )}
+
+            <motion.div className="ob-field" variants={V.item}>
+              {s.key === 'name' && (
+                <input
+                  className="ob-input"
+                  value={formData.name}
+                  onChange={(e) => update({ name: e.target.value.slice(0, 60) })}
+                  placeholder="Your name"
+                  autoCapitalize="words"
+                  autoCorrect="off"
+                  spellCheck="false"
+                  autoComplete="given-name"
+                  aria-label="Your name"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') next();
+                  }}
+                />
+              )}
+
+              {s.key === 'dob' && (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                    <input
+                      ref={dayRef}
+                      className="ob-input ob-dob"
+                      style={{ flex: 1, minWidth: 0 }}
+                      value={dobD}
+                      onChange={(e) => setDob('d', e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Backspace' && !dobD) return;
+                        if (e.key === 'Enter' && age) next();
+                      }}
+                      placeholder="DD"
+                      inputMode="numeric"
+                      maxLength={2}
+                      aria-label="Day"
+                    />
+
+                    <span className="ob-slash" aria-hidden="true">/</span>
+
+                    <input
+                      ref={monRef}
+                      className="ob-input ob-dob"
+                      style={{ flex: 1, minWidth: 0 }}
+                      value={dobM}
+                      onChange={(e) => setDob('m', e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Backspace' && !dobM) dayRef.current?.focus();
+                        if (e.key === 'Enter' && age) next();
+                      }}
+                      placeholder="MM"
+                      inputMode="numeric"
+                      maxLength={2}
+                      aria-label="Month"
+                    />
+
+                    <span className="ob-slash" aria-hidden="true">/</span>
+
+                    <input
+                      ref={yrRef}
+                      className="ob-input ob-dob"
+                      style={{ flex: 1, minWidth: 0 }}
+                      value={dobY}
+                      onChange={(e) => setDob('y', e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Backspace' && !dobY) monRef.current?.focus();
+                        if (e.key === 'Enter' && age) next();
+                      }}
+                      placeholder="YYYY"
+                      inputMode="numeric"
+                      maxLength={4}
+                      aria-label="Year"
+                    />
+                  </div>
+
+                  {age !== null && (
+                    <span className={`ob-age${age >= 18 && age <= 40 ? ' ok' : ''}`}>
+                      Age {age}
                     </span>
                   )}
-                </div>
-              </div>
-              <div className="pc-bar" aria-hidden="true">
-                <motion.div className="pc-barfill" style={{ scaleX: barFill }} />
-              </div>
-            </div>
-          </div>
-        </div>
+                </>
+              )}
 
-        {/* VITALS — one edit button on the card */}
-        <div className="pc-sec">
-          <SectionHead mark="coral">Vitals</SectionHead>
-          <div className="pc-card padded">
-            {/* Two cells, not four. Hostel and Branch were removed — hostel was the only
-       location signal and the discover deck is no longer campus-scoped, and
-       neither field moves the ladder. The grid keeps its 2×2 shape so the
-       remaining cells stay in the same place. */}
-            <div className="pc-grid">
-              <FieldCell icon={Calendar} color={TILE[1]} label="Year" value={userData.year || '—'} />
-              <FieldCell icon={Sparkle} color={TILE[3]} label="Pronouns" value={userData.pronouns || '—'} />
-            </div>
-            <button className="pr-slotbtn" aria-label="Edit vitals" title="Edit vitals" onClick={() => openEditDrawer({ type: 'vitals' })}>
-              <Pencil size={13} strokeWidth={2.8} />
-            </button>
-          </div>
-        </div>
+              {s.key === 'photo' && (
+                <>
+                  {(formData.photos[0] || preview) ? (
+                    <div className="ob-photo filled">
+                      <img src={formData.photos[0] || preview} alt="Your photo" />
 
-        {/* ABOUT — always present; clearing the bio shows an add-target instead of
-            removing the section and its edit button */}
-        <div className="pc-sec">
-          <SectionHead mark="green">About</SectionHead>
-          {userData.bio ? (
-            <div className="pc-card padded">
-              <p className="pc-bio">{userData.bio}</p>
-              <button className="pr-slotbtn" aria-label="Edit about" title="Edit about" onClick={() => openEditDrawer({ type: 'bio' })}>
-                <Pencil size={13} strokeWidth={2.8} />
-              </button>
-            </div>
-          ) : (
-            <EmptySlot onClick={() => openEditDrawer({ type: 'bio' })} label="Add about you" />
-          )}
-        </div>
+                      {uploading && (
+                        <span className="ob-uploading">
+                          <span className="ob-spin" aria-hidden="true" />
+                          Uploading…
+                        </span>
+                      )}
 
-        {/* SEEKING — now a card so it carries its button like everything else */}
-        <div className="pc-sec">
-          <SectionHead mark="pink">Seeking</SectionHead>
-          <div className="pc-card padded">
-            <div className="pc-pills">
-              {(userData.intent?.length ? userData.intent : ['Connection']).map((it, i) => (
-                <span key={`${it}-${i}`} className="pc-chip acc">{it}</span>
-              ))}
-            </div>
-            <button className="pr-slotbtn" aria-label="Edit seeking" title="Edit seeking" onClick={() => openEditDrawer({ type: 'intent' })}>
-              <Pencil size={13} strokeWidth={2.8} />
-            </button>
-          </div>
-        </div>
+                      {!uploading && (
+                        <>
+                          <button
+                            type="button"
+                            className="ob-photohit"
+                            onClick={pickPhoto}
+                            aria-label="Change your photo"
+                          />
 
-        {/* INTERESTS — always present; an empty list shows an add-target rather
-            than deleting the section (same rule as the prompt slots) */}
-        <div className="pc-sec">
-          <SectionHead mark="yellow" count={interests.length}>Interests</SectionHead>
-          {interests.length > 0 ? (
-            <div className="pc-card padded">
-              <div className="pc-pills">
-                {interests.map((it, i) => (
-                  <span key={`${it}-${i}`} className="pc-chip">{it}</span>
-                ))}
-              </div>
-              <button className="pr-slotbtn" aria-label="Edit interests" title="Edit interests" onClick={() => openEditDrawer({ type: 'interests' })}>
-                <Pencil size={13} strokeWidth={2.8} />
-              </button>
-            </div>
-          ) : (
-            <EmptySlot onClick={() => openEditDrawer({ type: 'interests' })} label="Add interests" />
-          )}
-        </div>
-
-        {/* EXHIBITS — one edit button per prompt card + per photo tile.
-            Prompt slots render whether or not they hold a question: clearing one
-            used to unmount the card and take its edit button with it. */}
-        <div className="pc-sec">
-          <SectionHead mark="coral" count={exhibitsCount}>Exhibits</SectionHead>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-            <PromptSlot slot={0} prompt={prompts[0]} onEdit={() => openEditDrawer({ type: 'prompt', slot: 0 })} />
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-              <PhotoTile src={userData.photos?.[1]} onEdit={() => openPhotoSlot(1)} onRemove={() => removePhoto(1)} onCancel={cancelUpload} emptyLabel={userData.photos?.[1] ? 'Edit photo' : 'Add photo'} loading={uploadSlot === 1} />
-              <PhotoTile src={userData.photos?.[2]} onEdit={() => openPhotoSlot(2)} onRemove={() => removePhoto(2)} onCancel={cancelUpload} emptyLabel={userData.photos?.[2] ? 'Edit photo' : 'Add photo'} loading={uploadSlot === 2} />
-            </div>
-            <PromptSlot slot={1} prompt={prompts[1]} onEdit={() => openEditDrawer({ type: 'prompt', slot: 1 })} />
-            <PhotoTile src={userData.photos?.[3]} wide onEdit={() => openPhotoSlot(3)} onRemove={() => removePhoto(3)} onCancel={cancelUpload} emptyLabel={userData.photos?.[3] ? 'Edit photo' : 'Add wide photo'} loading={uploadSlot === 3} />
-            <PromptSlot slot={2} prompt={prompts[2]} onEdit={() => openEditDrawer({ type: 'prompt', slot: 2 })} />
-          </div>
-        </div>
-      </motion.div>
-
-      {/* ════ EDIT DRAWERS ════
-          Every drawer edits a local `draft` and writes on Save. Dismissing via ✕,
-          the backdrop or the Cancel button all go through requestCloseDrawer, so
-          the unsaved-changes guard can't be sidestepped by using another gesture. */}
-      <AnimatePresence>
-        {drawerConfig && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              onClick={requestCloseDrawer}
-              style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(12,12,14,.62)', zIndex: 100 }}
-            />
-            <motion.div
-              initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
-              transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-              style={{ position: 'fixed', bottom: 0, left: 0, right: 0, height: '80dvh', backgroundColor: C.paper, borderTop: `2px solid ${C.ink}`, borderRadius: '22px 22px 0 0', zIndex: 101, display: 'flex', flexDirection: 'column', boxShadow: '0 -10px 40px rgba(0,0,0,.4)' }}
-            >
-              <div style={{ padding: '16px 20px', borderBottom: `2px solid ${C.ink}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontFamily: F.heavy, fontSize: 18, fontWeight: 400, color: C.ink, letterSpacing: '-.01em', textTransform: 'uppercase' }}>
-                  {drawerConfig.type === 'interests' ? 'Edit interests' : drawerConfig.type === 'intent' ? 'Edit seeking' : drawerConfig.type === 'prompt' ? 'Edit question' : drawerConfig.type === 'vitals' ? 'Edit vitals' : drawerConfig.type === 'identity' ? 'Edit basics' : 'Edit about'}
-                </span>
-                <button onClick={requestCloseDrawer} aria-label="Close editor" style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.card, border: `2px solid ${C.ink}`, borderRadius: 11, boxShadow: `3px 3px 0 ${C.ink}`, cursor: 'pointer', color: C.ink }}>
-                  <X size={16} strokeWidth={3} />
-                </button>
-              </div>
-
-              <div ref={drawerBodyRef} style={{ padding: 22, overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 14 }}>
-                {drawerConfig.type === 'identity' && (
-                  <>
-                    <DraftField value={draft.name} onChange={(v) => setDraft((d) => ({ ...d, name: v }))} max={PROFILE_LIMITS.name} placeholder="Name" />
-                    <select className="pr-select" value={draft.year} onChange={(e) => setDraft((d) => ({ ...d, year: e.target.value }))}>
-                      {config?.years?.map(y => <option key={y} value={y}>{y}</option>)}
-                    </select>
-                  </>
-                )}
-
-                {drawerConfig.type === 'vitals' && (
-                  <>
-                    <select className="pr-select" value={draft.gender} onChange={(e) => setDraft((d) => ({ ...d, gender: e.target.value }))}>
-                      <option value="">Select gender</option>
-                      {config?.genders?.map(g => <option key={g} value={g}>{g}</option>)}
-                    </select>
-                    <select className="pr-select" value={draft.pronouns} onChange={(e) => setDraft((d) => ({ ...d, pronouns: e.target.value }))}>
-                      <option value="">Select pronouns</option>
-                      {config?.pronouns?.map(p => <option key={p} value={p}>{p}</option>)}
-                    </select>
+                          <button
+                            type="button"
+                            className="ob-photox"
+                            onClick={removePhoto}
+                            aria-label="Remove photo"
+                          >
+                            <X size={18} strokeWidth={2.4} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  ) : (
                     <button
                       type="button"
-                      role="switch"
-                      aria-checked={!!draft.gapYear}
-                      onClick={() => { triggerHaptic('light'); setDraft((d) => ({ ...d, gapYear: !d.gapYear })); }}
-                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '13px 14px', borderRadius: 12, border: '2px solid #191919', background: draft.gapYear ? '#FFD43D' : '#FFFFFF', cursor: 'pointer', fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 600, color: '#191919', boxShadow: '3px 3px 0 #191919' }}
+                      className="ob-photo"
+                      onClick={pickPhoto}
+                      disabled={uploading}
+                      aria-label="Add your photo"
                     >
-                      <span>I'm on a gap year</span>
-                      <span aria-hidden="true">{draft.gapYear ? 'ON' : 'OFF'}</span>
+                      <span className="ob-photoempty">
+                        <span className="ob-cam">
+                          <Camera size={29} strokeWidth={1.9} />
+                        </span>
+                        Tap to choose your photo
+                      </span>
                     </button>
-                  </>
-                )}
+                  )}
 
-                {/* Campus badge — privacy opt-out for the deck card.
-                    Server STRIPS the college from every deck payload when this is
-                    false (routes/discover.js), so turning it off means the data
-                    never leaves the database, not that it's hidden in the UI. */}
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={userData.showCollege !== false}
-                  onClick={() => {
-                    const next = !(userData.showCollege !== false);
-                    triggerHaptic('light');
-                    updateProfile({ showCollege: next });
-                    toast.success(next ? 'Others can now see your college.' : 'Your college is now hidden from the feed.');
-                  }}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-                    width: '100%', marginTop: 18, padding: '14px 0', border: 'none',
-                    borderTop: `1px solid ${C.hair}`, background: 'transparent',
-                    cursor: 'pointer', textAlign: 'left',
-                  }}
-                >
-                  <span>
-                    <span style={{ fontFamily: F.body, fontSize: 14.5, fontWeight: 700, color: C.ink, display: 'block' }}>
-                      Campus badge
-                    </span>
-                    <span style={{ fontFamily: F.body, fontSize: 12, fontWeight: 500, color: C.ink2, marginTop: 3, display: 'block', lineHeight: 1.4 }}>
-                      {userData.showCollege !== false
-                        ? `Showing "${userData.college || 'your college'}" on your card`
-                        : 'Hidden. Nobody can see which college you attend.'}
-                    </span>
-                  </span>
-                  <span style={{
-                    width: 46, height: 26, flexShrink: 0, borderRadius: 999,
-                    border: `2px solid ${C.ink}`, position: 'relative',
-                    background: userData.showCollege !== false ? C.yellow : C.hair,
-                  }}>
-                    <span style={{
-                      position: 'absolute', top: 2, left: userData.showCollege !== false ? 22 : 2,
-                      width: 18, height: 18, borderRadius: '50%', background: C.card,
-                      border: `2px solid ${C.ink}`, boxSizing: 'border-box',
-                      transition: 'left 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
-                    }} />
-                  </span>
-                </button>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={onFile}
+                    style={{ display: 'none' }}
+                  />
+                </>
+              )}
 
-                {drawerConfig.type === 'bio' && (
-                  <DraftField multiline value={draft.bio} onChange={(v) => setDraft((d) => ({ ...d, bio: v }))} max={PROFILE_LIMITS.bio} placeholder="Write about yourself…" minHeight={150} />
-                )}
+              {s.key === 'gender' && (
+                <div className="ob-chips">
+                  {genders.map((g) => (
+                    <button
+                      key={g}
+                      type="button"
+                      className={`ob-chip${formData.gender === g ? ' on' : ''}`}
+                      aria-pressed={formData.gender === g}
+                      onClick={() => {
+                        update({ gender: g });
+                        triggerHaptic('light');
+                      }}
+                    >
+                      {formData.gender === g && <Check size={17} strokeWidth={2.5} />}
+                      {g}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-                {drawerConfig.type === 'prompt' && (
-                  <>
-                    <DraftField multiline value={draft.question} onChange={(v) => setDraft((d) => ({ ...d, question: v }))} max={PROMPT_QUESTION_MAX} placeholder="Pick one below or write your own…" minHeight={70} />
-                    <DraftField multiline value={draft.answer} onChange={(v) => setDraft((d) => ({ ...d, answer: v }))} max={PROMPT_ANSWER_MAX} placeholder="Your answer…" minHeight={100} />
-                    <div style={{ height: 1, backgroundColor: C.hair, margin: '6px 0' }} />
-                    <span className="pc-slotlabel">Or pick one</span>
-                    {config?.prompts?.map((p, i) => {
-                      const promptText = typeof p === 'string' ? p : p.question;
-                      if (!promptText) return null;
-                      return (
-                        <button
-                          key={i}
-                          className={`pr-chipbtn${draft.question === promptText ? ' on' : ''}`}
-                          style={{ borderRadius: 11, textAlign: 'left', textTransform: 'none', fontFamily: F.body, fontSize: 13.5, fontWeight: 600, letterSpacing: 0 }}
-                          onClick={() => {
-                            setDraft((d) => {
-                              if (d.question === promptText) return d;
-                              // Choosing a DIFFERENT question drops the old answer,
-                              // which was written for the previous one. Save commits both.
-                              return { question: promptText, answer: '' };
-                            });
-                            // The bank sits at the bottom of a long drawer, so picking
-                            // from it leaves you staring at the bottom of the list with
-                            // no view of the question and answer that just changed.
-                            // Scroll straight back up to them.
-                            scrollDrawerToTop();
-                          }}
-                        >
-                          “{promptText}”
-                        </button>
-                      );
-                    })}
-                    {draft.question && (
-                      <button className="pr-slam danger" onClick={() => setDraft({ question: '', answer: '' })}>
-                        Remove question
-                      </button>
-                    )}
-                  </>
-                )}
+              {s.key === 'interestedIn' && (
+                <div className="ob-chips">
+                  {showOptions.map((g) => (
+                    <button
+                      key={g}
+                      type="button"
+                      className={`ob-chip${formData.interestedIn.includes(g) ? ' on' : ''}`}
+                      aria-pressed={formData.interestedIn.includes(g)}
+                      onClick={() => toggleIn('interestedIn', g)}
+                    >
+                      {formData.interestedIn.includes(g) && (
+                        <Check size={17} strokeWidth={2.5} />
+                      )}
+                      {g}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-                {(drawerConfig.type === 'interests' || drawerConfig.type === 'intent') && (
-                  <>
-                    {drawerConfig.type === 'interests' && (
-                      <p style={{ fontFamily: F.body, fontSize: 12.5, fontWeight: 500, color: C.ink2, marginBottom: 14 }}>
-                        Pick up to 6 ({draft.list.length}/6).
+              {s.key === 'year' && (
+                <div className="ob-chips">
+                  {(config?.years || ['UG', 'PG']).map((y) => (
+                    <button
+                      key={y}
+                      type="button"
+                      className={`ob-chip${formData.year === y ? ' on' : ''}`}
+                      aria-pressed={formData.year === y}
+                      onClick={() => {
+                        update({ year: y });
+                        triggerHaptic('light');
+                      }}
+                    >
+                      {formData.year === y && <Check size={17} strokeWidth={2.5} />}
+                      {y}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {s.key === 'intent' && (
+                <div className="ob-chips">
+                  {intentOptions.map((it) => (
+                    <button
+                      key={it}
+                      type="button"
+                      className={`ob-chip${formData.intent.includes(it) ? ' on' : ''}`}
+                      aria-pressed={formData.intent.includes(it)}
+                      onClick={() => toggleIn('intent', it)}
+                    >
+                      {formData.intent.includes(it) && (
+                        <Check size={17} strokeWidth={2.5} />
+                      )}
+                      {it}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {s.key === 'location' && (
+                <div className="ob-location">
+                  {locationReading ? (
+                    <p className="ob-location-ok">
+                      <Check size={17} strokeWidth={2.5} />
+                      <span>
+                        Location shared. We'll show you people near you first.
+                      </span>
+                    </p>
+                  ) : locDeclined ? (
+                    <>
+                      <p className="ob-location-ok">
+                        <Check size={17} strokeWidth={2.5} />
+                        <span>
+                          No problem — we'll rank your feed using your college location.
+                        </span>
                       </p>
-                    )}
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 9 }}>
-                      {(drawerConfig.type === 'interests' ? config?.interests : config?.intents)?.map(item => {
-                        // Read from the DRAFT, not from userData: the limit and the
-                        // highlight both have to reflect the pending selection, or
-                        // the chips fight the thing you just tapped.
-                        const isActive = draft.list.includes(item);
-                        /* Only interests are capped. There is no intent limit any more, so a person who
-                           is genuinely open to all three can say so — previously the
-                           third chip went disabled with no explanation. */
-                        const isAtLimit = !isActive
-                          && drawerConfig.type === 'interests'
-                          && draft.list.length >= MAX_INTERESTS;
-                        return (
-                          <button
-                            key={item}
-                            disabled={isAtLimit}
-                            className={`pr-chipbtn${isActive ? ' on' : ''}`}
-                            aria-pressed={isActive}
-                            onClick={() => {
-                              triggerHaptic('light');
-                              setDraft((d) => ({
-                                list: d.list.includes(item)
-                                  ? d.list.filter((i) => i !== item)
-                                  : [...d.list, item],
-                              }));
-                            }}
-                          >
-                            {item}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </>
-                )}
-              </div>
 
-              <div className="pr-drawerfoot">
-                <button className="pr-slam" onClick={requestCloseDrawer}>Cancel</button>
-                <button className="pr-slam yellow" disabled={!isDrawerDirty} onClick={saveDrawer}>
-                  Save changes
-                </button>
-              </div>
+                      <p className="ob-location-copy">
+                        You can switch to your real location any time in Settings.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="ob-location-copy">
+                        We use a rounded location to help you discover people nearby,
+                        beyond your campus. Your exact location is never shown to anyone.
+                      </p>
+
+                      <button
+                        type="button"
+                        className="ob-loc-btn"
+                        onClick={grantLocation}
+                        disabled={locBusy}
+                      >
+                        {locBusy ? 'Finding you…' : 'Use my location'}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="ob-loc-alt"
+                        onClick={() => {
+                          setLocDeclined(true);
+                          setLocError('');
+                          triggerHaptic('light');
+                        }}
+                        disabled={locBusy}
+                      >
+                        Use my college location instead
+                      </button>
+
+                      {locError && (
+                        <p className="ob-loc-note">
+                          {locError} You can turn this on later in Settings, or use
+                          your college location instead.
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+          </motion.div>
+        </AnimatePresence>
 
+        {banner}
+
+        <div className="ob-actions">
+          {isLast ? (
+            <button
+              type="button"
+              className="ob-cta"
+              onClick={publish}
+              disabled={!allDone || uploading || publishing}
+            >
+              {publishing ? 'Publishing…' : 'Publish & start matching'}
+              <ChevronRight size={20} strokeWidth={2.5} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="ob-cta"
+              onClick={next}
+              disabled={!stepDone(step)}
+            >
+              Continue
+              <ChevronRight size={20} strokeWidth={2.5} />
+            </button>
+          )}
+
+          {s.foot && <p className="ob-foot">{s.foot}</p>}
+        </div>
+      </div>
     </div>
   );
 };
 
-export default Profile; 
+export default Onboarding;
 
 ```
 

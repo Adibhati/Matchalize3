@@ -13,7 +13,7 @@ import { toast } from '../utils/toast';
 import { Sparkle, MoreVertical, Calendar, Flag } from 'lucide-react';
 import neu from '../styles/neu';
 
-/* Exact Splash.jsx theme. Existing neu tokens keep their names. */
+/* Neubrutalist palette inspired by the supplied reference; existing neu tokens keep their names. */
 const F = {
   heavy: "'Barlow Condensed', sans-serif",
   body: "'Space Grotesk', sans-serif",
@@ -22,19 +22,19 @@ const F = {
 
 const C = {
   ...neu,
-  ink: '#111211',
-  ink2: '#383832',
-  ink3: '#77766F',
-  paper: '#F1EDE2',
-  card: '#F8F5EC',
-  desk: '#111211',
-  yellow: '#E0A15E',
-  coral: '#C96F68',
-  green: '#779477',
-  pink: '#A3A3A1',
-  red: '#A84F4A',
-  hair: 'rgba(17,18,17,.22)',
-  line: 'rgba(241,237,226,.2)',
+  ink: '#171414',
+  ink2: '#393130',
+  ink3: '#6E6160',
+  paper: '#FFF9F4',
+  card: '#FFFCF8',
+  desk: '#FFF9F4',
+  yellow: '#FFE76A',
+  coral: '#FF7399',
+  green: '#B8F0C7',
+  pink: '#C8A7FF',
+  red: '#D9485D',
+  hair: '#171414',
+  line: 'rgba(23, 20, 20, .22)',
 };
 
 const FALLBACK_IMG =
@@ -59,6 +59,9 @@ const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
 const PROFILE_CARD_CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
+  /* Match the device safe area to the cream header/canvas; keep blush as an accent only. */
+  html, body, #root { background-color: #FFF9F4 !important; }
+
   .pc-root {
     --paper: ${C.paper};
     --card: ${C.card};
@@ -71,26 +74,33 @@ const PROFILE_CARD_CSS = `
     --green: ${C.green};
     --pink: ${C.pink};
     --red: ${C.red};
-    --bw: 1px;
-    --r: 8px;
+    --bw: 2px;
+    --r: 16px;
     --ease: cubic-bezier(.2,0,0,1);
 
     position: relative;
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background: #111211;
+    background: #FFF9F4;
     font-family: ${F.body};
     color: var(--ink);
     -webkit-font-smoothing: antialiased;
   }
 
-  .pc-root ::selection {
-    background: var(--coral);
-    color: var(--ink);
+  .pc-root::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    opacity: 0;
+    background: none;
   }
 
-  /* Natural, full-bleed profile photography. */
+  .pc-root ::selection { background: var(--yellow); color: var(--ink); }
+
+  /* Keep the user's photography full-bleed; the structured sheet supplies the graphic frame. */
   .pc-heroWrap {
     position: absolute;
     inset: 0;
@@ -105,7 +115,7 @@ const PROFILE_CARD_CSS = `
     object-fit: cover;
     display: block;
     opacity: 0;
-    transition: opacity .4s ease-out;
+    transition: opacity .35s ease-out;
     -webkit-user-drag: none;
   }
 
@@ -115,15 +125,10 @@ const PROFILE_CARD_CSS = `
     position: absolute;
     inset: 0;
     pointer-events: none;
-    background: linear-gradient(
-      to top,
-      rgba(17,18,17,.65) 0%,
-      rgba(17,18,17,.08) 44%,
-      rgba(17,18,17,.20) 100%
-    );
+    background: linear-gradient(to top, rgba(23,20,20,.54) 0%, rgba(23,20,20,.07) 45%, rgba(23,20,20,.13) 100%);
   }
 
-  /* Paper panel: editorial screen, thin ink outline, no oversized offset shadow. */
+  /* Cream paper panel, ink outline and crisp offset shadow. */
   .pc-sheet {
     position: absolute;
     left: ${SIDE_MARGIN}px;
@@ -131,9 +136,9 @@ const PROFILE_CARD_CSS = `
     top: 0;
     z-index: 30;
     background: var(--paper);
-    border: var(--bw) solid var(--ink);
-    border-radius: 15px 15px 4px 4px;
-    box-shadow: 0 14px 32px rgba(0,0,0,.22);
+    border: 2px solid var(--ink);
+    border-radius: 24px 24px 14px 14px;
+    box-shadow: 6px 6px 0 var(--ink);
     touch-action: none;
     cursor: grab;
     user-select: none;
@@ -151,17 +156,16 @@ const PROFILE_CARD_CSS = `
 
   .pc-grabber {
     width: 42px;
-    height: 4px;
-    border-radius: 0;
+    height: 5px;
+    border-radius: 999px;
     margin: 0 auto;
     flex-shrink: 0;
-    background: var(--ink-3);
+    background: var(--ink);
     transition: none;
   }
 
   .pc-sheet:active .pc-grabber { background: var(--coral); }
 
-  /* Name-led identity panel. */
   .pc-id { position: relative; }
 
   .pc-idrow {
@@ -175,24 +179,20 @@ const PROFILE_CARD_CSS = `
     font-family: ${F.heavy};
     font-size: 39px;
     font-weight: 800;
-    letter-spacing: -.025em;
-    line-height: .92;
+    letter-spacing: -.035em;
+    line-height: .94;
     color: var(--ink);
     margin: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    background-image: linear-gradient(
-      180deg,
-      transparent 77%,
-      rgba(224,161,94,.78) 77%
-    );
+    background-image: linear-gradient(180deg, transparent 78%, var(--yellow) 78%);
     padding: 0 6px 5px 0;
   }
 
   .pc-age {
     font-family: ${F.body};
-    font-weight: 600;
+    font-weight: 700;
     font-size: .65em;
     letter-spacing: 0;
     color: var(--ink-2);
@@ -220,7 +220,6 @@ const PROFILE_CARD_CSS = `
     margin-top: 3px;
   }
 
-  /* Utility menu. */
   .pc-iconbtn {
     width: 39px;
     height: 39px;
@@ -229,25 +228,27 @@ const PROFILE_CARD_CSS = `
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    border: var(--bw) solid var(--ink);
-    border-radius: 4px;
-    background: transparent;
+    border: 2px solid var(--ink);
+    border-radius: 12px;
+    background: var(--card);
     color: var(--ink);
-    box-shadow: none;
-    transition: background .12s ease, color .12s ease;
+    box-shadow: 3px 3px 0 var(--ink);
+    transition: background .14s ease, color .14s ease, box-shadow .14s ease, transform .14s ease;
   }
 
   .pc-iconbtn:active,
   .pc-iconbtn.pressed {
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--yellow);
+    color: var(--ink);
+    box-shadow: 1px 1px 0 var(--ink);
+    transform: translate(2px, 2px);
   }
 
-  /* Report menu: a ruled utility row. */
   .pc-menurow {
-    border-top: 1px solid var(--hair);
-    border-bottom: 1px solid var(--hair);
+    border-top: 2px solid var(--ink);
+    border-bottom: 2px solid var(--ink);
     overflow: hidden;
+    background: var(--card);
   }
 
   .pc-menubtn {
@@ -256,31 +257,23 @@ const PROFILE_CARD_CSS = `
     gap: 10px;
     width: 100%;
     height: 47px;
-    padding: 0 4px;
+    padding: 0 8px;
     background: none;
     border: none;
     cursor: pointer;
-    border-radius: 0;
+    border-radius: 8px;
     font-family: ${F.mono};
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: .12em;
+    letter-spacing: .1em;
     text-transform: uppercase;
     color: var(--red);
-    transition: none;
+    transition: background .14s ease, color .14s ease, padding-left .14s ease;
   }
 
-  .pc-menubtn:active {
-    background: var(--red);
-    color: #fff;
-  }
+  .pc-menubtn:active { background: #FFE4E5; color: var(--red); }
 
-  /* Section headers: condensed UI labels with small colour markers. */
-  .pc-sec {
-    display: flex;
-    flex-direction: column;
-    flex-shrink: 0;
-  }
+  .pc-sec { display: flex; flex-direction: column; flex-shrink: 0; }
 
   .pc-shead {
     display: flex;
@@ -288,15 +281,15 @@ const PROFILE_CARD_CSS = `
     gap: 9px;
     margin: 0 0 12px;
     padding-bottom: 8px;
-    border-bottom: 1px solid var(--hair);
+    border-bottom: 1.5px solid var(--ink);
   }
 
   .pc-mark {
-    width: 9px;
-    height: 9px;
+    width: 10px;
+    height: 10px;
     flex-shrink: 0;
-    border: 1px solid var(--ink);
-    border-radius: 0;
+    border: 2px solid var(--ink);
+    border-radius: 3px;
   }
 
   .pc-mark.yellow { background: var(--yellow); }
@@ -308,7 +301,7 @@ const PROFILE_CARD_CSS = `
     font-family: ${F.mono};
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: .14em;
+    letter-spacing: .12em;
     text-transform: uppercase;
     color: var(--ink);
   }
@@ -317,42 +310,32 @@ const PROFILE_CARD_CSS = `
     margin-left: auto;
     font-family: ${F.mono};
     font-size: 9px;
-    font-weight: 400;
+    font-weight: 600;
     color: var(--ink-3);
     font-variant-numeric: tabular-nums;
   }
 
-  /* Flat, outlined information panels. */
   .pc-card {
     background: var(--card);
-    border: var(--bw) solid var(--ink);
-    border-radius: 5px;
-    box-shadow: none;
+    border: 2px solid var(--ink);
+    border-radius: 16px;
+    box-shadow: 4px 4px 0 var(--ink);
     position: relative;
   }
 
   .pc-card.padded { padding: 15px; }
 
-  /* Vitals grid. */
-  .pc-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 15px 12px;
-  }
+  .pc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px 12px; }
 
-  .pc-cell {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    min-width: 0;
-  }
+  .pc-cell { display: flex; align-items: center; gap: 9px; min-width: 0; }
 
   .pc-tile {
     width: 31px;
     height: 31px;
     flex-shrink: 0;
-    border: var(--bw) solid var(--ink);
-    border-radius: 3px;
+    border: 2px solid var(--ink);
+    border-radius: 9px;
+    box-shadow: 2px 2px 0 var(--ink);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -370,7 +353,7 @@ const PROFILE_CARD_CSS = `
     font-family: ${F.mono};
     font-size: 8px;
     font-weight: 700;
-    letter-spacing: .12em;
+    letter-spacing: .11em;
     text-transform: uppercase;
     color: var(--ink-3);
   }
@@ -386,7 +369,6 @@ const PROFILE_CARD_CSS = `
     font-variant-numeric: tabular-nums;
   }
 
-  /* About text. */
   .pc-bio {
     font-size: 14px;
     font-weight: 500;
@@ -397,43 +379,39 @@ const PROFILE_CARD_CSS = `
     text-wrap: pretty;
   }
 
-  /* Intent and interest tags. */
-  .pc-pills {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
+  .pc-pills { display: flex; flex-wrap: wrap; gap: 9px; }
 
   .pc-chip {
     display: inline-block;
     padding: 7px 11px;
-    border: var(--bw) solid var(--ink);
-    border-radius: 999px;
+    border: 2px solid var(--ink);
+    border-radius: 10px;
     font-family: ${F.mono};
     font-size: 9px;
     font-weight: 700;
-    letter-spacing: .075em;
+    letter-spacing: .055em;
     text-transform: uppercase;
     background: var(--card);
     color: var(--ink);
-    transition: background .12s ease, color .12s ease;
+    box-shadow: 3px 3px 0 var(--ink);
+    transition: background .14s ease, color .14s ease, box-shadow .14s ease, transform .14s ease;
   }
 
-  .pc-chip.acc {
-    background: var(--yellow);
-  }
+  .pc-chip.acc { background: var(--yellow); }
 
   .pc-chip:active {
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--pink);
+    color: var(--ink);
     border-color: var(--ink);
+    box-shadow: 1px 1px 0 var(--ink);
+    transform: translate(2px, 2px);
   }
 
-  /* Prompt cards: mono label, expressive answer. */
   .pc-prompt {
     padding: 15px;
     cursor: pointer;
-    transition: background .12s ease, color .12s ease;
+    background: var(--card);
+    transition: background .14s ease, box-shadow .14s ease, transform .14s ease;
   }
 
   .pc-promptq {
@@ -445,7 +423,6 @@ const PROFILE_CARD_CSS = `
     color: var(--ink-3);
     margin: 0 0 8px;
     word-break: break-word;
-    transition: none;
   }
 
   .pc-prompta {
@@ -457,34 +434,31 @@ const PROFILE_CARD_CSS = `
     word-break: break-word;
     overflow-wrap: anywhere;
     text-wrap: pretty;
-    transition: none;
   }
 
   .pc-prompt:active {
-    background: var(--ink);
+    background: #FFF0C0;
     border-color: var(--ink);
+    box-shadow: 1px 1px 0 var(--ink);
+    transform: translate(2px, 2px);
   }
 
-  .pc-prompt:active .pc-prompta { color: var(--paper); }
-  .pc-prompt:active .pc-promptq { color: rgba(241,237,226,.6); }
-
-  /* Gallery. */
   .pc-ph {
     background: var(--card);
-    border: var(--bw) solid var(--ink);
-    border-radius: 5px;
-    box-shadow: none;
+    border: 2px solid var(--ink);
+    border-radius: 15px;
+    box-shadow: 4px 4px 0 var(--ink);
     padding: 5px;
-    transition: border-color .12s ease;
+    transition: border-color .14s ease, box-shadow .14s ease, transform .14s ease;
   }
 
-  .pc-ph:active { border-color: var(--coral); }
+  .pc-ph:active { box-shadow: 1px 1px 0 var(--ink); transform: translate(2px, 2px); }
 
   .pc-ph-in {
-    border-radius: 2px;
+    border-radius: 10px;
     overflow: hidden;
     aspect-ratio: 1 / 1;
-    background: var(--hair);
+    background: #FFE4E5;
   }
 
   .pc-ph-in.wide { aspect-ratio: 16 / 10; }
@@ -503,36 +477,31 @@ const PROFILE_CARD_CSS = `
 
   @media (hover: hover) and (pointer: fine) {
     .pc-iconbtn:hover {
-      background: var(--yellow);
-      color: var(--ink);
+      background: var(--pink);
+      box-shadow: 5px 5px 0 var(--ink);
+      transform: translate(-2px, -2px);
     }
 
-    .pc-iconbtn.pressed:hover {
-      background: var(--ink);
-      color: var(--paper);
-    }
-
-    .pc-menubtn:hover { background: rgba(168,79,74,.08); }
-    .pc-chip:hover { background: rgba(224,161,94,.2); }
+    .pc-iconbtn.pressed:hover { background: var(--yellow); }
+    .pc-menubtn:hover { background: #FFE4E5; padding-left: 12px; }
+    .pc-chip:hover { background: var(--pink); }
     .pc-chip.acc:hover { background: var(--yellow); }
-    .pc-prompt:hover { background: #E9E4D8; }
-    .pc-ph:hover { border-color: var(--coral); }
+    .pc-prompt:hover { background: #FFF0C0; box-shadow: 6px 6px 0 var(--ink); transform: translate(-2px, -2px); }
+    .pc-ph:hover { box-shadow: 6px 6px 0 var(--ink); transform: translate(-2px, -2px); }
   }
 
   .pc-sheet:focus-visible,
   .pc-iconbtn:focus-visible,
-  .pc-menubtn:focus-visible {
-    outline: 2px solid var(--coral);
+  .pc-menubtn:focus-visible,
+  .pc-chip:focus-visible,
+  .pc-prompt:focus-visible,
+  .pc-ph:focus-visible {
+    outline: 3px solid var(--yellow);
     outline-offset: 3px;
   }
 
   @media (max-width: 390px) {
-    .pc-sheet {
-      padding-left: 14px;
-      padding-right: 14px;
-      gap: 17px;
-    }
-
+    .pc-sheet { padding-left: 14px; padding-right: 14px; gap: 17px; }
     .pc-name { font-size: 34px; }
     .pc-grid { gap: 12px 8px; }
     .pc-cell { gap: 7px; }
@@ -541,7 +510,7 @@ const PROFILE_CARD_CSS = `
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .pc-hero, .pc-ph-in img, .pc-iconbtn, .pc-ph { transition: none; }
+    .pc-hero, .pc-ph-in img, .pc-iconbtn, .pc-chip, .pc-prompt, .pc-ph { transition: none !important; }
   }
 `;
 

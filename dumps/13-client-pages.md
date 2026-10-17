@@ -1,1676 +1,2068 @@
 # Chunk 13 — Client Pages
 
-> Matchalize · `client-pages` · files 13 of 25 chunks · 2 file(s) · 76 KB · ~22,093 tokens
-> Generated 2026-10-09 14:03.
+> Matchalize · `client-pages` · files 13 of 27 chunks · 2 file(s) · 93 KB · ~27,204 tokens
+> Generated 2026-10-17 20:14.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
-> - `./client/src/pages/Discover.jsx`
-> - `./client/src/pages/Matches.jsx`
+> - `./client/src/pages/AuthFlow.jsx`
+> - `./client/src/pages/Chat.jsx`
 
 ---
-### ./client/src/pages/Discover.jsx
+### ./client/src/pages/AuthFlow.jsx
 
 ```
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import ProfileCard from '../components/ProfileCard';
-import { closeAllPopouts } from '../components/PopoutItem';
-import DeckActions from '../components/DeckActions';
-import ProfileCardSkeleton from '../components/ProfileCardSkeleton';
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
+import { Search, CheckCircle2 } from 'lucide-react';
 import { api } from '../utils/api';
-import { useAuth } from '../utils/AuthContext';
-import { useAppConfig } from '../utils/AppConfigContext';
-import { canInteract, readLadder } from '../utils/ladder';
-import ShadowbanBanner from '../components/ShadowbanBanner';
-import LearnMoreSheet from '../components/LearnMoreSheet';
-import { triggerHaptic } from '../utils/haptics';
-import { toast } from '../utils/toast';
-import { discoverStore, initDiscoverStore, saveDiscoverStore, resetDiscoverStore } from '../utils/discoverStore';
+import { useChromeColor } from '../utils/chrome';
 import { useIsDesktop } from '../utils/useIsDesktop';
-import {
-  syncLocationIfPermitted,
-  releaseEphemeralLocation,
-  watchGeolocationPermission,
-  GEO_PERMISSION,
-} from '../utils/locationSync';
-import shuffle from '../utils/shuffle';
+import { triggerHaptic } from '../utils/haptics';
+import { useAuth } from '../utils/AuthContext';
 import socket from '../utils/socket';
-import LocationNotice from '../components/LocationNotice';
-import DiscoverRebuildOverlay from '../components/DiscoverRebuildOverlay';
-import { RotateCw, Compass, AlertTriangle, X, Undo2, Heart } from 'lucide-react';
+import neu from '../styles/neu';
+import campusPhoto from '../assets/college-town-aesthetic-cute-college-town.jpg';
+import AccountSuspendedScreen from '../components/AccountSuspendedScreen';
+import { AUTH_CSS, MOBILE_AUTH_CSS, AUTH_SCENE_CSS, AUTH_SMOOTH_CSS } from './Auth.jsx';
 
-/* Locked tokens — neubrutalism, same family as ProfileCard */
-const t = {
-  desk: '#131313',
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  pink: '#FFA3C6',
-  red: '#E5484D',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
+const M = neu;
+
+const STEP_ORDER = ['college', 'email', 'request', 'code', 'next'];
+const EASE_OUT = [0.22, 1, 0.36, 1];
+
+/* The shared scene sheet was written for `otp`/`verify` step names. Map this
+   flow's names onto those so each step still gets its own photo grade. */
+const SCENE_KIND = {
+  college: 'college',
+  email: 'email',
+  request: 'request',
+  code: 'otp',
+  next: 'verify',
 };
 
-const slideVariants = {
-  enter: (direction) => ({
-    opacity: 0,
-    scale: 0.92,
-    filter: 'blur(12px)',
-    zIndex: 2,
-  }),
-  center: {
-    opacity: 1,
-    scale: 1,
-    filter: 'blur(0px)',
-    zIndex: 2,
-  },
-  exit: (direction) => ({
-    opacity: 0,
-    scale: 0.95,
-    filter: 'blur(8px)',
-    zIndex: 1,
-  }),
-};
+/* Everything the four shared sheets do not know about: the animated per-step
+   surface, the two step palettes they predate, and the handful of classes this
+   markup introduces. Loaded last so it wins on ties. */
+const FLOW_FIX_CSS = `
+  /* Step palettes the shared sheets predate. Both stay on the cream language;
+     flip these to the .au-root-otp dark tokens if you want the old code screen. */
+  .au-root-code,
+  .au-root-next {
+    --paper: #F1EDE2;
+    --ink: #111211;
+    --ink2: #383832;
+    --muted: #77766F;
+    --card: #F8F5EC;
+    --accent: #779477;
+    --tint: rgba(119,148,119,.18);
+  }
 
-const springTransition = {
-  type: 'spring',
-  stiffness: 220,
-  damping: 18,
-  mass: 1,
-};
+  /* .au-screen is the animated per-step surface, so the shared sheets' rules
+     for .au-step's direct grid children no longer match anything. Put the
+     two-column grid back on .au-screen instead. */
+  .au-root .au-step {
+    display: flex;
+    flex-direction: column;
+    /* Keyboard lift is written as an inline transform; let it ease. */
+    transition: transform .28s cubic-bezier(.32,.72,0,1);
+  }
 
-/* How many times the gate will re-read `/auth/me` on its own before handing
-   recovery to the online/visibility listeners. See the backoff effect below. */
-const MAX_GATE_RETRIES = 2;
+  .au-root .au-screen {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, .72fr);
+    align-content: center;
+    align-items: center;
+    gap: 19px clamp(22px, 4vw, 45px);
+    width: 100%;
+    min-width: 0;
+  }
 
-/* `onGoToProfile` — raised by the gate toast's action button. Navigating is the
-   PARENT's job: Discover doesn't own the tab bar, and routing from here would
-   mean reaching into AppShell's state. */
-const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
+  .au-screen > .au-headline { grid-column: 1; }
+  .au-screen > .au-sub { grid-column: 1; }
+
+  .au-screen > .au-art {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .au-screen > *:not(.au-headline):not(.au-sub):not(.au-art) {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+
+  .au-huh {
+    font-family: 'Bowlby One SC', ${M.fontHeavy};
+    font-weight: 400;
+    letter-spacing: -.055em;
+    white-space: nowrap;
+    text-shadow: 1.5px 1.5px 0 ${M.yellow};
+  }
+
+  /* "change" affordance inside the picked-college strip */
+  .au-strip { flex-wrap: wrap; }
+  .au-strip > span { min-width: 0; overflow-wrap: anywhere; }
+
+  .au-strip-change {
+    align-self: auto;
+    margin-left: auto;
+    min-height: 0;
+    padding: 4px 2px;
+    background: transparent;
+    color: ${M.ink2};
+    border: 0;
+    border-bottom: 1.5px solid currentColor;
+    font: 700 11px/1 ${M.fontMono};
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .au-strip-change:active { opacity: .6; }
+
+  .au-rowsep {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .au-rowsep .au-ghost { align-self: auto; }
+  /* .au-input is width:100%; two of them in a row need to share instead. */
+  .au-rowsep .au-input { flex: 1 1 0; min-width: 0; }
+
+  /* The no-match block is one message plus one action, not one grid cell. */
+  .au-results > div { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 12px; }
+  .au-results > div .au-empty { padding: 0; }
+
+  .au-nextlist {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 0;
+  }
+
+  .au-nextrow {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    padding: 13px 2px;
+    border-bottom: 1px solid rgba(17,18,17,.1);
+    color: ${M.ink2};
+    font: 500 14px/1.5 ${M.fontBody};
+  }
+  .au-nextrow:last-child { border-bottom: 0; }
+
+  .au-nextrow > b {
+    flex: 0 0 auto;
+    color: ${M.ink};
+    font: 700 11px/1 ${M.fontMono};
+    letter-spacing: .08em;
+  }
+
+  .au-nextrow > span { min-width: 0; }
+  .au-nextrow strong { color: ${M.ink}; font-weight: 700; }
+
+  .au-verify-note {
+    margin: 0;
+    color: ${M.ink2};
+    font: 700 11px/1.6 ${M.fontMono};
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+
+  @media (max-width: 700px) {
+    .au-root.au-root-code,
+    .au-root.au-root-next {
+      --ink: ${M.ink};
+      --ink2: ${M.ink2};
+      --muted: ${M.ink2};
+      --paper: ${M.paper};
+      --card: ${M.card};
+      --accent: ${M.green};
+      --tint: rgba(91,217,138,.14);
+    }
+
+    .au-screen {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 13px;
+    }
+
+    .au-screen > .au-art { display: none !important; }
+
+    /* The lifted form leaves the keyboard's band empty; keep the photo out of
+       it rather than letting the page show through behind the keys. */
+    .au-root .au-campus-scene::after {
+      display: block;
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: var(--kb, 0px);
+      background: ${M.paper};
+      pointer-events: none;
+      transition: height .18s ease;
+    }
+  }
+`;
+
+/* Desktop-only little illustrations (mobile uses the campus photo scene). */
+function StepArt({ kind }) {
+  if (kind === 'college') {
+    return (
+      <svg viewBox="0 0 230 140" aria-hidden="true">
+        <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="34" y="58" width="104" height="56" rx="6" fill="var(--tint)" stroke="var(--ink)" strokeWidth="3" />
+          <path d="M28 58 86 26l58 32" stroke="var(--ink)" strokeWidth="3" />
+          <rect x="76" y="76" width="20" height="38" rx="3" fill="var(--accent)" stroke="var(--ink)" strokeWidth="3" />
+          <circle cx="56" cy="76" r="6" fill="var(--paper)" stroke="var(--ink)" strokeWidth="3" />
+          <circle cx="116" cy="76" r="6" fill="var(--paper)" stroke="var(--ink)" strokeWidth="3" />
+          <g className="art-float">
+            <circle cx="168" cy="62" r="26" fill="var(--card)" stroke="var(--ink)" strokeWidth="3.5" />
+            <line x1="186" y1="82" x2="206" y2="104" stroke="var(--ink)" strokeWidth="5" />
+          </g>
+        </g>
+      </svg>
+    );
+  }
+  if (kind === 'email') {
+    return (
+      <svg viewBox="0 0 230 140" aria-hidden="true">
+        <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+          <g className="art-float">
+            <rect x="48" y="42" width="134" height="86" rx="10" fill="var(--card)" stroke="var(--ink)" strokeWidth="3.5" />
+            <path d="M52 50l63 46 63-46" stroke="var(--ink)" strokeWidth="3.5" />
+          </g>
+          <circle className="art-pulse" cx="196" cy="36" r="10" fill="var(--accent)" stroke="var(--ink)" strokeWidth="3" />
+          <path d="M28 96h12M22 112h20" stroke="var(--ink)" strokeWidth="3.5" />
+        </g>
+      </svg>
+    );
+  }
+  if (kind === 'code') {
+    return (
+      <svg viewBox="0 0 230 140" aria-hidden="true">
+        <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+          <g className="art-float">
+            <rect x="40" y="44" width="44" height="58" rx="10" fill="var(--card)" stroke="var(--ink)" strokeWidth="3.5" />
+            <rect x="93" y="30" width="44" height="58" rx="10" fill="var(--accent)" stroke="var(--ink)" strokeWidth="3.5" />
+            <rect x="146" y="44" width="44" height="58" rx="10" fill="var(--card)" stroke="var(--ink)" strokeWidth="3.5" />
+          </g>
+          <circle cx="115" cy="59" r="5" fill="var(--ink)" />
+          <path d="M52 118h126" stroke="var(--ink)" strokeWidth="3.5" strokeDasharray="2 10" />
+        </g>
+      </svg>
+    );
+  }
+  if (kind === 'request') {
+    return (
+      <svg viewBox="0 0 230 140" aria-hidden="true">
+        <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+          <g className="art-float">
+            <rect x="52" y="40" width="126" height="80" rx="10" fill="var(--card)" stroke="var(--ink)" strokeWidth="3.5" />
+            <path d="M66 58h98M66 76h72M66 94h54" stroke="var(--ink)" strokeWidth="3.5" />
+          </g>
+          <circle className="art-pulse" cx="190" cy="42" r="10" fill="var(--accent)" stroke="var(--ink)" strokeWidth="3" />
+        </g>
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 230 140" aria-hidden="true">
+      <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M22 118h186" stroke="var(--ink)" strokeWidth="3.5" />
+        <path d="M40 118c22-34 54-52 92-56" stroke="var(--ink)" strokeWidth="3.5" strokeDasharray="1 11" />
+        <g className="art-float">
+          <path d="M132 74l52-30-14 56-16-12-22 8z" fill="var(--accent)" stroke="var(--ink)" strokeWidth="3.5" />
+        </g>
+        <circle className="art-pulse" cx="196" cy="34" r="9" fill="var(--paper)" stroke="var(--ink)" strokeWidth="3" />
+      </g>
+    </svg>
+  );
+}
+
+export default function AuthFlow({ onSuccess, onFinished, onAuthed, reverifyOnly = false }) {
   const isDesktop = useIsDesktop();
-  const [profiles, setProfiles] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [fetchingMore, setFetchingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  /* Nobody eligible is left in the system. Distinct from hasMore=false: that
-     only means "this page is the last one for now", which the prefetcher
-     resolves on its own. This means there is genuinely nothing behind it, and
-     paging further would loop the user over people they have already seen. */
-  const [deckExhausted, setDeckExhausted] = useState(false);
-  /* Set when the server re-decided the deck order mid-browse (new session,
-     expired session, or window extension). Drives the brief "showing newer
-     profiles" line — deliberately NOT a button. See the decision that no
-     dating app exposes a user-triggered re-roll. */
-  const [rebuiltAt, setRebuiltAt] = useState(0);
-  const [slideDirection, setSlideDirection] = useState('up');
-  const [undoNonce, setUndoNonce] = useState(0);   /* bump to re-arm the 5s undo */
-  const [merging, setMerging] = useState(false); /* subtle Updating pill during the background reconcile */
-  const [locationDenied, setLocationDenied] = useState(false);
-  const [showAlignmentModal, setShowAlignmentModal] = useState(false);
-  const [alignedProfile, setAlignedProfile] = useState(null);
+  const reduceMotion = useReducedMotion();
 
-  const actionPendingRef = useRef(false);
-
-  /* How many cards the server has actually served this viewer, so the next page
-     request can number its impressions by true deck position. A ref rather than
-     state: it changes on every fetch and nothing renders from it, and putting it
-     in state would make `fetchProfiles` depend on itself. */
-  const servedRef = useRef(0);
-  /* Holds the dismiss timer for the "Showing newer profiles" notice. A ref, not
-     state: the timer identity must survive re-renders without itself causing
-     one. */
-  const rebuiltTimer = useRef(null);
-  const { user: myUser } = useAuth();
-
-  /* 📍 WHAT THE SERVER IS ACTUALLY RANKING BY.
-   *
-   * `myUser.locationSource` is a stored preference: 'gps' means a reading was
-   * saved once, possibly weeks ago. The ranking pipeline uses a reading only if
-   * it is still inside the 30-day TTL, so the preference and the behaviour can
-   * disagree — and when they do, the stored preference is the one that lies.
-   *
-   * This reads the server's own answer, which is derived from the same
-   * `isFreshLocation` the pipeline uses. Until it arrives `active` is null and
-   * neither notice renders, so there is no flash of a claim we have not checked
-   * yet — the wrong first impression is worse than a half-second of silence. */
-  const [locationRead, setLocationRead] = useState(null);
-  useEffect(() => {
-    if (!myUser?._id) return;
-    let alive = true;
-    api.get('/users/location')
-      .then((r) => { if (alive) setLocationRead(r ?? null); })
-      .catch(() => { /* Offline or restarting. The notice is an optimisation;
-                         failing to read it must never hide the deck. */ });
-    return () => { alive = false; };
-  }, [myUser?._id]);
-  const [showLearnMore, setShowLearnMore] = useState(false);
-  const shadowbanScore = myUser?.shadowbanScore || 0;
-
-  const config = useAppConfig();
-
-  /* 📍 REBUILD STATE FOR A LOCATION CHANGE.
-   *
-   * One flag, not two. A separate `rebuilding` flag was here and was never read
-   * by anything — set, then dead. `rebuildOverlay` alone is enough: it is the
-   * only rebuild state any consumer needs, and `profiles` already goes to `[]`
-   * during a rebuild so there is nothing to interact with. */
-  const [rebuildOverlay, setRebuildOverlay] = useState(false);
-  const rebuildOverlayTimer = useRef(null);
-
-  /* The viewer's own profile — the ONLY thing in Discover that needs it, since
-     the deck cards are other people's profiles.
-
-     `myProfileState` exists so a real 0% is distinguishable from a failed read.
-     These used to be the same thing (`myProfile === null` → score 0), which let
-     the gate toast announce "You're at 0%" after a single dropped request —
-     a number we never fetched, stated as fact. State is separate now:
-       loading → we don't know yet
-       ready   → we have a score, however small
-       error   → the read failed; the gate still shows, but the copy doesn't lie */
-  const [myProfile, setMyProfile] = useState(null);
-  const [myProfileState, setMyProfileState] = useState('loading'); // loading | ready | error
-  const myProfileScore = myProfile?.profileScore ?? 0;
-
-  /* The single gate decision, derived once and handed to both the card and the
-     action handler. Two things consume it, so it must not be recomputed
-     independently in each — the card needs it to know not to play its seal
-     animation, and the handler needs it to know not to send.
-
-     Fail-closed and deliberately unchanged: an unreadable profile is treated as
-     not-verified, because the alternative is silently leaving the deck fully
-     interactive for anyone we can't score. Only the COPY became honest about
-     uncertainty; the gate itself still refuses to open on a guess. */
-  const deckGated = !canInteract(myProfileScore, config);
-
-  const loadMyProfile = useCallback(async () => {
-    // Only surface 'loading' again if we'd already failed — flipping back to
-    // loading on every retry would make the deck flicker through an error state
-    // we already recovered from.
-    setMyProfileState((s) => (s === 'error' ? 'loading' : s));
+  const [step, setStep] = useState(reverifyOnly ? 'code' : 'college');
+  const [dir, setDir] = useState(1);
+  const [suspendedData, setSuspendedData] = useState(() => {
     try {
-      const me = await api.get('/auth/me');
-      setMyProfile(me);
-      setMyProfileState('ready');
-      return me;
+      const data = JSON.parse(localStorage.getItem('matchalize_suspended'));
+      return data?.reason ? data : null;
     } catch {
-      // Deliberately NOT nulled on failure, same reasoning as the college list
-      // in Auth.jsx: a blip after a good read should not wipe a score we already
-      // have. The error state is what tells the toast not to quote a number.
-      setMyProfileState('error');
       return null;
     }
-  }, []);
+  });
 
-  useEffect(() => { loadMyProfile(); }, [loadMyProfile]);
+  /* college */
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [college, setCollege] = useState(null);
 
-  /* Recover from a failed read instead of stranding the deck at "0%" until the
-     tab remounts. Both events mean "the network situation probably changed":
-     `online` for a dropped connection, `visibilitychange` for a phone that
-     went to sleep mid-request. Same shape as the college retry in Auth.jsx. */
+  /* email */
+  const [email, setEmail] = useState('');
+  const [emailErr, setEmailErr] = useState('');
+  const [sending, setSending] = useState(false);
+
+  /* code */
+  const [digits, setDigits] = useState(['', '', '', '', '', '']);
+  const [codeErr, setCodeErr] = useState('');
+  const [verifying, setVerifying] = useState(false);
+  const [verified, setVerified] = useState(false);
+
+  /* request */
+  const [requestSent, setRequestSent] = useState(false);
+  const [requestBusy, setRequestBusy] = useState(false);
+  const [requestErr, setRequestErr] = useState('');
+  const [requestForm, setRequestForm] = useState({ name: '', email: '', city: '', state: '' });
+
+  /* keyboard: how far the input needs to lift, with hard caps */
+  const [kb, setKb] = useState({ open: false, height: 0, lift: 0 });
+
+  const fieldRef = useRef(null);
+  const boxRefs = useRef([]);
+  const rootRef = useRef(null);
+
+  const { login } = useAuth() || {};
+
+  // Auth is cream where the splash is near-black, so the status-bar strip and
+  // the overscroll gutter must switch with it or the two read as different apps.
+  useChromeColor(M.paper);
+
+  /* ---------- keyboard handling (the threshold fix) ---------- */
   useEffect(() => {
-    const onOnline = () => loadMyProfile();
-    const onVisible = () => { if (document.visibilityState === 'visible') loadMyProfile(); };
-    window.addEventListener('online', onOnline);
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      window.removeEventListener('online', onOnline);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [loadMyProfile]);
+    const vv = window.visualViewport;
+    if (!vv) return undefined;
+    let raf = 0;
 
-  /* Bounded backoff for the initial failure, so a server that isn't up yet
-     doesn't leave the deck permanently at "unknown" until someone toggles the
-     tab. The cap is load-bearing, not decoration: `loadMyProfile` flips state
-     back to 'error' on every failure, so an uncapped effect would re-arm itself
-     forever and poll a dead server every 2.5s for the life of the tab. After
-     MAX_GATE_RETRIES the online/visibility listeners above own recovery. */
-  const gateRetries = useRef(0);
-  useEffect(() => {
-    if (myProfileState !== 'error') return undefined;
-    if (gateRetries.current >= MAX_GATE_RETRIES) return undefined;
-    gateRetries.current += 1;
-    const t = setTimeout(() => loadMyProfile(), 2500);
-    return () => clearTimeout(t);
-  }, [myProfileState, loadMyProfile]);
+    const measure = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const kbH = Math.round(window.innerHeight - vv.height - vv.offsetTop);
 
-  /* A successful read earns the retries back — otherwise a user whose network
-     dropped once during onboarding would burn through the budget and lose the
-     self-healing the backoff exists to provide. */
-  useEffect(() => {
-    if (myProfileState === 'ready') gateRetries.current = 0;
-  }, [myProfileState]);
-
-  /* Guards against StrictMode's double mount and the Profile→Discover
-     remount: a second call while one is in flight awaits the same request
-     instead of starting a parallel one (which the server answered 500s to). */
-  const deckFetchInFlight = useRef(null);
-
-  const fetchProfiles = useCallback(async (append = false) => {
-    if (deckFetchInFlight.current) return deckFetchInFlight.current;
-    const run = (async () => {
-    if (!append) { setLoading(true); setError(null); resetDiscoverStore(); }
-    else setFetchingMore(true);
-
-    try {
-      // The feed is platform-wide and person-ranked. There is no campus
-      // narrowing: campus is verification and a card badge only, so nothing
-      // about it is sent. Distance comes from each person's own location on the
-      // server, falling back to their campus coordinates server-side when they
-      // have no fresh reading — the client never decides that.
-      //
-      // `served` is the count of cards already shown to this viewer this
-      // session. The server needs it to number each impression by its real
-      // position in the deck; without it every page would restart at 0 and
-      // "how deep did they get" would be meaningless. Sent on append only —
-      // a fresh (non-append) load starts a new deck, so it starts at 0 too.
-      const servedCount = append ? servedRef.current : 0;
-      const q = `/discover?limit=10&served=${servedCount}`;
-      const data = await api.get(q);
-      /* 🃏 SHUFFLE THE INCOMING BATCH ONLY — never the accumulated list.
-
-         The server's order is meaningful: distance band, then intent, then
-         quality, and then two rules that deliberately STEP reserved cards
-         through the window rather than front-loading them (the 20% own-college
-         cap and the newcomer reserve). Those steps land on a regular stride, so
-         the same college and the same newcomers recur at the same offsets in
-         every batch. A user learns the shape of the feed without noticing they
-         are learning it.
-
-         Shuffling the batch hides that stride while changing nothing else:
-
-         ⚠️ Membership is untouched. The same ten people are shown in the same
-         batch, so this cannot introduce a repeat, cannot change the cap, and
-         cannot change who is eligible. Only the order within the page moves.
-
-         ⚠️ Only the INCOMING batch, never `prev`. Shuffling the accumulated list
-         would shift every index below the insertion point, so `currentIndex`
-         would point at a different person mid-swipe and going back a card would
-         show something that was never on screen.
-
-         ⚠️ Once per fetch, not per render. Shuffling in a render path would
-         reshuffle on every state change and cards would visibly jump.
-
-         The impression log keeps the server's served order, not this visual one.
-         That is deliberate: exposure VOLUME stays exact, and "which card did
-         they see first" is not a question worth making the client report a
-         position for. See the note on DeckImpression for the drift. */
-      const newProfiles = shuffle(data.users || []);
-      servedRef.current = Number.isFinite(data.served) ? data.served : servedCount + newProfiles.length;
-      if (append) {
-        /* 🛑 AN EMPTY PAGE ENDS THE FETCHING, regardless of what `hasMore` says.
-         *
-         * A response carrying no cards cannot advance anything, so asking again
-         * would return no cards too — the request loop. If the server ever
-         * reported "more available" alongside an empty page, this is what stops
-         * the client acting on it.
-         *
-         * The server also refuses to set `hasMore` on an empty page, so this is a
-         * second layer rather than the primary defence: if either side is ever
-         * changed without the other, the deck still stops rather than spinning.
-         *
-         * ⚠️ `setDeckExhausted` MUST BE SET BEFORE THE `return`. This early exit
-         * was originally written without it, which quietly undid a fix from
-         * earlier in the session: `deckExhausted` gates the Refresh button on the
-         * caught-up screen, so leaving it false put a Refresh button back on a
-         * screen that had genuinely run out — a button that looks actionable and
-         * does nothing, since the server only ever returns nothing again. Stopping
-         * the request loop and hiding the dead button are the same fix; missing
-         * one line here resurrected the bug the other one removed. */
-        if (newProfiles.length === 0) {
-          setHasMore(false);
-          setDeckExhausted(!!data.deckExhausted);
-          discoverStore.hasMore = false;
-          saveDiscoverStore();
+        /* threshold 1: only treat it as a keyboard above 110px (ignores toolbar jitter) */
+        if (kbH <= 110) {
+          setKb((k) => (k.open || k.lift || k.height ? { open: false, height: 0, lift: 0 } : k));
           return;
         }
-        setProfiles((prev) => {
-          const next = [...prev, ...newProfiles];
-          discoverStore.profiles = next;
-          discoverStore.hasMore = data.hasMore;
-          saveDiscoverStore();
-          return next;
-        });
-      }
-      else {
-        /* A non-append request is a "start me a deck" request, but it can
-           arrive when this viewer already HAS a live deck — StrictMode
-           double-invokes this effect in development, and returning to Discover
-           from Profile re-runs it too. The server cursor is mid-deck at that
-           point, so the response legitimately holds only what is left AFTER the
-           cards already on screen, which on a small pool is nothing.
 
-           Replacing the list with an empty array would then blank a perfectly
-           good deck and flash "You're all caught up" at someone who has four
-           perfectly good cards. An empty response must never destroy a
-           populated deck; the caught-up screen is for decks that were ALREADY
-           empty. */
-        if (newProfiles.length > 0) {
-          setProfiles(newProfiles);
-          setCurrentIndex(0);
-          discoverStore.profiles = newProfiles;
-          discoverStore.currentIndex = 0;
-          discoverStore.hasMore = data.hasMore;
-          saveDiscoverStore();
+        /* stop the browser's auto-pan — that's what flung the headline away.
+           The root is its own scroll container, so reset that too. */
+        if (window.scrollY > 0) window.scrollTo(0, 0);
+        const root = rootRef.current;
+        if (root && root.scrollTop) root.scrollTop = 0;
+
+        let lift = 0;
+        const el = fieldRef.current;
+        if (el && el.getBoundingClientRect) {
+          const r = el.getBoundingClientRect();
+          /* threshold 2: lift the minimum needed to clear the keyboard… */
+          const needed = Math.round(r.bottom + 14 - vv.height);
+          /* threshold 3: …but never more than 190px, so it can't fly off */
+          lift = Math.max(0, Math.min(needed, 190));
         }
-      }
-
-      /* ⚠️ UNCONDITIONAL, and deliberately outside the branches above.
-       * `hasMore` and `deckExhausted` are a matched pair describing the END of
-       * the deck, so they must be set the same way for every response — empty
-       * page, full page, append or not. They used to be set inside the branch
-       * bodies as well as here, so the branch values were immediately overwritten
-       * by these: harmless, but it meant the state that actually took effect was
-       * the duplicate rather than the one a reader would expect to be reading. */
-      setHasMore(data.hasMore);
-      setDeckExhausted(!!data.deckExhausted);
-
-      /* Only surface the notice when this request actually re-decided the
-         order. On the very first page load the deck was always new, so showing
-         "showing newer profiles" then would be noise on every cold start. */
-      if (data.rebuiltWindow && append) setRebuiltAt(Date.now());
-      /* Auto-dismiss the notice. Without this the render-time `Date.now()` check
-         never re-evaluates on its own, so the line would stay pinned forever —
-         a timestamp comparison only changes the DOM when something causes a
-         re-render, and nothing else would. */
-      if (data.rebuiltWindow && append) {
-        clearTimeout(rebuiltTimer.current);
-        rebuiltTimer.current = setTimeout(() => setRebuiltAt(0), 4000);
-      }
-    } catch (err) {
-      console.error('Failed to fetch deck profiles:', err);
-      if (!append) setError(err.message || 'Something went wrong');
-    } finally {
-      setLoading(false);
-      setFetchingMore(false);
-    }
-    })();
-    deckFetchInFlight.current = run;
-    try { await run; } finally { deckFetchInFlight.current = null; }
-    return run;
-  }, []);
-
-
-  /* 📍 Refresh the stored position and, if the server decides the move mattered,
-     drop the saved session so the next deck request rebuilds around the new
-     position. Both this and the auto-check below are one-shot reads: nothing is
-     watched, and nothing here can break the deck if it fails. */
-  const refreshLocation = useCallback(async () => {
-    const res = await syncLocationIfPermitted();
-    /* ⚠️ `toast` is an OBJECT with .success/.error/.info — not a bare function.
-       Calling `toast(...)` throws "toast is not a function" on tap. */
-    if (!res.ok) {
-      if (res.reason === 'denied') setLocationDenied(true);
-      toast.error(
-        res.reason === 'denied' ? 'Location permission was denied. Enable it in browser settings.'
-        : res.reason === 'insecure-context' ? 'Location only works on a secure connection.'
-        : "Couldn't get a location reading. Try again, or check phone GPS settings.",
-      );
-      return;
-    }
-    if (!res.moved) { toast.info('Your location is already current.'); return; }
-
-    /* The server has already discarded the session. Forget the cached deck too,
-       or the client would keep rendering the old ordering until something
-       happened to trigger a refetch. */
-    resetDiscoverStore();
-    setProfiles([]);
-    setCurrentIndex(0);
-    setHasMore(true);
-    setDeckExhausted(false);
-    setRebuiltAt(Date.now());
-    servedRef.current = 0;
-    await fetchProfiles(false);
-    toast.success('Location updated. Showing people near you.');
-  }, [fetchProfiles]);
-
-  /* 📍 REBUILD THE DECK WHEN THE ANCHOR LOCATION CHANGES.
-   *
-   * Called from LocationNotice once the server confirms the viewer moved. The
-   * server has already discarded the saved session by then, so this only has to
-   * drop the CLIENT's copy — `resetDiscoverStore()` — and pull a fresh page.
-   * Without that, `initDiscoverStore` repaints the pre-move deck from
-   * localStorage and returns early without ever asking the server, so the user
-   * swipes the old city before the new one arrives. That is the bug this
-   * function exists to close.
-   *
-   * The 250ms gate exists because a rebuild is not slow: measured deck fetches
-   * run 44–280ms, around 110ms typical. A full-screen message shown for 110ms
-   * reads as a glitch rather than as feedback. Fast rebuilds stay silent; only a
-   * genuinely slow one earns the screen. */
-  const rebuildDeckForLocation = useCallback(async () => {
-    clearTimeout(rebuiltTimer.current);
-    clearTimeout(rebuildOverlayTimer.current);
-    /* Redundant on its own — `fetchProfiles(false)` clears the store too — but
-       stated here so the reason this function exists is visible where it is
-       decided rather than two frames away inside the fetcher. */
-    resetDiscoverStore();
-    setProfiles([]);
-    setCurrentIndex(0);
-    setHasMore(true);
-    setDeckExhausted(false);
-    servedRef.current = 0;
-    rebuildOverlayTimer.current = setTimeout(() => setRebuildOverlay(true), 250);
-    try {
-      await fetchProfiles(false);
-    } finally {
-      /* The timer is cleared as well as the flag set false, otherwise the
-         pending timeout fires afterwards and re-shows an overlay on a deck that
-         has already finished rebuilding. */
-      clearTimeout(rebuildOverlayTimer.current);
-      setRebuildOverlay(false);
-    }
-  }, [fetchProfiles]);
-
-  /* 📍 Hide the refresh-location button when the OS already said no — tapping
-     it again would do exactly nothing, which reads as a bug. If the browser
-     doesn't expose the permission API, leave the button as-is.
-
-     ⚠️ ONLY `denied` HIDES THE BUTTON.
-     `prompt` means the grant lapsed rather than being refused, and someone in
-     that state is exactly who should be able to tap "refresh" — they chose yes
-     once and would very likely choose yes again. Treating `prompt` as denied
-     would leave them with no button and no explanation, having never declined
-     anything.
-
-     The mid-session `onchange` subscription lives with the automatic check
-     below, which is the effect that owns location lifecycle on this screen;
-     two subscriptions to the same PermissionStatus would double-fire. */
-  useEffect(() => {
-    if (!navigator?.permissions?.query) return;
-    let alive = true;
-    navigator.permissions.query({ name: 'geolocation' })
-      .then((r) => {
-        if (!alive) return;
-        setLocationDenied(r.state === GEO_PERMISSION.DENIED);
-      })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, []);
-
-  /* 📍 THE AUTOMATIC CHECK. Runs once per app open, silently.
-     A one-shot permission prompt is all this ever is — see the rules at the top of
-     utils/locationSync.js. No prompt appears here: if the user already granted
-     location, the browser returns a cached or fresh reading without asking again,
-     and if they did not, the read fails quietly and nothing changes.
-
-The `moved` branch clears the cached deck and rebuilds. That is the case the
-      whole feature exists for: someone who travelled while the app was closed
-      would otherwise spend half an hour looking at a deck ordered around a place
-      they are no longer at.
-
-      ── WHY THE EPHEMERAL RELEASE HAPPENS HERE AND NOT ON THE FIRST FAILURE ──
-      A lapsed one-time grant is released at the START of a visit, not the
-      moment it lapses. Chrome expires "allow this time" after five minutes in a
-      background tab, so reacting to the lapse would fire the location toast at
-      someone who merely switched tabs for six minutes. At launch it means the
-      user genuinely started a new visit without the permission they had before,
-      which is exactly what "this time" was meant to cover. */
-  useEffect(() => {
-    let alive = true;
-
-    /* 📍 A POSITION FROM AN EXPIRED ONE-TIME GRANT DOES NOT SURVIVE THE LAUNCH.
-     *
-     * Runs BEFORE the refresh, because the refresh may succeed with a fresh
-     * reading and then this would have nothing to release. It only fires when the
-     * browser reports `prompt` — a refusal reports `denied` and is left alone,
-     * because refusing is a decision and this is an expiry. */
-    (async () => {
-      try {
-        /* Only one refresh, and only after any release has settled. Two calls
-           would ask the browser twice on every launch and race their own writes. */
-        await releaseEphemeralLocation();
-        const res = await syncLocationIfPermitted();
-        if (!alive || !res.ok || !res.moved) return;
-        resetDiscoverStore();
-        setProfiles([]);
-        setCurrentIndex(0);
-        setHasMore(true);
-        setDeckExhausted(false);
-        servedRef.current = 0;
-      } catch {
-        /* Never let location maintenance break the deck. */
-      }
-    })();
-
-    return () => { alive = false; };
-  }, []);
-
-  /* 📍 CATCH A GRANT THAT EXPIRES MID-SESSION.
-   *
-   * Chrome's five-minute background rule means the permission can lapse while
-   * the app is still open — the user switches tabs, comes back, and their stored
-   * position is now uncovered. Nothing above would notice, because the refresh
-   * already ran.
-   *
-   * The position is NOT released here. That would be the nagging case the launch
-   * check exists to avoid: the user gets a toast for tabbing away. Recording it
-   * as `needsRelease` is enough — the next launch releases it, and the notice
-   * below re-evaluates on the next render because the server's `active` flag is
-   * what mounts it. */
-  useEffect(() => watchGeolocationPermission((state) => {
-    /* A lapse is NOT a refusal, so it must not hide the refresh button — that is
-       the one control someone who tapped "allow this time" can use to get their
-       position back. Only `denied` disables the control. */
-    setLocationDenied(state === GEO_PERMISSION.DENIED);
-  }), []);
-
-  /* Clear the rebuild-notice timer on unmount. Without this, navigating away
-     mid-window leaves a live timeout that calls setState on a dead component.
-     Harmless today, but a source of confusing warnings the moment this page is
-     mounted twice — which the deck's own remount behaviour already does. */
-  useEffect(() => () => {
-    clearTimeout(rebuiltTimer.current);
-    clearTimeout(rebuildOverlayTimer.current);
-  }, []);
-
-  /* ── DECK HYDRATION + REFRESH ──
-     The cache exists so leaving the tab and coming back lands you on the SAME
-     card, at the SAME index, with no spinner — that behaviour is load-bearing
-     (the gate sends you to Profile and back).
-
-     It was also serving that snapshot FOREVER: on a cache hit this returned
-     before `fetchProfiles` ever ran, so a card you had edited stayed frozen at
-     whatever it looked like when it was cached. Two accounts editing each other
-     is the normal loop, so that read as "my save didn't work".
-
-     So: paint the cache immediately, then reconcile with the server behind it.
-
-     MERGE, not replace. `GET /discover` is randomised per request (a
-     `randomSeed` range query around a fresh `Math.random()`), so replacing the
-     list would reshuffle the deck and throw away the position we just restored.
-     Patching by `_id` keeps order and index untouched while every card in the
-     fresh batch becomes current. Cards the batch doesn't cover keep their
-     cached copy rather than vanishing — a gap would shift everything below it. */
-  const refreshMerged = useCallback(async () => {
-    setMerging(true);
-    try {
-      const q = '/discover?limit=20';
-      const data = await api.get(q);
-      const fresh = data.users || [];
-      if (fresh.length === 0) return;
-      const byId = new Map(fresh.map((p) => [String(p._id), p]));
-      setProfiles((prev) => {
-        if (prev.length === 0) return prev;
-        let changed = false;
-        const next = prev.map((p) => {
-          const f = byId.get(String(p._id));
-          /* Keep `hybridScore`, which the deck computes per VIEWER. The merge
-             response is viewer-specific too, so it does carry one — but the
-             `profile-updated` broadcast cannot, and clobbering it with
-             undefined would collapse every card to the bottom of the sort. */
-          if (!f) return p;
-          changed = true;
-          return {
-            ...f,
-            hybridScore: f.hybridScore ?? p.hybridScore,
-            distanceBand: f.distanceBand ?? p.distanceBand,
-          };
-        });
-        if (!changed) return prev;
-        discoverStore.profiles = next;
-        saveDiscoverStore();
-        return next;
-      });
-    } catch {
-      // Silent by design. This is a background reconciliation behind an
-      // already-usable deck; failing it must not surface an error over cards
-      // that are on screen and readable.
-    } finally {
-      setMerging(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const userId = myUser?._id;
-    if (!userId) return;
-    const restored = initDiscoverStore(userId);
-    if (restored && discoverStore.profiles.length > 0) {
-      setProfiles(discoverStore.profiles);
-      setCurrentIndex(discoverStore.currentIndex);
-      setHasMore(discoverStore.hasMore);
-      setLoading(false);
-      return;
-    }
-    fetchProfiles(false);
-  }, [myUser?._id, fetchProfiles, refreshMerged]);
-
-  /* ── LIVE EDITS ──
-     `profile-updated` fires from the server whenever anyone saves a profile, so
-     a card repaints in place the moment its owner edits it — no refetch, no
-     index movement. Ids we aren't showing are ignored, which is the whole of
-     the client-side half of the broadcast.
-     Merged rather than replaced for the same reason as `refreshMerged`: the
-     broadcast carries no viewer-relative score, so replacing the card outright
-     would knock its `hybridScore` to undefined. */
-  useEffect(() => {
-    const onProfileUpdated = (card) => {
-      if (!card?._id) return;
-      setProfiles((prev) => {
-        const idx = prev.findIndex((p) => String(p._id) === String(card._id));
-        if (idx === -1) return prev;
-        const next = [...prev];
-        next[idx] = {
-          ...card,
-          hybridScore: card.hybridScore ?? prev[idx].hybridScore,
-          distanceBand: card.distanceBand ?? prev[idx].distanceBand,
-        };
-        discoverStore.profiles = next;
-        saveDiscoverStore();
-        return next;
+        setKb({ open: true, height: kbH, lift });
       });
     };
-    socket.on('profile-updated', onProfileUpdated);
 
-    /* G9 — the inbound-align handling moved to Header.jsx, which is mounted on
-       every tab, so the bell badge bumps instantly no matter where you are. The
-       in-app toast and its heavy haptic were dropped here: the phone push
-       already names the sender, and a toast per align was just noise while
-       swiping. */
-
+    vv.addEventListener('resize', measure);
+    vv.addEventListener('scroll', measure);
+    measure();
     return () => {
-      socket.off('profile-updated', onProfileUpdated);
+      vv.removeEventListener('resize', measure);
+      vv.removeEventListener('scroll', measure);
+      if (raf) cancelAnimationFrame(raf);
     };
   }, []);
 
-  const handleNextProfile = useCallback((direction = 'up', isAction = false) => {
-    if (direction === 'down') {
-      if (currentIndex <= 0) return;
-      const next = Math.max(0, currentIndex - 1);
-      setCurrentIndex(next);
-      discoverStore.currentIndex = next;
-      saveDiscoverStore();
-      setSlideDirection('down');
-      return;
+  /* ---------- navigation ---------- */
+  const go = (next) => {
+    if (next === step) return;
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    setKb({ open: false, height: 0, lift: 0 });
+    setDir(STEP_ORDER.indexOf(next) >= STEP_ORDER.indexOf(step) ? 1 : -1);
+    setStep(next);
+  };
+
+  const finish = () => {
+    const cb = onSuccess || onFinished || onAuthed;
+    if (cb) cb();
+  };
+
+  /* ---------- college search ---------- */
+  useEffect(() => {
+    if (step !== 'college') return undefined;
+    const q = query.trim();
+    if (q.length < 2) {
+      setResults([]);
+      setSearching(false);
+      return undefined;
     }
-
-    if (currentIndex >= profiles.length) return;
-
-    setSlideDirection(direction);
-
-    if (!isAction) {
-      const passedProfile = profiles[currentIndex];
-      if (passedProfile) {
-        api.post(`/discover/pass/${passedProfile._id}`).catch(console.error);
-        triggerHaptic('light');
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        /* GET /api/colleges?q= — the route matches name, city and state.
+           The server caps at 50 and applies the campus allow-list gate. */
+        const res = await api.get(`/colleges?q=${encodeURIComponent(q)}`);
+        const list = Array.isArray(res) ? res : (res?.colleges || []);
+        setResults(list.slice(0, 9));
+      } catch {
+        setResults([]);
+      } finally {
+        setSearching(false);
       }
-    }
+    }, 260);
+    return () => clearTimeout(t);
+  }, [query, step]);
 
-    const next = currentIndex + 1;
-    setCurrentIndex(next);
-    discoverStore.currentIndex = next;
-    discoverStore.profiles = profiles;
-    saveDiscoverStore();
+  const chooseCollege = (c) => {
+    triggerHaptic('light');
+    setCollege(c);
+    setQuery(c.name);
+    setTimeout(() => go('email'), 420);
+  };
 
-    /* Prefetch at 6 remaining, not 4.
-       The server now hands out a fixed, already-decided order, so the page
-       boundary is predictable: the next page is always the next 10 ids in that
-       order, not a fresh shuffle of whatever happens to be eligible. Waiting
-       until 4 remain still stalls visibly on a full page of 10 — the user is
-       looking at their last two cards while the request runs. Fetching at 6
-       overlaps the wait with cards they are still swiping. */
-    if (profiles.length - currentIndex <= 6 && hasMore && !deckExhausted && !fetchingMore) {
-      fetchProfiles(true);
-    }
-  }, [currentIndex, profiles, hasMore, deckExhausted, fetchingMore, fetchProfiles]);
+  /* ---------- email ---------- */
+  const submitEmail = async (e) => {
+    e && e.preventDefault();
+    if (!college) return;
+    const value = email.trim().toLowerCase();
 
-  /* ══════════════════════════════════════════════════════════════════════
-     🚪 THE GATE — deck-wide, before any action reaches the network.
-
-     One rule, no per-action exceptions: whatever the user tapped, they get the
-     same toast and the same route to Profile. There is deliberately NO pending
-     action and no replay — they finish, come back to the SAME card (the deck
-     and index are restored from discoverStore), and choose what to do next.
-
-     `pass` is deliberately NOT gated. It's a way to leave, not a way to
-     interact — gating it would trap someone on a card they didn't choose.
-     ══════════════════════════════════════════════════════════════════════ */
-  const handleAction = useCallback(async (action, payload = {}) => {
-    if (actionPendingRef.current) return;
-    if (currentIndex >= profiles.length) return;
-
-    const profile = profiles[currentIndex];
-    const target = profile || {};
-
-    if (action !== 'pass' && deckGated) {
-      triggerHaptic('medium');
-      // Close the popout FIRST. The toast renders at z-index 9999, just above
-      // the popout overlay's 9998, so if the popout were left open the toast
-      // would sit on top of a blurred scrim and read as "something appeared
-      // behind the modal" — which is exactly what it looked like before.
-      closeAllPopouts();
-
-      const need = readLadder(config).interact;
-
-      /* Re-read the score here rather than quoting the mount-time snapshot.
-         This costs one round-trip on the tap that hits the gate, and buys two
-         things the cached value couldn't give us:
-           1. the number in the copy is one we actually fetched, so it can't be
-              stale — the user may have finished onboarding in another tab, or
-              the mount-time fetch may have died and recovered since;
-           2. if it fails, we find out NOW instead of asserting "0%".
-         The gate DECISION still uses the cached value, so an intercepted tap is
-         never conditional on this succeeding; it only decides what we say.
-
-         Resolved before handing to toast: `toast.info` stores `message` verbatim
-         and ArchivalToast renders it as text, so a Promise would surface as
-         "[object Promise]". */
-      const fresh = await loadMyProfile();
-      toast.info(
-        fresh && Number.isFinite(fresh.profileScore)
-          ? `Profile strength: ${fresh.profileScore}%. You need ${need}% to interact.`
-          /* A genuine 0% and a dropped request must not read the same. With no
-             number in hand we say nothing about one. */
-          : `Finish your profile to interact — you need ${need}%.`,
-        { label: 'Profile', onClick: () => onGoToProfile?.() },
-      );
+    /* Soft client check only — POST /auth/send-otp re-validates the domain
+       against the college server-side and that message wins. */
+    const domains = college.domains || [];
+    if (domains.length && !domains.some((d) => value.endsWith(`@${String(d).toLowerCase().replace(/^@/, '')}`))) {
+      setEmailErr(`hmm — that doesn't look like a ${college.name} address.`);
       return;
     }
 
-    actionPendingRef.current = true;
+    setSending(true);
+    setEmailErr('');
     try {
-      if (action === 'align') {
-        triggerHaptic('heavy');
-        const response = await api.post(`/discover/align/${profile._id}`, payload);
-        if (response.matched) {
-          setAlignedProfile({ ...response.user, alignmentId: response.alignmentId });
-          setShowAlignmentModal(true);
-        }
-      }
-      else if (action === 'pass') {
-        triggerHaptic('medium');
-        await api.post(`/discover/pass/${profile._id}`);
-        /* Bump the undo nonce so DeckActions opens its 5s window. Only on a
-           real pass — liking or messaging someone shouldn't offer an undo. */
-        setUndoNonce((n) => n + 1);
-      }
-
-      handleNextProfile('up', true);
-
+      await api.post('/auth/send-otp', { email: value, collegeCode: college.code });
+      triggerHaptic('light');
+      go('code');
     } catch (err) {
-      /* Server-side gate (403 GATED) reached when the client didn't know we were
-         locked — e.g. the score dropped mid-session, or our local copy was
-         stale. Recover the same way as a normal tap: open the sheet and replay
-         the action once it resolves. */
-      if (err.code === 'GATED') {
-        setPendingAction({ action: payload?.note ? 'letter' : action, payload });
-        return;
-      }
-      console.error('Action failed:', err);
+      triggerHaptic('heavy');
+      setEmailErr(err?.message || "couldn't send the code. one more try?");
     } finally {
-      actionPendingRef.current = false;
+      setSending(false);
     }
-  }, [currentIndex, profiles, handleNextProfile, deckGated]);
+  };
 
-  /* Desktop: preload the next hero image so swipes feel instant. */
-  useEffect(() => {
-    if (!isDesktop) return;
-    const next = profiles[currentIndex + 1]?.photos?.[0];
-    if (!next) return;
-    const img = new Image();
-    img.decoding = 'async';
-    img.src = next;
-  }, [isDesktop, profiles, currentIndex]);
+  /* ---------- college request ---------- */
+  const submitRequest = async (e) => {
+    e && e.preventDefault();
+    if (!requestForm.email.trim()) return;
 
-  /* Desktop: keyboard deck controls. Ignored while typing or in modals. */
-  useEffect(() => {
-    if (!isDesktop) return;
-    const onKey = (e) => {
-      const tag = (e.target?.tagName || '').toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return;
-      if (showAlignmentModal) {
-        if (e.key === 'Escape') { setShowAlignmentModal(false); setAlignedProfile(null); }
+    setRequestBusy(true);
+    setRequestErr('');
+    try {
+      await api.post('/colleges/request', {
+        ...requestForm,
+        collegeName: query.trim() || requestForm.collegeName,
+        email: requestForm.email.trim().toLowerCase(),
+      });
+      triggerHaptic('success');
+      setRequestSent(true);
+    } catch (err) {
+      triggerHaptic('heavy');
+      setRequestErr(err?.message || "couldn't send that request. one more try?");
+    } finally {
+      setRequestBusy(false);
+    }
+  };
+
+  /* ---------- code ---------- */
+  const setDigit = (i, raw) => {
+    const ch = (raw || '').replace(/\D/g, '').slice(-1);
+    setDigits((prev) => { const n = [...prev]; n[i] = ch; return n; });
+    setCodeErr('');
+    if (ch && i < 5) boxRefs.current[i + 1]?.focus();
+  };
+
+  const onDigitKey = (i, e) => {
+    if (e.key === 'Backspace' && !digits[i] && i > 0) {
+      e.preventDefault();
+      boxRefs.current[i - 1]?.focus();
+      setDigits((prev) => { const n = [...prev]; n[i - 1] = ''; return n; });
+    }
+  };
+
+  const onDigitPaste = (e) => {
+    const text = (e.clipboardData?.getData('text') || '').replace(/\D/g, '').slice(0, 6);
+    if (!text) return;
+    e.preventDefault();
+    setDigits(Array.from({ length: 6 }, (_, i) => text[i] || ''));
+    boxRefs.current[Math.min(text.length, 5)]?.focus();
+  };
+
+  const verifyCode = async (e) => {
+    e && e.preventDefault();
+    const code = digits.join('');
+    if (code.length < 6 || verifying || verified) return;
+    setVerifying(true);
+    setCodeErr('');
+
+    try {
+      if (reverifyOnly) {
+        await api.post('/auth/reverify/confirm', { otp: code });
+        triggerHaptic('success');
+        finish();
         return;
       }
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const k = e.key;
-      if (k === 'ArrowRight' || k === 'l' || k === 'L') { e.preventDefault(); triggerHaptic('heavy'); handleAction('align', {}); }
-      else if (k === 'ArrowLeft' || k === 'p' || k === 'P') { e.preventDefault(); triggerHaptic('medium'); handleAction('pass'); }
-      else if (k === 'ArrowDown' || k === 'b' || k === 'B') { e.preventDefault(); triggerHaptic('light'); handleNextProfile('down'); }
+
+      const res = await api.post('/auth/verify-otp', { email: email.trim().toLowerCase(), otp: code });
+      triggerHaptic('success');
+      setVerified(true);
+
+      try { localStorage.removeItem('matchalize_suspended'); } catch { /* ignore */ }
+      login?.(res.user);
+      if (socket && socket.disconnected) socket.connect();
+
+      setTimeout(() => go('next'), 900);
+    } catch (err) {
+      triggerHaptic('heavy');
+      setCodeErr(err?.message || "that code didn't match. try again?");
+      setDigits(['', '', '', '', '', '']);
+      setTimeout(() => boxRefs.current[0]?.focus(), 60);
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const resendCode = async () => {
+    if (reverifyOnly) {
+      try { await api.post('/auth/reverify'); } catch { /* quiet */ }
+      return;
+    }
+    if (!college) return;
+    try {
+      await api.post('/auth/send-otp', { email: email.trim().toLowerCase(), collegeCode: college.code });
+    } catch { /* quiet */ }
+  };
+
+  useEffect(() => {
+    if (step !== 'code') return undefined;
+    const t = setTimeout(() => boxRefs.current[0]?.focus(), 520);
+    return () => clearTimeout(t);
+  }, [step]);
+
+  /* Annual re-verification: the code is sent by the server on request. */
+  useEffect(() => {
+    if (!reverifyOnly) return undefined;
+    let cancelled = false;
+    api.post('/auth/reverify')
+      .catch((err) => {
+        if (!cancelled) setCodeErr(err?.message || 'Could not send your verification code.');
+      });
+    return () => { cancelled = true; };
+  }, [reverifyOnly]);
+
+  /* Suspension is signalled over HTTP (a 403 that api.js intercepts) and by
+     the shared socket writing localStorage — not by a bespoke socket event. */
+  useEffect(() => {
+    const onStorage = () => {
+      try {
+        const data = JSON.parse(localStorage.getItem('matchalize_suspended'));
+        if (data?.reason) setSuspendedData(data);
+      } catch { /* ignore */ }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [isDesktop, showAlignmentModal, handleAction, handleNextProfile]);
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
-  /* 📍 THE REBUILD OVERLAY LIVES INSIDE THE RETURNED TREE, NOT ABOVE IT.
-   *
-   * It used to sit here, one line above this `if`. That is a bare JSX
-   * expression statement: JavaScript builds the element and immediately discards
-   * it. Nothing throws, the build is green, lint is green — and React never sees
-   * the component at all, so the "Updating your feed" screen silently never
-   * appeared.
-   *
-   * The trap is that "before the early return" sounds like it renders first. It
-   * does not. Everything before an early `return` is dead code by definition;
-   * the only two placements that actually render are INSIDE a returned branch
-   * or in the final returned tree. Hence the two copies below. */
-  if (loading) {
+  /* Render before the style tags: AccountSuspendedScreen injects its own
+     `as-*` sheet and must never depend on an `au-*` rule being present. */
+  if (suspendedData) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '12px', backgroundColor: t.desk }}>
-        <ProfileCardSkeleton />
-        <DiscoverRebuildOverlay show={rebuildOverlay} />
-      </div>
-    );
-  }
-
-  if (error && !loading) {
-    return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '24px', backgroundColor: t.desk }}>
-        <style>{DECK_CSS}</style>
-        <div style={styles.stateCard}>
-          <div style={{ ...styles.stateTile, background: t.coral }}>
-            <AlertTriangle size={22} strokeWidth={2.6} color={t.ink} />
-          </div>
-          <h3 style={styles.stateTitle}>The deck hit a snag</h3>
-          <p style={styles.stateBody}>{error}</p>
-          <button onClick={() => fetchProfiles(false)} className="slam-btn" style={styles.slamBtn}>
-            <RotateCw size={14} strokeWidth={3} /> Try again
+      <AccountSuspendedScreen
+        reason={suspendedData.reason}
+        suspendedAt={suspendedData.suspendedAt}
+        bottomSlot={
+          <button
+            type="button"
+            onClick={() => {
+              localStorage.removeItem('matchalize_suspended');
+              setSuspendedData(null);
+            }}
+          >
+            Suspension lifted? Try logging in again
           </button>
-        </div>
-      </div>
+        }
+      />
     );
   }
 
-  if (!profiles || profiles.length === 0 || currentIndex >= profiles.length) {
-    return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '24px', backgroundColor: t.desk }}>
-        <style>{DECK_CSS}</style>
-        <div style={styles.stateCard}>
-          <div style={{ ...styles.stateTile, background: t.yellow }}>
-            <Compass size={22} strokeWidth={2.6} color={t.ink} />
+  /* direction-aware, never abrupt */
+  const screenVariants = {
+    initial: (d) => (reduceMotion ? { opacity: 0 } : { opacity: 0, x: 34 * d, y: 12, filter: 'blur(6px)' }),
+    animate: { opacity: 1, x: 0, y: 0, filter: 'blur(0px)', transition: { duration: 0.5, ease: EASE_OUT } },
+    exit: (d) => (reduceMotion
+      ? { opacity: 0, transition: { duration: 0.16 } }
+      : { opacity: 0, x: -28 * d, y: -10, filter: 'blur(6px)', transition: { duration: 0.24, ease: [0.5, 0, 0.75, 0] } }),
+  };
+
+  const showArt = isDesktop && !reverifyOnly;
+
+  return (
+    <div
+      ref={rootRef}
+      className={`au-root au-root-${step}`}
+      style={{ '--kb': kb.open ? `${kb.height}px` : '0px' }}
+    >
+      <style>{AUTH_CSS}</style>
+      <style>{MOBILE_AUTH_CSS}</style>
+      <style>{AUTH_SCENE_CSS}</style>
+      <style>{AUTH_SMOOTH_CSS}</style>
+      <style>{FLOW_FIX_CSS}</style>
+
+      <div className={`au-campus-scene au-campus-scene-${SCENE_KIND[step] || 'college'}${verified ? ' is-verified' : ''}`}>
+        <img className="au-campus-photo" src={campusPhoto} alt="" draggable="false" />
+        <div className="au-campus-wash" />
+      </div>
+
+      <div className="au-fit">
+        <div className="au-panel">
+          <div className="au-brandbar">
+            <span className="au-wordmark">
+              huh<span className="au-brand-question">?</span>
+            </span>
           </div>
-          <h3 style={styles.stateTitle}>You're all caught up</h3>
-          <p style={styles.stateBody}>
-            {deckExhausted
-              ? "You've seen everyone who fits right now. New people join all the time — check back later."
-              : "You've reviewed everyone for now. Check back later — new people land all the time."}
-          </p>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
-            {/* No "Show everyone" button. It existed to escape a campus-narrowed
-                deck; there is no narrowed deck to escape. */}
-            {/* Refresh is only honest when there is something to re-fetch.
-                Once deckExhausted is true the server has confirmed nobody
-                eligible is left ANYWHERE, so tapping this would re-request the
-                same exhausted pool and appear broken. Hiding it is the truthful
-                state; showing it would be a button that lies about the system. */}
-            {!deckExhausted && (
-              <button onClick={() => fetchProfiles(false)} className="slam-btn" style={styles.slamBtn}>
-                <RotateCw size={14} strokeWidth={3} /> Refresh
-              </button>
-            )}
+
+          <div
+            className="au-step"
+            style={kb.open && kb.lift > 0 ? { transform: `translateY(-${kb.lift}px)` } : undefined}
+          >
+            <AnimatePresence mode="wait" custom={dir} initial={false}>
+              <motion.div
+                key={step}
+                className="au-screen"
+                custom={dir}
+                variants={screenVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+              >
+                {step === 'college' && (
+                  <>
+                    <h1 className="au-headline">your campus, <span className="au-huh">huh?</span></h1>
+                    <p className="au-sub">search your college — <b>real students only</b>, so this part matters.</p>
+
+                    <form className="au-form" onSubmit={(e) => e.preventDefault()}>
+                      <label className="au-mobile-field-label" htmlFor="au-college-search">your college</label>
+                      <div className="au-searchwrap">
+                        <span className="au-searchicon"><Search size={18} strokeWidth={2.4} /></span>
+                        <input
+                          id="au-college-search"
+                          ref={(el) => { fieldRef.current = el; }}
+                          className="au-search"
+                          type="text"
+                          inputMode="search"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="none"
+                          spellCheck="false"
+                          placeholder="start typing your college…"
+                          value={query}
+                          onChange={(e) => { setQuery(e.target.value); setCollege(null); setRequestSent(false); }}
+                        />
+                      </div>
+
+                      {(results.length > 0 || (query.trim().length >= 2 && !college)) && (
+                        <div className="au-results" role="listbox" aria-label="College suggestions">
+                          {results.map((c) => {
+                            const chosen = college && c.code === college.code;
+                            return (
+                              <button
+                                type="button"
+                                key={c.code || c.name}
+                                role="option"
+                                aria-selected={!!chosen}
+                                className={`au-result${chosen ? ' chosen' : ''}`}
+                                onClick={() => chooseCollege(c)}
+                              >
+                                <span className="au-result-name">{c.name}</span>
+                                <span className="au-result-meta">
+                                  {[c.city, c.state].filter(Boolean).join(', ') || c.domains?.[0] || ''}
+                                </span>
+                              </button>
+                            );
+                          })}
+                          {results.length === 0 && (
+                            <div>
+                              <p className="au-empty">
+                                {searching ? 'looking…' : `no match for “${query.trim()}” — check the spelling?`}
+                              </p>
+                              {!searching && !requestSent && (
+                                <button
+                                  className="au-cta"
+                                  type="button"
+                                  onClick={() => {
+                                    setRequestForm((f) => ({ ...f, email, collegeName: query.trim() }));
+                                    go('request');
+                                  }}
+                                >
+                                  request this college
+                                </button>
+                              )}
+                              {requestSent && (
+                                <div className="au-strip">
+                                  <CheckCircle2 size={17} strokeWidth={2.4} />
+                                  <span>request received</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </form>
+                  </>
+                )}
+
+                {step === 'email' && (
+                  <>
+                    <h1 className="au-headline">college email, <span className="au-huh">huh?</span></h1>
+                    <p className="au-sub">the one your college gave you. we send a <b>6-digit code</b> there — nothing else.</p>
+
+                    {college && (
+                      <div className="au-strip">
+                        <CheckCircle2 size={17} strokeWidth={2.4} />
+                        <span>{college.name}</span>
+                        <button type="button" className="au-ghost au-strip-change" onClick={() => go('college')}>change</button>
+                      </div>
+                    )}
+
+                    <form className="au-form" onSubmit={submitEmail}>
+                      <label className="au-mobile-field-label" htmlFor="au-email">college email</label>
+                      <input
+                        id="au-email"
+                        ref={(el) => { fieldRef.current = el; }}
+                        className="au-input"
+                        type="email"
+                        inputMode="email"
+                        autoComplete="email"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck="false"
+                        placeholder={college?.domains?.[0] ? `you@${college.domains[0]}` : 'you@college.edu'}
+                        value={email}
+                        onChange={(e) => { setEmail(e.target.value); setEmailErr(''); }}
+                        disabled={sending}
+                      />
+                      {emailErr && <div className="au-banner"><p>{emailErr}</p></div>}
+                      <button className="au-cta" type="submit" disabled={sending || !email.trim()}>
+                        {sending ? 'sending…' : 'send my code'}
+                      </button>
+                      <button type="button" className="au-ghost" onClick={() => go('college')} disabled={sending}>
+                        ← wrong college? go back
+                      </button>
+                    </form>
+                  </>
+                )}
+
+                {step === 'request' && (
+                  <>
+                    <h1 className="au-headline">tell us your campus, <span className="au-huh">huh?</span></h1>
+                    <p className="au-sub">we'll add <b>{query.trim() || 'your college'}</b> and let you in once it's live.</p>
+
+                    {requestSent ? (
+                      <>
+                        <div className="au-strip">
+                          <CheckCircle2 size={17} strokeWidth={2.4} />
+                          <span>request received — we'll email you</span>
+                        </div>
+                        <button className="au-cta" type="button" onClick={() => go('college')}>
+                          back to search
+                        </button>
+                      </>
+                    ) : (
+                      <form className="au-form" onSubmit={submitRequest}>
+                        <label className="au-mobile-field-label" htmlFor="au-req-email">your email</label>
+                        <input
+                          id="au-req-email"
+                          className="au-input"
+                          type="email"
+                          inputMode="email"
+                          autoComplete="email"
+                          spellCheck="false"
+                          placeholder="you@college.edu"
+                          value={requestForm.email}
+                          onChange={(e) => setRequestForm((f) => ({ ...f, email: e.target.value }))}
+                          disabled={requestBusy}
+                        />
+
+                        <label className="au-mobile-field-label" htmlFor="au-req-name">your name</label>
+                        <input
+                          id="au-req-name"
+                          className="au-input"
+                          type="text"
+                          autoComplete="name"
+                          placeholder="what your classmates call you"
+                          value={requestForm.name}
+                          onChange={(e) => setRequestForm((f) => ({ ...f, name: e.target.value }))}
+                          disabled={requestBusy}
+                        />
+
+                        <div className="au-rowsep">
+                          <input
+                            className="au-input"
+                            type="text"
+                            autoComplete="address-level2"
+                            placeholder="city"
+                            aria-label="City"
+                            value={requestForm.city}
+                            onChange={(e) => setRequestForm((f) => ({ ...f, city: e.target.value }))}
+                            disabled={requestBusy}
+                          />
+                          <input
+                            className="au-input"
+                            type="text"
+                            autoComplete="address-level1"
+                            placeholder="state"
+                            aria-label="State"
+                            value={requestForm.state}
+                            onChange={(e) => setRequestForm((f) => ({ ...f, state: e.target.value }))}
+                            disabled={requestBusy}
+                          />
+                        </div>
+
+                        {requestErr && <div className="au-banner"><p>{requestErr}</p></div>}
+                        <button className="au-cta" type="submit" disabled={requestBusy || !requestForm.email.trim()}>
+                          {requestBusy ? 'sending…' : 'request my college'}
+                        </button>
+                        <button type="button" className="au-ghost" onClick={() => go('college')} disabled={requestBusy}>
+                          ← keep searching
+                        </button>
+                      </form>
+                    )}
+                  </>
+                )}
+
+                {step === 'code' && (
+                  <>
+                    <h1 className="au-headline">check your inbox, <span className="au-huh">huh?</span></h1>
+                    {reverifyOnly ? (
+                      <p className="au-sub">a fresh code for your annual re-verification.</p>
+                    ) : (
+                      <p className="au-sub">six digits, headed to <b className="low">{email}</b>.</p>
+                    )}
+
+                    <form className="au-form" onSubmit={verifyCode}>
+                      <div className="au-otp" ref={(el) => { fieldRef.current = el; }}>
+                        {digits.map((d, i) => (
+                          <input
+                            key={i}
+                            ref={(el) => { boxRefs.current[i] = el; }}
+                            className={`au-box${codeErr ? ' err' : ''}${verified ? ' ok' : ''}`}
+                            type="text"
+                            inputMode="numeric"
+                            aria-label={`Digit ${i + 1}`}
+                            autoComplete={i === 0 ? 'one-time-code' : 'off'}
+                            maxLength={1}
+                            value={d}
+                            onChange={(e) => setDigit(i, e.target.value)}
+                            onKeyDown={(e) => onDigitKey(i, e)}
+                            onPaste={i === 0 ? onDigitPaste : undefined}
+                            onFocus={(e) => e.target.select()}
+                            disabled={verifying || verified}
+                          />
+                        ))}
+                      </div>
+
+                      {codeErr && <div className="au-banner"><p>{codeErr}</p></div>}
+                      {verified && (
+                        <div className="au-strip"><CheckCircle2 size={17} strokeWidth={2.4} /><span>that's you — verified</span></div>
+                      )}
+
+                      <button className="au-cta" type="submit" disabled={verifying || verified || digits.join('').length < 6}>
+                        {verifying ? 'checking…' : verified ? 'verified ✓' : 'verify me'}
+                      </button>
+
+                      <div className="au-rowsep">
+                        <button type="button" className="au-ghost" onClick={resendCode}>resend code</button>
+                        {!reverifyOnly && (
+                          <button type="button" className="au-ghost" onClick={() => go('email')}>wrong email?</button>
+                        )}
+                      </div>
+                    </form>
+                  </>
+                )}
+
+                {step === 'next' && (
+                  <>
+                    <h1 className="au-headline">let's move forward, <span className="au-huh">huh?</span></h1>
+                    <p className="au-sub">you're in — <b>{college?.name || 'your campus'}</b> is locked. here's what's coming:</p>
+
+                    <div className="au-nextlist">
+                      <div className="au-nextrow"><b>01</b><span><strong>your profile</strong> — photos, vibe, the basics</span></div>
+                      <div className="au-nextrow"><b>02</b><span><strong>your people</strong> — students from your campus only</span></div>
+                      <div className="au-nextrow"><b>03</b><span><strong>your feed</strong> — what's happening around you</span></div>
+                    </div>
+
+                    <button className="au-cta" type="button" onClick={finish}>
+                      sounds good — let's go
+                    </button>
+                  </>
+                )}
+
+                {showArt && (
+                  <div className="au-art">
+                    <StepArt kind={step} />
+                  </div>
+                )}
+              </motion.div>
+            </AnimatePresence>
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+```
+
+### ./client/src/pages/Chat.jsx
+
+```
+import React, { useEffect, useState, useRef, useCallback, useLayoutEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { motion, AnimatePresence } from 'framer-motion';
+import socket from '../utils/socket';
+import { api } from '../utils/api';
+import { useAuth } from '../utils/AuthContext';
+import { toast } from '../utils/toast';
+import { triggerHaptic } from '../utils/haptics';
+import MessageBubble from '../components/chat/MessageBubble';
+import MessageActionMenu from '../components/chat/MessageActionMenu';
+import EmojiPicker from '../components/chat/EmojiPicker';
+import PhotoViewer from '../components/chat/PhotoViewer';
+import ReplyPreview from '../components/chat/ReplyPreview';
+import SearchOverlay from '../components/chat/SearchOverlay';
+import ReportModal from '../components/chat/ReportModal';
+import neu from '../styles/neu';
+import { Search, ChevronLeft, Sparkle, MapPin, Lock } from 'lucide-react';
+
+const t = neu;
+
+// crypto.randomUUID fallback for non-HTTPS / LAN environments
+const genId = () =>
+  (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+
+const Icon = React.memo(({ path, size = 20, color = 'currentColor', strokeWidth = 2 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+    {path}
+  </svg>
+));
+
+const formatDateSeparator = (dateStr) => {
+  if (!dateStr) return '';
+  const today = new Date();
+  const msgDate = new Date(dateStr);
+  const isToday = msgDate.toDateString() === today.toDateString();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const isYesterday = msgDate.toDateString() === yesterday.toDateString();
+  
+  if (isToday) return 'Today';
+  if (isYesterday) return 'Yesterday';
+  return msgDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+};
+
+const formatLastActive = (lastActive) => {
+  if (!lastActive) return 'Offline';
+  const now = new Date();
+  const last = new Date(lastActive);
+  const diffMs = now - last;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  
+  if (diffMins < 1) return 'Active now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return last.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+};
+
+async function fetchMessages(alignmentId, cursor = null, limit = 50) {
+  try {
+    const params = new URLSearchParams();
+    if (cursor) params.set('cursor', cursor);
+    params.set('limit', String(limit));
+    const qs = params.toString();
+    const data = await api.get(`/messages/${alignmentId}${qs ? '?' + qs : ''}`);
+    return {
+      messages: Array.isArray(data) ? data : data.messages || [],
+      hasMore: data.hasMore || false,
+      nextCursor: data.nextCursor || null,
+    };
+  } catch (err) {
+    console.error('Fetch messages error:', err);
+    return { messages: [], hasMore: false, nextCursor: null };
+  }
+}
+
+/* ==================================================================
+   CHAT PROFILE VIEW (100% Visual Parity with Discovery ProfileCard)
+================================================================== */
+const chatTheme = {
+  color: {
+    paper: t.paper, surface: t.paper, surfaceAlt: t.paper, border: t.ink,
+    borderDark: t.ink, ink: t.ink, inkSoft: t.ink2, inkMuted: t.ink3,
+    accent: t.yellow, crimson: t.coral, shadowWarm: t.yellow, shadowDark: t.ink,
+  },
+  font: { display: t.fontHeavy, body: t.fontBody },
+};
+
+function buildTornEdge(teeth = 64) {
+  const heights = [0, 18, 4, 22, 8, 16, 2, 24, 6, 14, 10, 20];
+  const pts = ['0% 100%'];
+  for (let i = 0; i <= teeth; i++) {
+    const x = ((i / teeth) * 100).toFixed(2);
+    const y = heights[i % heights.length];
+    pts.push(`${x}% ${y}%`);
+  }
+  pts.push('100% 100%');
+  return `polygon(${pts.join(',')})`;
+}
+const CHAT_TORN_EDGE_CLIP = buildTornEdge();
+
+const TILT = { prompt_0: '1.4deg', photo_1: '-2.2deg', photo_2: '1.8deg', prompt_1: '-1.1deg', prompt_2: '0.5deg', photo_3: '-0.7deg' };
+
+const ChatSectionLabel = React.memo(({ children }) => (
+  <p style={{ fontFamily: chatTheme.font.body, fontSize: '10px', fontWeight: 700, letterSpacing: '2px', textTransform: 'uppercase', color: chatTheme.color.accent, margin: '0 0 12px 0', display: 'flex', alignItems: 'center' }}>
+    <span aria-hidden="true" style={{ display: 'inline-block', width: '16px', height: '2px', backgroundColor: chatTheme.color.accent, marginRight: '8px', borderRadius: '2px' }} />
+    {children}
+  </p>
+));
+
+const ChatStitchSeam = React.memo(() => (
+  <div aria-hidden="true" style={{ height: '1px', backgroundImage: `repeating-linear-gradient(90deg, ${chatTheme.color.border} 0px, ${chatTheme.color.border} 8px, transparent 8px, transparent 14px)`, opacity: 0.8, margin: '16px 0' }} />
+));
+
+const ChatPhotoCorners = React.memo(() => (
+  <>
+    <span aria-hidden="true" style={{ position: 'absolute', top: 0, left: 0, width: 24, height: 24, background: t.card, clipPath: 'polygon(0 0, 100% 0, 0 100%)', zIndex: 3 }} />
+    <span aria-hidden="true" style={{ position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, background: t.card, clipPath: 'polygon(100% 100%, 0 100%, 100% 0)', zIndex: 3 }} />
+  </>
+));
+
+const ChatMountedPhoto = React.memo(({ src, alt, tilt, aspect }) => (
+  <div className="pc-dynamic-shadow" style={{ '--tilt': tilt, transform: 'rotate(var(--tilt, 0deg))', position: 'relative', width: '100%', height: aspect ? 'auto' : '200px', aspectRatio: aspect || undefined, borderRadius: '6px', border: `6px solid ${t.paper}`, backgroundColor: t.paper, overflow: 'hidden' }}>
+    <img src={src} alt={alt} className="pc-photo-img" loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+    <ChatPhotoCorners />
+    <div aria-hidden="true" style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at var(--lamp-pct-x, 50%) var(--lamp-pct-y, 30%), rgba(255,255,255,0.35) 0%, transparent 50%)', pointerEvents: 'none', zIndex: 4, mixBlendMode: 'soft-light' }} />
+  </div>
+));
+
+const ChatIndexCard = ({ children, tilt, wide, tape = 'center' }) => {
+  const getTapeConfig = () => {
+    const base = { position: 'absolute', top: '-10px', width: '36px', height: '16px', backgroundColor: t.paper, backdropFilter: 'blur(3px)', border: `1px solid ${t.yellow}`, zIndex: 5 };
+    if (tape === 'top-right') return { ...base, right: '16px', '--tape-rot': '4deg', transform: 'rotate(4deg)' };
+    if (tape === 'top-left') return { ...base, left: '16px', '--tape-rot': '-4deg', transform: 'rotate(-4deg)' };
+    return { ...base, left: '50%', '--tape-rot': '-1deg', transform: 'translateX(-50%) rotate(-1deg)' };
+  };
+  return (
+    <div className="pc-dynamic-shadow" style={{ '--tilt': tilt, transform: 'rotate(var(--tilt, 0deg))', backgroundColor: t.paper, backgroundImage: `linear-gradient(${t.yellow}11 1px, transparent 1px)`, backgroundSize: '100% 24px', border: `1px solid ${t.ink}`, borderRadius: t.radius.md, padding: '24px 16px 20px', height: wide ? 'auto' : '100%', minHeight: wide ? undefined : '140px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+      <span aria-hidden="true" className="pc-tape" style={getTapeConfig()} />
+      <span aria-hidden="true" className="pc-metallic-foil" style={{ fontFamily: t.fontHeavy, fontSize: '32px', lineHeight: 0.5, opacity: 0.45, marginBottom: '8px', display: 'block', background: `linear-gradient(-135deg, ${t.yellowDeep} 0%, ${t.yellow} 30%, ${t.yellow} 50%, ${t.yellow} 70%, ${t.yellowDeep} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>“</span>
+      <p style={{ fontFamily: t.fontHeavy, fontSize: '15px', fontStyle: 'italic', color: t.ink, margin: '0 0 4px 0', lineHeight: 1.45, textAlign: 'center', fontWeight: 600 }}>{children}</p>
+    </div>
+  );
+};
+
+const ChatProfileView = ({ profile, onClose, unavailable }) => {
+  if (!profile) return null;
+
+  if (unavailable) {
+    return (
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(25,25,25,0.7)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
+        <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxHeight: '50dvh', backgroundColor: t.paper, borderTopLeftRadius: t.radius.lg, borderTopRightRadius: t.radius.lg, display: 'flex', flexDirection: 'column', boxShadow: `0 -12px 32px ${t.ink}`, alignItems: 'center', justifyContent: 'center', padding: '60px 24px' }}>
+          <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'rgba(255, 212, 61, 0.1)', border: `2px solid ${t.yellow}`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '20px' }}>
+            <Lock size={28} color={t.ink3} strokeWidth={1.5} />
+          </div>
+          <p style={{ fontFamily: t.fontHeavy, fontSize: '20px', fontWeight: 700, color: t.ink, margin: '0 0 8px', textAlign: 'center', letterSpacing: '-0.02em' }}>
+            This user is no longer available
+          </p>
+          <p style={{ fontFamily: t.fontBody, fontSize: '13px', color: t.ink3, margin: 0, textAlign: 'center', lineHeight: 1.5 }}>
+            This profile is no longer accessible.
+          </p>
+        </motion.div>
+      </motion.div>
     );
   }
 
   return (
-    <div style={{ ...styles.viewportRoot, ...(isDesktop ? styles.viewportRootDesktop : null) }}>
-      <style>{DECK_CSS}</style>
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(25,25,25,0.7)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
+      <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} style={{ width: '100%', maxHeight: '92vh', backgroundColor: t.paper, borderTopLeftRadius: t.radius.lg, borderTopRightRadius: t.radius.lg, display: 'flex', flexDirection: 'column', boxShadow: `0 -12px 32px ${t.ink}` }} onClick={(e) => e.stopPropagation()}>
+        
+        {/* Header */}
+        <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${t.ink}`, backgroundColor: t.paper, borderTopLeftRadius: t.radius.lg, borderTopRightRadius: t.radius.lg, zIndex: 10, position: 'sticky', top: 0 }}>
+          <span style={{ fontFamily: t.fontHeavy, fontSize: '20px', fontWeight: 700, color: t.ink }}>View Profile</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }} aria-label="Close profile">
+            <Icon path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} size={24} color={t.ink3} />
+          </button>
+        </div>
 
-      <ShadowbanBanner score={shadowbanScore} onLearnMore={() => setShowLearnMore(true)} />
-      {showLearnMore && <LearnMoreSheet onClose={() => setShowLearnMore(false)} />}
+        {/* Scrollable Content */}
+        <div className="pc-scroll" style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: '40px', position: 'relative' }}>
+          
+          {/* 1. Hero Photo Section */}
+          <div style={{ width: '100%', position: 'relative' }}>
+            <div style={{ width: '100%', aspectRatio: '4/5.8', position: 'relative', backgroundColor: t.paper, overflow: 'hidden' }}>
+              <img src={profile.photos?.[0] || 'https://via.placeholder.com/600x800/e8e4d9/1a1a1a?text=No+Photo'} alt={profile.name} className="pc-photo-img" loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+              <div aria-hidden="true" style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 50% 30%, rgba(255,255,255,0.2) 0%, transparent 50%), linear-gradient(to top, rgba(15,12,10,0.98) 0%, rgba(15,12,10,0.6) 40%, rgba(0,0,0,0.1) 75%, transparent 100%)', pointerEvents: 'none' }} />
+              <div style={{ position: 'absolute', bottom: '38px', left: '24px', right: '24px', zIndex: 2 }}>
+                <div className="pc-fade-1" style={{ display: 'inline-block', padding: '5px 12px', background: 'rgba(255, 249, 236, 0.2)', backdropFilter: 'blur(12px)', borderRadius: t.radius.sm, border: '1px solid rgba(255,255,255,0.4)', marginBottom: '12px' }}>
+                  <span style={{ fontFamily: t.fontBody, fontSize: '10px', color: '#fff', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: 700 }}>Archival Subject</span>
+                </div>
+                <h2 className="pc-fade-1" style={{ fontFamily: t.fontHeavy, fontSize: 'clamp(30px, 7vw, 42px)', color: '#fff', margin: 0, fontWeight: 700, letterSpacing: '-0.025em', lineHeight: 1.05, textShadow: '0 4px 20px rgba(0,0,0,0.6)' }}>
+                  {profile.name || 'Anonymous'}<span style={{ fontWeight: 400, opacity: 0.85 }}>, {profile.age || '—'}</span>
+                </h2>
+                <p className="pc-fade-2" style={{ fontFamily: t.fontBody, fontSize: '11px', color: 'rgba(255,255,255,0.92)', margin: '8px 0 0 0', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: 600, display: 'flex', alignItems: 'center' }}>
+                  {profile.branch || 'General'} <Sparkle size={12} color={t.yellow} style={{ margin: '0 8px', flexShrink: 0 }} /> {profile.year?.toUpperCase() || '—'}
+                </p>
+              </div>
+            </div>
+            <div aria-hidden="true" style={{ width: '100%', height: '24px', backgroundColor: t.paper, clipPath: CHAT_TORN_EDGE_CLIP, marginTop: '-14px', position: 'relative', zIndex: 3 }} />
+          </div>
 
-      {/* 📍 CAMPUS-FALLBACK NOTICE.
+          <div style={{ padding: '24px 24px 0 24px' }}>
+            
+            {/* 2. Vitals */}
+            <ChatSectionLabel>Vitals</ChatSectionLabel>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '24px', flexWrap: 'wrap' }}>
+              {profile.gender && <span className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${t.ink}`, borderRadius: t.radius.sm, backgroundColor: t.card, color: t.ink, fontFamily: t.fontBody, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px' }}>{profile.gender}</span>}
+              {profile.pronouns && <span className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${t.ink}`, borderRadius: t.radius.sm, backgroundColor: t.card, color: t.ink, fontFamily: t.fontBody, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px' }}>{profile.pronouns}</span>}
+              {profile.hostel && <span className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${t.ink}`, borderRadius: t.radius.sm, backgroundColor: t.card, color: t.ink, fontFamily: t.fontBody, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px', display: 'inline-flex', alignItems: 'center' }}><MapPin size={12} style={{ marginRight: 4 }} /> {profile.hostel}</span>}
+            </div>
 
-          The feed ranks by distance from the viewer's own stored reading. When
-          that reading is missing or stale the pipeline substitutes their COLLEGE
-          coordinates silently, so without this the user is looking at a
-          campus-ranked feed believing it is location-ranked.
+            <ChatStitchSeam />
 
-          How it behaves now — it shows on entry and gets out of the way. It
-          appears on every app open and every tab switch (throttled to 3 minutes
-          within a session), collapses to two lines, and auto-hides after 5s.
-          Expanding it holds until dismissed.
+            {/* 4. Seeking Parameters */}
+            <div style={{ margin: '24px 0' }}>
+              <ChatSectionLabel>Seeking</ChatSectionLabel>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {(profile.intent && profile.intent.length > 0 ? profile.intent : ['Long-term', 'Connection', 'Growth']).map((item, i) => (
+                  <span key={i} className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${t.ink}`, borderRadius: t.radius.sm, backgroundColor: t.ink, color: t.paper, fontFamily: t.fontBody, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px' }}>
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </div>
 
-          The previous shape was permanently pinned and undismissable. That was
-          deliberate — a banner people swipe away is how someone stops noticing
-          their feed stopped changing — but a permanent bar over the feed is
-          wallpaper, and wallpaper is ignored. Nothing was decided from it. Now
-          the same information arrives with an expiry, which is the difference
-          between a notice and furniture.
+            {/* 5. Recorded Curiosities */}
+            {profile.interests && profile.interests.length > 0 && (
+              <div style={{ marginBottom: '32px' }}>
+                <ChatSectionLabel>Recorded Curiosities</ChatSectionLabel>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                  {profile.interests.map((interest, i) => (
+                    <span key={i} className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${t.ink}`, borderRadius: t.radius.sm, backgroundColor: t.paper, color: t.ink, fontFamily: t.fontBody, fontSize: '11px', fontWeight: 500 }}>
+                      {interest}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
 
-          Persistent ONLY when the browser has locked location: a denied
-          permission is never re-prompted by the browser, so that copy is the
-          only actionable instruction the user can get.
+            {/* 6. Bento Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px 16px', marginBottom: '48px', paddingTop: '8px' }}>
+              <ChatIndexCard tilt={TILT.prompt_0} tape="top-right">
+                {profile.prompts?.[0]?.question || "A shower thought I recently had..."}
+              </ChatIndexCard>
 
-          The college name is read off `myUser`, so no extra request is needed
-          to render it.
+              {profile.photos?.[1] ? (
+                <ChatMountedPhoto src={profile.photos[1]} alt={`${profile.name}, photo 2`} tilt={TILT.photo_1} />
+              ) : <div />}
 
-          ⚠️ MOUNTED ON THE SERVER'S `active`, NOT ON `locationSource`.
-          `locationSource === 'gps'` only says a reading was stored at some
-          point. A reading older than the 30-day TTL is ignored by the ranking
-          pipeline and the deck falls back to the campus, so the one case where
-          this notice is most needed was the one case it could not appear in —
-          the UI said location was on while the feed was campus-ordered.
-          `GET /users/location` already computes the honest answer
-          (`active: hasCoords && isFreshLocation(user)`), so this reads it rather
-          than re-deriving a TTL in the browser where it would drift. */}
-      {myUser && locationRead && (
-        <LocationNotice
-          college={myUser.college}
-          /* The warning and the confirmation are different messages for
-             different states, and only one is ever correct at a time. */
-          variant={locationRead.active ? 'active' : 'fallback'}
-          onLocationChanged={async (moved) => {
-            if (!moved) return;
-            await rebuildDeckForLocation();
+              {profile.photos?.[2] ? (
+                <ChatMountedPhoto src={profile.photos[2]} alt={`${profile.name}, photo 3`} tilt={TILT.photo_2} />
+              ) : <div />}
+
+              <ChatIndexCard tilt={TILT.prompt_1} tape="top-left">
+                {profile.prompts?.[1]?.question || "My ideal weekend looks like..."}
+              </ChatIndexCard>
+
+              {profile.prompts?.[2] && (
+                <ChatIndexCard tilt={TILT.prompt_2} wide tape="center">
+                  {profile.prompts[2].question}
+                </ChatIndexCard>
+              )}
+
+              {profile.photos?.[3] && (
+                <ChatMountedPhoto src={profile.photos[3]} alt={`${profile.name}, photo 4`} tilt={TILT.photo_3} aspect="16/9" />
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Archival Animations */}
+        <style>{`
+          @keyframes pcFadeUp { from { opacity: 0; transform: translate3d(0, 16px, 0); filter: blur(2px); } to { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0px); } }
+          @keyframes pcRadarSweep { 0% { transform: rotate(-90deg); opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { transform: rotate(270deg); opacity: 0; } }
+          @keyframes pcHintPulse { 0% { opacity: 0.4; transform: scale(1); } 50% { opacity: 0.95; transform: scale(1.03); } 100% { opacity: 0.4; transform: scale(1); } }
+          .pc-fade-1 { animation: pcFadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.05s both; }
+          .pc-fade-2 { animation: pcFadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both; }
+          .pc-scroll::-webkit-scrollbar { width: 4px; }
+          .pc-scroll::-webkit-scrollbar-track { background: transparent; }
+          .pc-scroll::-webkit-scrollbar-thumb { background: ${t.ink}; border-radius: 4px; }
+          .pc-sweep { animation: pcRadarSweep 1.6s cubic-bezier(0.22, 1, 0.36, 1) forwards; transform-origin: 44px 44px; }
+          .pc-hint-pulse { animation: pcHintPulse 2.8s ease-in-out infinite; }
+          .pc-dynamic-shadow { will-change: transform; transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.25s ease; }
+          .pc-dynamic-shadow:active { transform: scale3d(0.98, 0.98, 1) translate3d(0, 0, 0) !important; transition: transform 0.1s cubic-bezier(0, 0, 0.2, 1) !important; }
+          .pc-metallic-foil { background: linear-gradient(-135deg, ${t.yellowDeep} 0%, ${t.yellow} 30%, ${t.yellow} 50%, ${t.yellow} 70%, ${t.yellowDeep} 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+          .pc-pill { transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.25s ease; display: inline-flex; align-items: center; will-change: transform; }
+          .pc-tape { transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1); will-change: transform; }
+          .pc-photo-img { transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1); will-change: transform; }
+          @media (prefers-reduced-motion: reduce) { .pc-fade-1, .pc-fade-2, .pc-sweep, .pc-hint-pulse { animation: none !important; opacity: 1 !important; transform: none !important; } .pc-dynamic-shadow, .pc-photo-img, .pc-pill, .pc-tape { transition: none !important; } }
+        `}</style>
+      </motion.div>
+    </motion.div>
+  );
+};
+
+/* ==================================================================
+   MAIN CHAT COMPONENT
+================================================================== */
+const Chat = ({ match, onBack }) => {
+  const matchUser = match?.user;
+  const alignmentId = match?._id;
+  const otherUserId = matchUser?._id;
+  
+  const [inputText, setInputText] = useState('');
+  const [otherTyping, setOtherTyping] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [showActionSheet, setShowActionSheet] = useState(false);
+  const [pendingFile, setPendingFile] = useState(null);
+  
+  // Online status
+  const [isOnline, setIsOnline] = useState(false);
+  const [lastActive, setLastActive] = useState(null);
+  
+  // Pagination (cursor-based)
+  const [cursor, setCursor] = useState(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  
+  // Scroll to bottom
+  const [showScrollButton, setShowScrollButton] = useState(false);
+  
+  const [showHeaderMenu, setShowHeaderMenu] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
+  const [selectedMessage, setSelectedMessage] = useState(null);
+  const [menuAnchor, setMenuAnchor] = useState(null);
+  const [replyTo, setReplyTo] = useState(null);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [emojiPickerAnchor, setEmojiPickerAnchor] = useState(null);
+  const [showPhotoViewer, setShowPhotoViewer] = useState(false);
+  const [photoViewerUrl, setPhotoViewerUrl] = useState(null);
+  const [showSearch, setShowSearch] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
+
+  const fileInputRef = useRef(null);
+  const recorderRef = useRef(null);
+  const chunksRef = useRef([]);
+  const typingTimer = useRef(null);
+  const listEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
+  const prevScrollHeightRef = useRef(0);
+  const prevMessagesLengthRef = useRef(0);
+  const pendingMsgIdRef = useRef(null);
+  const [socketConnected, setSocketConnected] = useState(socket?.connected ?? true);
+  const otherUnavailable = matchUser?.suspended || matchUser?.isDeleted;
+
+  const { user } = useAuth();
+  const myId = user?._id;
+  const myName = user?.name;
+
+  const queryClient = useQueryClient();
+  const { data: queryMessages = [], isLoading: loading, isError, error: queryError } = useQuery({
+    queryKey: ['messages', alignmentId],
+    queryFn: async () => {
+      const d = await fetchMessages(alignmentId, null, 50);
+      setHasMore(d.hasMore);
+      setCursor(d.nextCursor);
+      if (socket) socket.emit('read-messages', { alignmentId });
+      return d.messages;
+    },
+    enabled: !!alignmentId,
+  });
+  const messages = queryMessages;
+  const error = isError ? (queryError?.message || 'Failed to load messages') : null;
+
+  // Socket Subscriptions
+  useEffect(() => {
+    if (!socket || !alignmentId) return;
+    setCursor(null);
+    socket.emit('join-alignment', alignmentId);
+
+    const onReconnect = () => {
+      if (alignmentId) socket.emit('join-alignment', alignmentId);
+    };
+    socket.on('connect', onReconnect);
+
+    const onConnect = () => setSocketConnected(true);
+    const onDisconnect = () => setSocketConnected(false);
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+
+    const onNew = (msg) => {
+      if (msg?.alignmentId === alignmentId) {
+        queryClient.setQueryData(['messages', alignmentId], (prev = []) => (prev.some((p) => p._id === msg._id) ? prev : [...prev, msg]));
+        socket.emit('read-messages', { alignmentId });
+        triggerHaptic('light');
+      }
+    };
+    const onRead = () => {
+      queryClient.setQueryData(['messages', alignmentId], (prev = []) => prev.map((m) => (String(m.sender || m.senderId) === String(myId) ? { ...m, read: true, readAt: new Date().toISOString() } : m)));
+    };
+    const onTyping = () => setOtherTyping(true);
+    const onStop = () => setOtherTyping(false);
+    const onReactionUpdate = ({ msgId, reactions }) => {
+      queryClient.setQueryData(['messages', alignmentId], (prev = []) => prev.map((m) => (m._id === msgId ? { ...m, reactions } : m)));
+    };
+    const onMessageDeleted = ({ msgId }) => {
+      queryClient.setQueryData(['messages', alignmentId], (prev = []) => prev.map((m) => (m._id === msgId ? { ...m, deleted: true, text: '', mediaUrl: '' } : m)));
+    };
+    const onOnlineUpdate = ({ userId, online, lastActive: la }) => {
+      if (userId === otherUserId) {
+        setIsOnline(online);
+        setLastActive(la);
+      }
+    };
+
+    socket.on('new-message', onNew);
+    socket.on('messages-read', onRead);
+    socket.on('user-typing', onTyping);
+    socket.on('user-stop-typing', onStop);
+    socket.on('reaction-update', onReactionUpdate);
+    socket.on('message-deleted', onMessageDeleted);
+    socket.on('online-update', onOnlineUpdate);
+
+    // Declared at effect scope (not inside the `if`) so the cleanup below can pass
+    // it to socket.off. `socket.off(event)` with no listener removes EVERY
+    // listener for that event, so a bare unsubscribe deafens chat app-wide — this
+    // line was previously `socket.off('online-status')`.
+    const onOnlineStatus = ({ online, lastActive: la }) => {
+      setIsOnline(online);
+      setLastActive(la);
+    };
+
+    if (otherUserId) {
+      socket.emit('check-online', { alignmentId, targetUserId: otherUserId });
+      socket.on('online-status', onOnlineStatus);
+    }
+
+    return () => {
+      if (typingTimer.current) {
+        clearTimeout(typingTimer.current);
+        typingTimer.current = null;
+        socket.emit('stop-typing', { alignmentId });
+      }
+      socket.off('connect', onReconnect);
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      socket.off('new-message', onNew);
+      socket.off('messages-read', onRead);
+      socket.off('user-typing', onTyping);
+      socket.off('user-stop-typing', onStop);
+      socket.off('reaction-update', onReactionUpdate);
+      socket.off('message-deleted', onMessageDeleted);
+      socket.off('online-update', onOnlineUpdate);
+      // `socket.off(event)` with no listener removes EVERY listener for that
+      // event — one careless unsubscribe deafens chat for the whole app. Every
+      // other line above passes its handler; this one didn't. Harmless today
+      // (online-status has a single subscriber) but it breaks silently the day
+      // a second component subscribes.
+      socket.off('online-status', onOnlineStatus);
+    };
+  }, [alignmentId, myId, otherUserId, queryClient]);
+
+  // ⚓ ZERO-LAG SCROLL ANCHOR: Freezes viewport when older messages are prepended to DOM
+  useLayoutEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    // If messages grew because we loaded history (not because we sent a new message at the bottom)
+    if (messages.length > prevMessagesLengthRef.current && prevScrollHeightRef.current > 0) {
+      const heightDifference = container.scrollHeight - prevScrollHeightRef.current;
+      if (container.scrollTop < 100 && heightDifference > 0) {
+        container.scrollTop = heightDifference;
+      }
+    }
+    
+    prevScrollHeightRef.current = container.scrollHeight;
+    prevMessagesLengthRef.current = messages.length;
+  }, [messages]);
+
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    if (!showScrollButton) {
+      listEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, otherTyping, loading, showScrollButton]);
+
+  const loadMoreMessages = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    const { messages: olderMsgs, hasMore: more, nextCursor } = await fetchMessages(alignmentId, cursor, 50);
+    queryClient.setQueryData(['messages', alignmentId], (prev = []) => [...olderMsgs, ...prev]);
+    setCursor(nextCursor);
+    setHasMore(more);
+    setLoadingMore(false);
+  }, [loadingMore, hasMore, cursor, alignmentId, queryClient]);
+
+  const handleScroll = useCallback(() => {
+    if (!messagesContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 200;
+    setShowScrollButton(!isNearBottom);
+
+    if (scrollTop < 5 && hasMore && !loadingMore && !loading) {
+      loadMoreMessages();
+    }
+  }, [hasMore, loadingMore, loading, loadMoreMessages]);
+
+  const handleInputChange = (e) => {
+    setInputText(e.target.value);
+    if (!socket) return;
+    if (!typingTimer.current) socket.emit('typing', { alignmentId, userName: myName });
+    clearTimeout(typingTimer.current);
+    typingTimer.current = setTimeout(() => {
+      socket.emit('stop-typing', { alignmentId });
+      typingTimer.current = null;
+    }, 500);
+  };
+
+  const handleSend = async () => {
+    const text = inputText.trim();
+    if (!text || !alignmentId) {
+      console.error('Cannot send: missing text or alignmentId');
+      return;
+    }
+    if (!pendingMsgIdRef.current) pendingMsgIdRef.current = genId();
+    triggerHaptic('medium');
+    socket.emit('stop-typing', { alignmentId });
+    if (typingTimer.current) { clearTimeout(typingTimer.current); typingTimer.current = null; }
+
+    try {
+      const msg = await api.post(`/messages/${alignmentId}`, {
+        text,
+        replyTo: replyTo?._id || null,
+        clientMsgId: pendingMsgIdRef.current,
+      });
+      queryClient.setQueryData(['messages', alignmentId], (prev = []) => [...prev, msg]);
+      setInputText('');
+      setReplyTo(null);
+      setShowScrollButton(false);
+      pendingMsgIdRef.current = null;
+    } catch (err) {
+      console.error('Send failed:', err);
+      if (!err?.toasted) {
+        toast.error('Couldn\'t send message. Check your connection.', {
+          label: 'Retry',
+          onClick: () => handleSend()
+        });
+      }
+    }
+  };
+
+  const handleFileClick = () => { triggerHaptic('light'); fileInputRef.current?.click(); };
+
+  const onFileSelected = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPendingFile(file);
+    setShowActionSheet(true);
+    triggerHaptic('medium');
+    e.target.value = '';
+  };
+
+  const uploadAndSend = async (kind) => {
+    const file = pendingFile;
+    setShowActionSheet(false);
+    if (!file) return;
+    setUploading(true);
+    try {
+      const { url } = await api.upload(file);
+      if (url) {
+        triggerHaptic('heavy');
+        if (!pendingMsgIdRef.current) pendingMsgIdRef.current = genId();
+        const msg = await api.post(`/messages/${alignmentId}`, {
+          type: kind,
+          mediaUrl: url,
+          replyTo: replyTo?._id || null,
+          clientMsgId: pendingMsgIdRef.current,
+        });
+        queryClient.setQueryData(['messages', alignmentId], (prev = []) => [...prev, msg]);
+        pendingMsgIdRef.current = null;
+        setReplyTo(null);
+        setShowScrollButton(false);
+      }
+    } catch (err) { 
+      console.error('Upload failed:', err);
+      if (!err?.toasted) {
+        toast.error('Couldn\'t upload photo. Check your connection.', {
+          label: 'Retry',
+          onClick: () => uploadAndSend(kind)
+        }); 
+      }
+    } finally { 
+      setUploading(false);
+      setPendingFile(null);
+    }
+  };
+
+  const startRecording = async () => {
+    triggerHaptic('medium');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/mp4';
+      const rec = new MediaRecorder(stream, { mimeType });
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => chunksRef.current.push(e.data);
+      rec.onstop = async () => {
+        const ext = mimeType.includes('mp4') ? 'm4a' : 'webm';
+        const blob = new Blob(chunksRef.current, { type: mimeType });
+        const file = new File([blob], `voice.${ext}`, { type: mimeType });
+        setPendingFile(file);
+        setShowActionSheet(true);
+        stream.getTracks().forEach((t) => t.stop());
+      };
+      recorderRef.current = rec;
+      rec.start();
+      setRecording(true);
+    } catch { setRecording(false); }
+  };
+
+  const stopRecording = () => { triggerHaptic('heavy'); recorderRef.current?.stop(); setRecording(false); };
+
+  const handleLongPress = (message, event) => {
+    if (message.deleted) return;
+    const rect = event.target.closest('[data-bubble="true"]')?.getBoundingClientRect();
+    if (rect) { setSelectedMessage(message); setMenuAnchor(rect); }
+  };
+
+  const handleCloseMenu = () => { setSelectedMessage(null); setMenuAnchor(null); };
+  const handleReply = () => { setReplyTo(selectedMessage); handleCloseMenu(); triggerHaptic('light'); };
+  
+  const handleReact = () => {
+    setEmojiPickerAnchor(menuAnchor);
+    setMenuAnchor(null);
+    setShowEmojiPicker(true);
+  };
+
+  const handleEmojiSelect = async (emoji) => {
+    setShowEmojiPicker(false);
+    setEmojiPickerAnchor(null);
+    const target = selectedMessage;
+    setSelectedMessage(null);
+    if (!target) return;
+    try {
+      const data = await api.post(`/messages/${alignmentId}/reaction`, { msgId: target._id, emoji });
+      queryClient.setQueryData(['messages', alignmentId], (prev = []) => prev.map((m) => (m._id === target._id ? { ...m, reactions: data.reactions } : m)));
+    } catch (err) { console.error('Reaction failed:', err); }
+  };
+
+  const handleCopy = () => {
+    if (selectedMessage?.text) navigator.clipboard.writeText(selectedMessage.text);
+    triggerHaptic('light');
+    handleCloseMenu();
+  };
+
+  const handleReport = () => {
+    setShowReportModal(true);
+    handleCloseMenu();
+  };
+
+  const handleDelete = async () => {
+    if (!selectedMessage) return;
+    if (!window.confirm('Delete this message?')) return;
+    try {
+      await api.delete(`/messages/${alignmentId}/${selectedMessage._id}`);
+      queryClient.setQueryData(['messages', alignmentId], (prev = []) => prev.map((m) => (m._id === selectedMessage._id ? { ...m, deleted: true } : m)));
+      triggerHaptic('heavy');
+    } catch (err) { 
+      console.error('Delete failed:', err);
+      if (!err?.toasted) {
+        toast.error('Failed to delete. Please try again.');
+      }
+    }
+    handleCloseMenu();
+  };
+
+  const handleImageClick = (url) => { setPhotoViewerUrl(url); setShowPhotoViewer(true); triggerHaptic('light'); };
+
+  // Optimized Search Jump utilizing CSS class animations to prevent DOM style lag
+  const handleSearchJump = (msgId) => {
+    const el = document.querySelector(`[data-msg-id="${msgId}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('highlight-pulse');
+      setTimeout(() => { el.classList.remove('highlight-pulse'); }, 2000);
+    }
+  };
+
+  const handleUnmatch = async () => {
+    if (!window.confirm('End this conversation? This cannot be undone.')) return;
+    try {
+      await api.delete(`/alignments/${alignmentId}`);
+      triggerHaptic('heavy');
+      onBack();
+    } catch (err) {
+      console.error('Unmatch failed:', err);
+      if (!err?.toasted) {
+        toast.error('Failed to end this conversation. Please try again.');
+      }
+    }
+    setShowHeaderMenu(false);
+  };
+
+  const handleBlock = async () => {
+    if (!window.confirm('Block this user? They will no longer be able to message you.')) return;
+    try {
+      await api.post(`/report/block/${otherUserId}`);
+      triggerHaptic('heavy');
+      onBack();
+    } catch (err) {
+      console.error('Block failed:', err);
+      if (!err?.toasted) {
+        toast.error('Failed to block this user. Please try again.', {
+          label: 'Retry',
+          onClick: () => handleBlock()
+        });
+      }
+    }
+    setShowHeaderMenu(false);
+  };
+
+  const scrollToBottom = () => {
+    listEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    setShowScrollButton(false);
+  };
+
+  return (
+    <div style={styles.page}>
+      <div style={styles.paperGrain} aria-hidden="true" />
+
+      {/* ARCHIVAL HEADER WITH ONLINE STATUS */}
+      <div style={styles.header}>
+        <button style={styles.backBtn} onPointerDown={(e) => { e.preventDefault(); triggerHaptic('light'); onBack(); }} onClick={() => { triggerHaptic('light'); onBack(); }} aria-label="Go back to letters"><ChevronLeft size={24} color={t.ink} /></button>
+
+        <div style={styles.headerLeft} onClick={() => setShowProfile(true)}>
+          <div style={{ position: 'relative' }}>
+            <img 
+              src={matchUser?.photos?.[0] || 'https://via.placeholder.com/80'} 
+              alt={matchUser?.name} 
+              loading="lazy"
+              decoding="async"
+              onLoad={(e) => { e.currentTarget.style.opacity = 1; }}
+              onError={(e) => { e.currentTarget.src = 'https://via.placeholder.com/80'; e.currentTarget.style.opacity = 1; }}
+              style={{ ...styles.headerAvatar, opacity: 0, transition: 'opacity 0.3s ease-out' }} 
+            />
+            {isOnline && <div style={styles.onlineDot} />}
+          </div>
+          <div style={styles.headerInfo}>
+            <span style={styles.headerName}>{matchUser?.name || 'Connection'}</span>
+            <span style={styles.headerStatus}>
+              {otherTyping ? 'Typing...' : isOnline ? 'Online' : formatLastActive(lastActive)}
+            </span>
+          </div>
+        </div>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button style={styles.iconBtn} onClick={() => setShowSearch(true)} title="Search" aria-label="Search messages">
+            <Search size={20} color={t.ink} />
+          </button>
+
+          <div style={{ position: 'relative' }}>
+            <button style={styles.iconBtn} onClick={() => setShowHeaderMenu(!showHeaderMenu)} aria-label="Open chat options">
+              <Icon path={<><circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" /></>} size={20} color={t.ink} />
+            </button>
+            
+            <AnimatePresence>
+              {showHeaderMenu && (
+                <motion.div 
+                  initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+                  style={styles.dropdownMenu}
+                >
+                  <button style={styles.dropdownItem} onClick={() => { setShowProfile(true); setShowHeaderMenu(false); }}>
+                    <Icon path={<><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>} size={16} />
+                    View Profile
+                  </button>
+                  <button style={{...styles.dropdownItem, color: t.red}} onClick={() => { handleReport(); setShowHeaderMenu(false); }}>
+                    <Icon path={<><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" /></>} size={16} color={t.red} />
+                    Report User
+                  </button>
+                  <button style={{...styles.dropdownItem, color: t.red}} onClick={handleBlock}>
+                    <Icon path={<><circle cx="12" cy="12" r="10" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /></>} size={16} color={t.red} />
+                    Block User
+                  </button>
+                  <button style={{...styles.dropdownItem, color: t.red}} onClick={handleUnmatch}>
+                    <Icon path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} size={16} color={t.red} />
+                    Unmatch
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+
+        <div style={styles.tornEdgeBottom} aria-hidden="true" />
+      </div>
+
+      {!socketConnected && (
+        <div style={{ background: '#f59e0b', color: '#fff', textAlign: 'center', padding: '6px 12px', fontSize: '13px', fontWeight: 500, letterSpacing: '0.3px' }}>
+          Reconnecting...
+        </div>
+      )}
+
+      {otherUnavailable && (
+        <div style={{
+          background: 'rgba(255, 212, 61, 0.06)',
+          borderBottom: `1px solid ${t.yellow}`,
+          padding: '10px 24px',
+          textAlign: 'center',
+          position: 'relative', zIndex: 5,
+        }}>
+          <p style={{ fontFamily: t.fontBody, fontSize: '13px', fontWeight: 600, color: t.ink2, margin: 0 }}>
+            This user can no longer receive messages
+          </p>
+        </div>
+      )}
+
+      {/* MESSAGES STAGE WITH ZERO-LAG ENGINE */}
+      <div 
+        ref={messagesContainerRef}
+        className="archival-scrollbar" 
+        style={styles.messages}
+        onScroll={handleScroll}
+      >
+        <style>{`
+          .archival-scrollbar::-webkit-scrollbar { width: 4px; }
+          .archival-scrollbar::-webkit-scrollbar-track { background: transparent; }
+          .archival-scrollbar::-webkit-scrollbar-thumb { background: ${t.ink}; border-radius: 4px; }
+          @keyframes blink { 0% { opacity: 0.2; } 20% { opacity: 1; } 100% { opacity: 0.2; } }
+          @keyframes highlightBg { 0% { background-color: ${t.yellow}; } 100% { background-color: transparent; } }
+          .highlight-pulse { animation: highlightBg 2s ease-out forwards; }
+          
+          /* Interactive Button Tactile Physics */
+          .tactile-btn { transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.2s ease; will-change: transform; }
+          @media (hover: hover) { .tactile-btn:hover { transform: translate3d(0, -2px, 0) scale3d(1.02, 1.02, 1); } }
+          .tactile-btn:active { transform: scale3d(0.96, 0.96, 1) translate3d(0, 0, 0) !important; transition: transform 0.08s cubic-bezier(0, 0, 0.2, 1) !important; }
+        `}</style>
+        
+{loading ? (
+            <div style={{ padding: '60px 20px', textAlign: 'center', color: t.ink3, fontFamily: t.fontBody, fontSize: '13px' }}>
+              Opening chat...
+            </div>
+          ) : error ? (
+            <div style={{ padding: '60px 20px', textAlign: 'center', color: t.red, fontFamily: t.fontBody, fontSize: '13px' }}>
+              {error}
+            </div>
+          ) : (
+          <>
+            {loadingMore && (
+              <div style={{ padding: '20px', textAlign: 'center', color: t.ink3, fontFamily: t.fontBody, fontSize: '12px' }}>
+                Loading older messages...
+              </div>
+            )}
+
+            {/* Opening Letter Card */}
+            {messages.filter(m => m.type === 'opening_letter').map(m => (
+              <div key={m._id} style={styles.openingLetterCard}>
+                <div style={styles.openingLetterLabel}>Opening Letter</div>
+                {(m.mediaUrl || m.image) && (
+                  <img
+                    src={m.mediaUrl || m.image}
+                    alt="Opening letter"
+                    onClick={() => handleImageClick(m.mediaUrl || m.image)}
+                    style={{ width: '100%', borderRadius: t.radius.md, margin: '8px 0', cursor: 'zoom-in', display: 'block' }}
+                  />
+                )}
+                <div style={styles.openingLetterText}>{m.text}</div>
+                <div style={styles.openingLetterDate}>
+                  {m.createdAt ? new Date(m.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
+                </div>
+              </div>
+            ))}
+
+            {messages.filter(m => m.type !== 'opening_letter').map((m, i, filteredArr) => {
+              const isMine = String(m.sender || m.senderId) === String(myId);
+              const time = m.createdAt ? new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+              const receipt = isMine ? (m.read || m.readAt ? 'SEEN' : 'SENT') : null;
+              const msgDate = formatDateSeparator(m.createdAt);
+              const prevDate = i > 0 ? formatDateSeparator(filteredArr[i-1].createdAt) : null;
+              const showDate = msgDate && msgDate !== prevDate;
+              const replyPreview = m.replyTo ? messages.find((msg) => msg._id === (m.replyTo._id || m.replyTo)) : null;
+
+              return (
+                <React.Fragment key={m._id || i}>
+                  {showDate && (
+                    <div style={styles.dateSeparator}>
+                      <span style={styles.dateText}>{msgDate}</span>
+                    </div>
+                  )}
+                  <div data-msg-id={m._id} style={{ borderRadius: '8px' }}>
+                    <MessageBubble
+                      message={m}
+                      isMine={isMine}
+                      time={time}
+                      receipt={receipt}
+                      onLongPress={handleLongPress}
+                      onImageClick={handleImageClick}
+                      replyPreview={replyPreview}
+                    />
+                  </div>
+                </React.Fragment>
+              );
+            })}
+            {otherTyping && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={styles.typing}>
+                <span style={styles.typingDot} />
+                <span style={{...styles.typingDot, animationDelay: '0.2s'}} />
+                <span style={{...styles.typingDot, animationDelay: '0.4s'}} />
+              </motion.div>
+            )}
+            <div ref={listEndRef} style={{ height: '10px' }} />
+          </>
+        )}
+      </div>
+
+      {/* SCROLL TO BOTTOM BUTTON */}
+      <AnimatePresence>
+        {showScrollButton && (
+          <motion.button
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.8 }}
+            whileTap={{ scale: 0.97 }}
+            whileHover={{ scale: 1.02 }}
+            onClick={scrollToBottom}
+            style={styles.scrollButton}
+            aria-label="Scroll to bottom"
+          >
+            <Icon path={<polyline points="6 9 12 15 18 9" />} size={20} color={t.yellow} />
+          </motion.button>
+        )}
+      </AnimatePresence>
+
+      {/* REPLY PREVIEW */}
+      <AnimatePresence>
+        {replyTo && <ReplyPreview replyTo={replyTo} otherName={matchUser?.name} onCancel={() => setReplyTo(null)} />}
+      </AnimatePresence>
+
+      {/* INPUT BAR WITH WASHI TAPE */}
+      {match.isActive !== false && !otherUnavailable ? (
+      <div style={styles.inputBar}>
+        <div style={styles.washiTape} aria-hidden="true" />
+        
+        <button 
+          className="tactile-btn"
+          style={styles.attachBtn} 
+          onClick={handleFileClick} 
+          title="Attach"
+          aria-label="Attach photo or file"
+        >
+          <Icon path={<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />} size={22} color={t.yellow} />
+        </button>
+        
+        <div style={styles.inputWrapper}>
+          <input
+            style={styles.input}
+            value={inputText}
+            onChange={handleInputChange}
+            placeholder={uploading ? "Transmitting..." : "Write a message..."}
+            disabled={uploading}
+            maxLength={5000}
+            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+          />
+        </div>
+
+        {inputText.trim() ? (
+          <button 
+            className="tactile-btn"
+            style={styles.sendBtn} 
+            onClick={handleSend}
+            title="Send"
+            aria-label="Send message"
+          >
+            <Icon path={<><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></>} size={20} color="#fff" />
+          </button>
+        ) : (
+          <button 
+            className="tactile-btn"
+            style={styles.attachBtn} 
+            onClick={recording ? stopRecording : startRecording}
+            title="Voice"
+            aria-label="Record voice message"
+          >
+            <Icon 
+              path={<><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></>} 
+              size={22} 
+              color={recording ? t.red : t.yellow}
+            />
+          </button>
+        )}
+      </div>
+      ) : (
+      <div style={{...styles.inputBar, justifyContent: 'center', padding: '12px 16px'}}>
+        <span style={{ fontFamily: t.fontBody, fontSize: '13px', color: t.ink3, fontStyle: 'italic' }}>
+          This conversation has ended
+        </span>
+      </div>
+      )}
+
+      <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onFileSelected} />
+
+      {/* OVERLAYS */}
+      {selectedMessage && menuAnchor && (
+        <MessageActionMenu
+          anchorRect={menuAnchor}
+          isMine={String(selectedMessage.sender || selectedMessage.senderId) === String(myId)}
+          isMedia={selectedMessage.type === 'image' || selectedMessage.type === 'audio'}
+          onClose={handleCloseMenu}
+          onReply={handleReply}
+          onReact={handleReact}
+          onCopy={handleCopy}
+          onReport={handleReport}
+          onDelete={handleDelete}
+        />
+      )}
+
+      {showEmojiPicker && (
+        <EmojiPicker
+          anchorRect={emojiPickerAnchor}
+          onSelect={handleEmojiSelect}
+          onClose={() => { setShowEmojiPicker(false); setEmojiPickerAnchor(null); setSelectedMessage(null); }}
+        />
+      )}
+
+      {showPhotoViewer && <PhotoViewer src={photoViewerUrl} onClose={() => setShowPhotoViewer(false)} />}
+
+      {showSearch && (
+        <SearchOverlay
+          messages={messages}
+          alignmentId={alignmentId}
+          myId={myId}
+          onClose={() => setShowSearch(false)}
+          onJumpTo={handleSearchJump}
+        />
+      )}
+
+      {showReportModal && (
+        <ReportModal
+          reportedUserId={otherUserId}
+          onClose={() => setShowReportModal(false)}
+          onReported={() => {
+            setShowReportModal(false);
+            toast.success('Report submitted. Thank you for keeping the community safe.');
           }}
         />
       )}
 
-      {/* Quiet notice that the order was re-decided mid-browse — a new session
-          after being away, or the deck window running out and refilling.
-          Auto-dismisses. Deliberately a LINE, not a button: no major dating app
-          lets you re-roll the deck on demand, and a button here would appear to
-          offer something the server cannot actually do differently. */}
+      {/* ACTION SHEET */}
       <AnimatePresence>
-        {rebuiltAt > 0 && Date.now() - rebuiltAt < 4000 && (
-          <motion.div
-            key="rebuilt"
-            initial={{ opacity: 0, y: -6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.25 }}
-            role="status"
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: '50%',
-              transform: 'translateX(-50%)',
-              zIndex: 40,
-              pointerEvents: 'none',
-              padding: '6px 12px',
-              borderRadius: 999,
-              background: t.card,
-              border: `1px solid ${t.line}`,
-              color: t.ink2,
-              fontFamily: t.fontBody,
-              fontSize: 12,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            Showing newer profiles
+        {showActionSheet && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={styles.sheetBackdrop} onClick={() => { setShowActionSheet(false); setPendingFile(null); }}>
+            <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} style={styles.sheet} onClick={(e) => e.stopPropagation()}>
+              <div style={{ padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${t.ink}` }}>
+                <span style={{ fontFamily: t.fontHeavy, fontSize: '18px', fontWeight: '700', color: t.ink }}>Attach Media</span>
+                <button onClick={() => { setShowActionSheet(false); setPendingFile(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+                  <Icon path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} size={20} color={t.ink3} />
+                </button>
+              </div>
+              <div style={{ padding: '16px 24px 24px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <button className="tactile-btn" style={styles.sheetBtn} onClick={() => uploadAndSend('image')}>
+                  <Icon path={<><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></>} size={20} />
+                  Send as Photograph
+                </button>
+                <button className="tactile-btn" style={styles.sheetBtn} onClick={() => uploadAndSend('audio')}>
+                  <Icon path={<><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /></>} size={20} />
+                  Send as Voice Note
+                </button>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* The second copy of the rebuild overlay, mirroring the one in the
-          `if (loading)` branch. It is `position: fixed`, so it covers the
-          viewport identically from either nesting depth — this one is the
-          safety net for a rebuild whose fetch resolved without `loading` ever
-          visibly flipping. */}
-      <DiscoverRebuildOverlay show={rebuildOverlay} />
-
-      {merging && !loading && (
-        <div aria-live="polite" style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 30, pointerEvents: 'none', padding: '4px 10px', background: t.card, border: `1px solid ${t.hair}`, borderRadius: 999, color: t.ink3, fontFamily: t.fontBody, fontSize: 11, whiteSpace: 'nowrap' }}>
-          Updating…
-        </div>
-      )}
-
-      <div style={{ ...styles.stageContainer, ...(isDesktop ? styles.stageContainerDesktopNoPad : null) }}>
-        {/* Desktop: constrained deck column floating on the desk. Mobile: full-bleed. */}
-        <div style={isDesktop ? styles.deckColumnDesktop : { position: 'relative', width: '100%', height: '100%' }}>
-          <AnimatePresence custom={slideDirection}>
-            {profiles[currentIndex] && (
-              <motion.div
-                key={profiles[currentIndex]._id || profiles[currentIndex].id}
-                custom={slideDirection}
-                variants={slideVariants}
-                initial="enter"
-                animate="center"
-                exit="exit"
-                transition={springTransition}
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  display: 'flex', flexDirection: 'column',
-                }}
-              >
-                <ProfileCard
-                  profile={profiles[currentIndex]}
-                  onAction={handleAction}
-                  onSheetNearHeader={onSheetNearHeader}
-                  isGated={deckGated}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        {/* Deck-scoped actions — ONE instance, sibling of the card stack.
-            Fixed to the viewport, so these stay level with the Header bell
-            and never remount (or re-arm) as cards animate through. */}
-        {!isDesktop && (
-          <DeckActions
-            onPass={() => handleAction('pass')}
-            onAlign={() => handleAction('align', {})}
-            canAlign={!!profiles[currentIndex]}
-            onUndo={() => handleNextProfile('down')}
-            canGoBack={currentIndex > 0}
-            undoNonce={undoNonce}
-            onRefreshLocation={locationDenied ? undefined : refreshLocation}
-          />
-        )}
-      </div>
-
-      {isDesktop && (
-        <div style={styles.desktopActionBar} role="toolbar" aria-label="Discovery actions">
-          <button
-            className="deck-action-btn"
-            title="Previous profile (↓ or B)"
-            aria-label="Previous profile"
-            disabled={currentIndex <= 0}
-            onClick={() => handleNextProfile('down')}
-            style={{ ...styles.deckBtn, background: t.paper, color: t.ink }}
-          >
-            <Undo2 size={19} strokeWidth={2.8} />
-          </button>
-          <button
-            className="deck-action-btn"
-            title="Pass (← or P)"
-            aria-label="Pass"
-            onClick={() => handleAction('pass')}
-            style={{ ...styles.deckBtn, background: t.card, color: t.ink }}
-          >
-            <X size={21} strokeWidth={3} />
-          </button>
-          {/* ✨ ALIGN — the one affirmative action. Replaced the flower and the
-              telegram, which were two buttons for one gesture and forced a
-              choice about emphasis before a choice about the person. */}
-          <button
-            className="deck-action-btn"
-            title="Align (→ or L) — or click any photo or prompt"
-            aria-label="Align"
-            onClick={() => handleAction('align', {})}
-            style={{ ...styles.deckBtn, background: t.yellow, color: t.ink }}
-          >
-            Align
-          </button>
-          <div aria-hidden="true" style={styles.deckHints}>
-            <span><kbd className="deck-kbd">←</kbd> pass</span>
-            <span><kbd className="deck-kbd">→</kbd> align</span>
-            <span><kbd className="deck-kbd">↓</kbd> back</span>
-          </div>
-        </div>
-      )}
-
+      {/* ARCHIVAL PROFILE SHEET */}
       <AnimatePresence>
-        {showAlignmentModal && alignedProfile && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              transition={{ duration: 0.25 }}
-              style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(12,12,14,0.62)', zIndex: 99998 }}
-              onClick={() => { setShowAlignmentModal(false); setAlignedProfile(null); }}
-            />
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.94, opacity: 0, y: 16 }} transition={{ type: 'spring', damping: 22, stiffness: 300 }}
-              style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '90%', maxWidth: 340, backgroundColor: t.paper, border: `2px solid ${t.ink}`, borderRadius: 22, boxShadow: `8px 8px 0 ${t.ink}`, padding: '30px 24px 24px', textAlign: 'center', zIndex: 99999, overflow: 'hidden' }}
-            >
-              {/* candy confetti — straight, tiny, celebratory */}
-              <span aria-hidden="true" style={{ position: 'absolute', top: 18, left: 20, width: 14, height: 14, borderRadius: 999, background: t.yellow, border: `1.5px solid ${t.ink}` }} />
-              <span aria-hidden="true" style={{ position: 'absolute', top: 26, right: 24, width: 11, height: 11, borderRadius: 3, background: t.coral, border: `1.5px solid ${t.ink}` }} />
-              <span aria-hidden="true" style={{ position: 'absolute', bottom: 78, left: 28, width: 10, height: 10, borderRadius: 3, background: t.green, border: `1.5px solid ${t.ink}` }} />
-              <span aria-hidden="true" style={{ position: 'absolute', bottom: 88, right: 30, width: 13, height: 13, borderRadius: 999, background: t.pink, border: `1.5px solid ${t.ink}` }} />
-
-              {/* the match badge — candy tile, pop-in */}
-              <motion.div
-                initial={{ scale: 0.5, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ delay: 0.1, type: 'spring', damping: 14, stiffness: 280 }}
-                style={{ width: 92, height: 92, margin: '0 auto 18px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: t.yellow, border: `2px solid ${t.ink}`, borderRadius: 24, boxShadow: `5px 5px 0 ${t.ink}` }}
-              >
-                <Heart size={40} strokeWidth={2.4} color={t.ink} fill={t.ink} />
-              </motion.div>
-
-              <h2 style={{ fontFamily: t.fontHeavy, fontSize: 27, fontWeight: 400, color: t.ink, margin: '0 0 8px 0', letterSpacing: '-.01em', textTransform: 'uppercase' }}>
-                Aligned<span style={{ color: t.coral }}>!</span>
-              </h2>
-              <p style={{ fontFamily: t.fontBody, fontSize: 14, fontWeight: 500, color: t.ink2, margin: '0 0 24px 0', lineHeight: 1.6 }}>
-                You and {alignedProfile.name} found common ground. The chat is now open.
-              </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <button
-                  className="slam-btn"
-                  onClick={() => { triggerHaptic('heavy'); setShowAlignmentModal(false); if (onOpenChat && alignedProfile) { onOpenChat({ _id: alignedProfile.alignmentId, user: alignedProfile }); } setAlignedProfile(null); }}
-                  style={{ width: '100%', padding: '15px', background: t.yellow, color: t.ink, border: `2px solid ${t.ink}`, borderRadius: 12, boxShadow: `4px 4px 0 ${t.ink}`, fontFamily: t.fontMono, fontSize: 12, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', cursor: 'pointer' }}
-                >
-                  Open chat
-                </button>
-                <button
-                  onClick={() => { setShowAlignmentModal(false); setAlignedProfile(null); }}
-                  style={{ width: '100%', padding: '15px', background: 'transparent', color: t.ink, border: `2px solid ${t.ink}`, borderRadius: 12, fontFamily: t.fontMono, fontSize: 12, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', cursor: 'pointer' }}
-                >
-                  Keep browsing
-                </button>
-              </div>
-            </motion.div>
-          </>
-        )}
+        {showProfile && <ChatProfileView profile={matchUser} unavailable={otherUnavailable} onClose={() => setShowProfile(false)} />}
       </AnimatePresence>
-
-      {/* The gate is a TOAST, not a sheet — see handleAction. It renders at
-          z-index 9999 (ArchivalToast), just above the popout overlay's 9998,
-          and handleAction closes the popout first so it never appears behind a
-          blurred scrim. */}
     </div>
   );
 };
 
-/* ── deck styles: borders, hard shadows, slam presses ── */
-const DECK_CSS = `
-  .slam-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-    font-family: ${t.fontMono}; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
-    cursor: pointer; transition: transform .08s steps(2), box-shadow .08s steps(2), background .08s steps(2);
-    -webkit-tap-highlight-color: transparent; }
-  .slam-btn:active { transform: translate(4px, 4px) !important; box-shadow: 0 0 0 ${t.ink} !important; }
-  .deck-action-btn { transition: transform .08s steps(2), box-shadow .08s steps(2); will-change: transform; }
-  .deck-action-btn:active { transform: translate(4px, 4px) !important; box-shadow: 0 0 0 ${t.ink} !important; }
-  .deck-action-btn:disabled { opacity: .35; cursor: default; transform: none !important; box-shadow: none !important; }
-  @media (hover: hover) {
-    .deck-action-btn:hover:not(:disabled) { transform: translate(-1px, -1px);
-      box-shadow: 5px 5px 0 ${t.ink}; }
-    .slam-btn:hover { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 ${t.ink}; }
-  }
-
-  kbd.deck-kbd { font-family: ${t.fontMono}; font-size: 10px; font-weight: 700;
-    background: ${t.paper}; border: 1.5px solid ${t.ink}; border-radius: 5px; padding: 2px 6px; color: ${t.ink2}; }
-  @media (prefers-reduced-motion: reduce) {
-    .slam-btn, .deck-action-btn { transition: none; }
-  }
-`;
-
+/* ==================================================================
+   STYLES
+================================================================== */
 const styles = {
-  viewportRoot: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', backgroundColor: t.desk, position: 'relative', overflow: 'hidden', userSelect: 'none', WebkitUserSelect: 'none' },
-  viewportRootDesktop: { alignItems: 'center' },
-  stageContainer: { flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', position: 'relative', zIndex: 2,
-    /* Bottom padding reserves the strip the global Align bar occupies. Without
-       it the bar is absolutely positioned at the viewport's bottom edge and
-       lands ON the card — covering the lower photo and, on a short card, the
-       bio. Desktop overrides this and carries its own bar. */
-    padding: '0 0 62px' },
-  stageContainerDesktop: { width: '100%', maxWidth: 560, padding: '20px 20px 12px', margin: '0 auto', },
-  /* The mobile Align bar is hidden on desktop, so the reserved strip is not. */
-  stageContainerDesktopNoPad: { width: '100%', maxWidth: 560, padding: '20px 20px 12px', margin: '0 auto' },
-  deckColumnDesktop: {
-    position: 'relative', width: '100%', height: '100%', minHeight: 0,
-    backgroundColor: t.desk, border: `2px solid ${t.ink}`, borderRadius: 22,
-    overflow: 'hidden',
+  page: { position: 'fixed', inset: 0, backgroundColor: t.paper, display: 'flex', flexDirection: 'column', zIndex: 50, overflow: 'hidden' },
+  paperGrain: { position: 'absolute', inset: 0, backgroundImage: `url("${t.grain || ''}")`, mixBlendMode: 'multiply', opacity: 0.85, pointerEvents: 'none', zIndex: 1 },
+  
+  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '64px', boxSizing: 'border-box', padding: '0 24px', backgroundColor: t.paper, borderBottom: `2px solid ${t.ink}`, position: 'relative', zIndex: 10, contain: 'layout style' },
+  backBtn: { background: t.paper, border: `2px solid ${t.ink}`, color: t.ink, borderRadius: t.radius.md, padding: '10px', marginRight: '4px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'transform 0.15s ease', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation', minWidth: '44px', minHeight: '44px' },
+  headerLeft: { display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', flex: 1 },
+  headerAvatar: { width: '44px', height: '44px', borderRadius: '12px', objectFit: 'cover', border: `2px solid ${t.ink}` },
+  onlineDot: { position: 'absolute', bottom: '2px', right: '2px', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: t.green, border: `2px solid ${t.paper}` },
+  headerInfo: { display: 'flex', flexDirection: 'column' },
+  headerName: { fontFamily: t.fontHeavy, fontSize: '18px', fontWeight: '700', color: t.ink, lineHeight: 1.2 },
+  headerStatus: { fontFamily: t.fontBody, fontSize: '11px', color: t.ink3, marginTop: '2px', letterSpacing: '0.5px' },
+  iconBtn: { background: 'none', border: 'none', padding: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: t.radius.md },
+  dropdownMenu: { position: 'absolute', top: '100%', right: 0, backgroundColor: t.card, border: `2px solid ${t.ink}`, borderRadius: t.radius.md, zIndex: 100, overflow: 'hidden', minWidth: '180px', marginTop: '8px' },
+  dropdownItem: { display: 'flex', alignItems: 'center', gap: '12px', width: '100%', padding: '14px 16px', background: 'none', border: 'none', fontFamily: t.fontBody, fontSize: '14px', fontWeight: '500', color: t.ink, cursor: 'pointer', textAlign: 'left' },
+  tornEdgeBottom: { position: 'absolute', bottom: '-12px', left: 0, right: 0, height: '12px', backgroundColor: t.paper, clipPath: 'polygon(0 0, 2% 60%, 4% 20%, 6% 80%, 8% 40%, 10% 90%, 12% 30%, 14% 70%, 16% 50%, 18% 100%, 20% 20%, 22% 80%, 24% 40%, 26% 90%, 28% 30%, 30% 70%, 32% 50%, 34% 100%, 36% 20%, 38% 80%, 40% 40%, 42% 90%, 44% 30%, 46% 70%, 48% 50%, 50% 100%, 52% 20%, 54% 80%, 56% 40%, 58% 90%, 60% 30%, 62% 70%, 64% 50%, 66% 100%, 68% 20%, 70% 80%, 72% 40%, 74% 90%, 76% 30%, 78% 70%, 80% 50%, 82% 100%, 84% 20%, 86% 80%, 88% 40%, 90% 90%, 92% 30%, 94% 70%, 96% 50%, 98% 100%, 100% 0)', zIndex: 11 },
+
+  messages: { flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '24px 28px', position: 'relative', zIndex: 2, contain: 'content', willChange: 'scroll-position' },
+  dateSeparator: { display: 'flex', justifyContent: 'center', margin: '24px 0 16px' },
+  dateText: { fontFamily: t.fontBody, fontSize: '10px', fontWeight: '700', color: t.ink3, backgroundColor: t.paper, padding: '5px 14px', borderRadius: t.radius.sm, border: `1px solid ${t.ink}`, textTransform: 'uppercase', letterSpacing: '1px' },
+  openingLetterCard: { margin: '8px 16px 16px', padding: '16px 20px', background: `linear-gradient(135deg, ${t.paper} 0%, ${t.paper} 100%)`, border: `1px solid ${t.ink}`, borderRadius: '12px', textAlign: 'center' },
+  openingLetterLabel: { fontFamily: t.fontHeavy, fontSize: '11px', fontWeight: 700, letterSpacing: '2px', textTransform: 'uppercase', color: t.yellow, marginBottom: '8px' },
+  openingLetterText: { fontFamily: t.fontBody, fontSize: '15px', lineHeight: '1.5', color: t.ink, fontStyle: 'italic' },
+  openingLetterDate: { fontFamily: t.fontBody, fontSize: '11px', color: t.ink3, marginTop: '8px' },
+  typing: { color: t.ink3, padding: '0 16px 6px', display: 'flex', alignItems: 'center', gap: '4px' },
+  typingDot: { display: 'inline-block', width: '6px', height: '6px', backgroundColor: t.yellow, borderRadius: '50%', animation: 'blink 1.4s infinite both' },
+  
+  scrollButton: {
+    position: 'absolute',
+    bottom: '140px',
+    right: '24px',
+    width: '44px',
+    height: '44px',
+    borderRadius: t.radius.md,
+    backgroundColor: t.card,
+    border: `2px solid ${t.ink}`,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    zIndex: 20,
   },
-  desktopActionBar: {
-    position: 'relative', zIndex: 3, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    gap: 12, padding: '12px 20px 18px', width: '100%', maxWidth: 560, margin: '0 auto',
-  },
-  deckBtn: {
-    width: 54, height: 54, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    cursor: 'pointer', border: `2px solid ${t.ink}`, boxShadow: `4px 4px 0 ${t.ink}`,
-  },
-  deckHints: {
-    display: 'flex', alignItems: 'center', gap: 10, marginLeft: 8,
-    fontFamily: t.fontMono, fontSize: 10, color: t.ink3, whiteSpace: 'nowrap',
-  },
-  /* error / empty state card */
-  stateCard: {
-    width: '100%', maxWidth: 330, backgroundColor: t.paper,
-    border: `2px solid ${t.ink}`, borderRadius: 20, boxShadow: `8px 8px 0 ${t.ink}`,
-    padding: '30px 24px 26px', textAlign: 'center',
-    display: 'flex', flexDirection: 'column', alignItems: 'center',
-  },
-  stateTile: {
-    width: 56, height: 56, borderRadius: 16, border: `2px solid ${t.ink}`,
-    boxShadow: `4px 4px 0 ${t.ink}`,
-    display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 18,
-  },
-  stateTitle: {
-    fontFamily: t.fontHeavy, fontSize: 21, fontWeight: 400, color: t.ink,
-    letterSpacing: '-.01em', textTransform: 'uppercase', margin: '0 0 8px 0',
-  },
-  stateBody: {
-    fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 500, lineHeight: 1.6,
-    maxWidth: 260, marginBottom: 22, color: t.ink2,
-  },
-  slamBtn: {
-    padding: '13px 24px', background: t.yellow, color: t.ink,
-    border: `2px solid ${t.ink}`, borderRadius: 12, boxShadow: `4px 4px 0 ${t.ink}`,
-  },
+  
+  inputBar: { display: 'flex', alignItems: 'center', gap: '12px', padding: '16px 24px', paddingBottom: 'max(16px, env(safe-area-inset-bottom))', borderTop: `2px solid ${t.ink}`, backgroundColor: t.paper, position: 'relative', zIndex: 10, contain: 'layout style' },
+  washiTape: { position: 'absolute', top: '-8px', left: '50%', transform: 'translateX(-50%) rotate(-1deg)', width: '60px', height: '16px', backgroundColor: t.paper, backdropFilter: 'blur(2px)', border: `1px solid ${t.yellow}`, zIndex: 11 },
+  attachBtn: { background: t.card, border: `2px solid ${t.ink}`, borderRadius: t.radius.md, width: '44px', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 },
+  inputWrapper: { flex: 1, backgroundColor: t.card, border: `2px solid ${t.ink}`, borderRadius: '24px', padding: '0 20px', display: 'flex', alignItems: 'center' },
+  sendBtn: { width: '44px', height: '44px', borderRadius: t.radius.md, backgroundColor: t.coral, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 },
+
+  sheetBackdrop: { position: 'fixed', inset: 0, backgroundColor: 'rgba(25,25,25,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-end', zIndex: 120 },
+  sheet: { backgroundColor: t.paper, backgroundImage: `url("${t.grain || ''}")`, width: '100%', borderTopLeftRadius: t.radius.lg, borderTopRightRadius: t.radius.lg, boxShadow: `0 -12px 32px ${t.ink}` },
+  sheetBtn: { display: 'flex', alignItems: 'center', gap: '12px', width: '100%', background: t.card, border: `2px solid ${t.ink}`, color: t.ink, fontFamily: t.fontBody, fontWeight: '600', padding: '16px', borderRadius: t.radius.md, fontSize: '14px', cursor: 'pointer' },
 };
 
-export default Discover;
-```
-
-### ./client/src/pages/Matches.jsx
-
-```
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { motion, AnimatePresence } from 'framer-motion';
-import { api } from '../utils/api';
-import { toast } from '../utils/toast';
-import { useAuth } from '../utils/AuthContext';
-import socket from '../utils/socket';
-import { SkeletonBox } from '../components/Skeleton';
-import { Heart, MoreVertical, Search, X } from 'lucide-react';
-import { triggerHaptic } from '../utils/haptics';
-import { DECK_CONTENT_TOP } from '../utils/deckChrome';
-
-/* ── Locked tokens — neubrutalism, same family as ProfileCard / NavBar / Discover ── */
-const t = {
-  desk: '#131313',
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  pink: '#FFA3C6',
-  red: '#E5484D',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-};
-
-const MATCHES_CSS = `
-  .match-card { will-change: transform;
-    transition: transform .08s steps(2), box-shadow .08s steps(2), background .08s steps(2);
-    contain: layout style; }
-  .match-card:active { transform: translate(3px, 3px) !important; box-shadow: 0 0 0 #191919 !important; }
-
-  .match-menu-btn { display: flex; align-items: center; gap: 8px; width: 100%;
-    padding: 11px 12px; background: none; border: none; cursor: pointer; text-align: left;
-    font-family: ${t.fontMono}; font-size: 12px; font-weight: 700; letter-spacing: .1em;
-    text-transform: uppercase; color: ${t.red}; border-radius: 8px; transition: none; }
-  .match-menu-btn:active { background: ${t.red}; color: #fff; }
-
-  .match-search input::placeholder { color: ${t.ink3}; opacity: 1; }
-  .match-search:focus-within { border-color: ${t.ink} !important; box-shadow: 3px 3px 0 ${t.ink}; }
-
-  @media (hover: hover) and (pointer: fine) {
-    .match-card:hover { transform: translate(-1px, -1px);
-      box-shadow: 6px 6px 0 #191919; }
-    .match-menu-btn:hover { background: rgba(229,72,77,.08); }
-    .match-clear:hover { background: ${t.hair}; }
-  }
-
-  .match-card:focus-visible, .match-menu-btn:focus-visible, .match-clear:focus-visible {
-    outline: 3px solid ${t.yellow}; outline-offset: 2px; }
-
-  @media (prefers-reduced-motion: reduce) {
-    .match-card { transition: none !important; transform: none !important; }
-  }
-`;
-
-const Matches = ({ onOpenChat }) => {
-  const queryClient = useQueryClient();
-  const [search, setSearch] = useState('');
-  const [openMenuId, setOpenMenuId] = useState(null);
-  const [isFocused, setIsFocused] = useState(false);
-
-  const { user } = useAuth();
-  const myId = user?._id;
-
-  const { data, isLoading } = useQuery({
-    queryKey: ['matches'],
-    queryFn: () => api.get('/alignments'),
-  });
-
-  const matches = useMemo(() => data?.matches || [], [data]);
-
-  // WhatsApp-style real-time updates: bump the match to the top and refresh its preview
-  useEffect(() => {
-    const onNew = (msg) => {
-      queryClient.setQueryData(['matches'], (old) => {
-        if (!old?.matches) return old;
-        const list = [...old.matches];
-        const idx = list.findIndex((m) => m._id === msg.alignmentId);
-        if (idx === -1) return old;
-        const m = list[idx];
-        const updated = {
-          ...m,
-          lastMessage: {
-            text: msg.text,
-            senderId: msg.senderId,
-            createdAt: msg.createdAt,
-            readAt: msg.readAt ?? null,
-            type: msg.type,
-            image: msg.image,
-          },
-          yourTurn: msg.senderId !== myId,
-        };
-        list.splice(idx, 1);
-        list.unshift(updated);
-        return { ...old, matches: list };
-      });
-    };
-    socket.on('new-message', onNew);
-    return () => socket.off('new-message', onNew);
-  }, [queryClient, myId]);
-
-  // Real-time unmatch: remove the alignment from cache when the other user severs the connection
-  useEffect(() => {
-    const onUnmatch = ({ alignmentId }) => {
-      queryClient.setQueryData(['matches'], (old) => ({
-        ...(old || {}),
-        matches: (old?.matches || []).filter((m) => m._id !== alignmentId),
-      }));
-    };
-    socket.on('unmatch-notification', onUnmatch);
-    return () => socket.off('unmatch-notification', onUnmatch);
-  }, [queryClient]);
-
-  const handleUnmatch = useCallback(async (alignmentId) => {
-    setOpenMenuId(null);
-    if (!window.confirm('Are you sure you want to unmatch? This cannot be undone.')) return;
-    try {
-      await api.delete(`/alignments/${alignmentId}`);
-      queryClient.setQueryData(['matches'], (old) => ({
-        ...(old || {}),
-        matches: (old?.matches || []).filter((m) => m._id !== alignmentId),
-      }));
-    } catch (err) {
-      if (!err?.toasted) toast.error('Could not unmatch. Try again.');
-    }
-  }, [queryClient]);
-
-  const fmtTime = useCallback((ts) => {
-    if (!ts) return '';
-    const d = new Date(ts);
-    const diff = (Date.now() - d.getTime()) / 1000;
-    if (diff < 60) return 'now';
-    if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-    if (diff < 172800) return 'Yesterday';
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  }, []);
-
-  const timeAgo = useCallback((ts) => {
-    if (!ts) return '';
-    const d = new Date(ts);
-    const diff = (Date.now() - d.getTime()) / 1000;
-    if (diff < 3600) return `${Math.floor(Math.max(diff, 1) / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  }, []);
-
-  // Memoized filter to avoid recalculating string matching during high-frequency socket events
-  const filtered = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return matches;
-    return matches.filter((m) => m.user?.name?.toLowerCase().includes(query));
-  }, [matches, search]);
-
-  if (isLoading) {
-    return (
-      <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: `calc(${DECK_CONTENT_TOP} + 8px) 14px 16px` }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {[0, 1, 2].map((i) => (
-            <div key={i} style={{
-              display: 'flex', alignItems: 'center', gap: 14,
-              backgroundColor: t.paper, border: `2px solid ${t.ink}`,
-              borderRadius: 16, boxShadow: `5px 5px 0 ${t.ink}`, padding: 16,
-            }}>
-              <SkeletonBox width={56} height={56} radius={12} />
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <SkeletonBox width={120} height={14} />
-                <SkeletonBox width={180} height={11} />
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (matches.length === 0) {
-    return (
-      <div style={{
-        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        flexDirection: 'column', gap: 16, padding: 32, backgroundColor: t.desk,
-      }}>
-        <div style={{
-          width: 56, height: 56, borderRadius: 16, backgroundColor: t.coral,
-          border: `2px solid ${t.ink}`, boxShadow: `4px 4px 0 ${t.ink}`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4,
-        }}>
-          <Heart size={24} strokeWidth={2.6} color={t.ink} />
-        </div>
-        <p style={{ fontFamily: t.fontHeavy, fontSize: 21, color: t.paper, textAlign: 'center', margin: 0, letterSpacing: '-.01em', textTransform: 'uppercase' }}>
-          No letters yet
-        </p>
-        <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 500, color: t.ink3, textAlign: 'center', maxWidth: 280, margin: 0, lineHeight: 1.6 }}>
-          Start exploring and leave a flower to begin your story.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: `calc(${DECK_CONTENT_TOP} + 8px) 14px 16px`, position: 'relative' }}>
-      <style>{MATCHES_CSS}</style>
-
-      <div style={{ position: 'relative' }}>
-        {/* Search — chunky box, ink border, shadow on focus. The tab heading now
-            comes from the floating Header row, so no in-page title here. */}
-        <div
-          className="match-search"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            padding: '0 14px',
-            marginBottom: 6,
-            backgroundColor: t.paper,
-            border: `2px solid ${t.ink}`,
-            borderRadius: 12,
-            boxShadow: isFocused ? `3px 3px 0 ${t.ink}` : 'none',
-            transition: 'box-shadow .08s steps(2)',
-          }}
-        >
-          <Search size={15} strokeWidth={2.6} color={isFocused ? t.ink : t.ink3} style={{ transition: 'color 0.15s ease', flexShrink: 0 }} />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
-            placeholder="Search letters..."
-            aria-label="Search letters"
-            style={{
-              width: '100%',
-              boxSizing: 'border-box',
-              padding: '12px 0',
-              backgroundColor: 'transparent',
-              border: 'none',
-              fontFamily: t.fontBody,
-              fontSize: 13.5,
-              fontWeight: 500,
-              color: t.ink,
-              outline: 'none',
-            }}
-          />
-          {search && (
-            <button
-              type="button"
-              className="match-clear"
-              onClick={() => { triggerHaptic('light'); setSearch(''); }}
-              aria-label="Clear search"
-              style={{ background: 'none', border: 'none', color: t.ink2, cursor: 'pointer', display: 'flex', padding: 6, margin: -6, borderRadius: 6, flexShrink: 0 }}
-            >
-              <X size={14} strokeWidth={2.6} />
-            </button>
-          )}
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {filtered.map((match) => {
-            const user = match.user;
-            if (!user) return null;
-
-            const lastMessage = match.lastMessage;
-            const unread =
-              match.yourTurn ||
-              (lastMessage && lastMessage.senderId && lastMessage.senderId !== myId && !lastMessage.readAt);
-            const isOpen = openMenuId === match._id;
-
-            const lastIsMedia = lastMessage && (lastMessage.type === 'image' || lastMessage.type === 'audio');
-
-            return (
-              <div
-                key={match._id}
-                className="match-card"
-                role="button"
-                tabIndex={0}
-                onClick={() => { triggerHaptic('light'); onOpenChat(match); }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    onOpenChat(match);
-                  }
-                }}
-                style={{
-                  position: 'relative',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 14,
-                  backgroundColor: unread ? t.card : t.paper,
-                  border: `2px solid ${t.ink}`,
-                  borderRadius: 16,
-                  boxShadow: unread ? `5px 5px 0 ${t.ink}` : `4px 4px 0 ${t.ink}`,
-                  padding: '14px 16px',
-                  cursor: 'pointer',
-                }}
-              >
-                {/* Avatar — square-ish tile, ink border; unread gets the yellow ring */}
-                <img
-                  src={user.photos?.[0] || 'https://placehold.co/80/fff3dc/191919?text=%C2%B7'}
-                  alt={user.name}
-                  loading="lazy"
-                  decoding="async"
-                  style={{
-                    width: 56, height: 56, borderRadius: 12, objectFit: 'cover',
-                    border: `2px solid ${t.ink}`, backgroundColor: t.hair, flexShrink: 0,
-                    outline: unread ? `3px solid ${t.yellow}` : 'none', outlineOffset: 1,
-                  }}
-                />
-
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <p style={{ fontFamily: t.fontBody, fontSize: 15, fontWeight: unread ? 800 : 600, color: t.ink, margin: 0 }}>
-                      {user.name}{user.age ? <span style={{ fontWeight: 500, color: t.ink3 }}>, {user.age}</span> : null}
-                    </p>
-                    {unread && (
-                      <span
-                        aria-label="Unread message"
-                        style={{
-                          width: 10, height: 10, borderRadius: '50%',
-                          backgroundColor: t.coral, border: `1.5px solid ${t.ink}`,
-                          flexShrink: 0,
-                        }}
-                      />
-                    )}
-                  </div>
-                  <p style={{ fontFamily: t.fontBody, fontSize: 12.5, color: unread ? t.ink : t.ink2, margin: '4px 0 0 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: unread ? 700 : 500 }}>
-                    {lastMessage
-                      ? lastIsMedia
-                        ? (lastMessage.type === 'image' ? '📷 Sent a photograph' : '🎙 Sent a voice note')
-                        : lastMessage.text
-                      : 'Open chat'}
-                  </p>
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flexShrink: 0 }}>
-                  <span style={{
-                    fontFamily: t.fontMono, fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em',
-                    color: unread ? t.ink : t.ink3,
-                    background: unread ? t.yellow : 'transparent',
-                    border: unread ? `1.5px solid ${t.ink}` : 'none',
-                    borderRadius: 5, padding: unread ? '2px 6px' : 0,
-                    whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums',
-                  }}>
-                    {lastMessage ? fmtTime(lastMessage.createdAt) : `Aligned ${timeAgo(match.createdAt)}`}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      triggerHaptic('light');
-                      setOpenMenuId(isOpen ? null : match._id);
-                    }}
-                    style={{
-                      background: isOpen ? t.ink : 'transparent',
-                      color: isOpen ? t.paper : t.ink3,
-                      border: `1.5px solid ${isOpen ? t.ink : t.hair}`,
-                      cursor: 'pointer', padding: 3, display: 'flex', alignItems: 'center',
-                      borderRadius: 7,
-                    }}
-                    aria-label="More options"
-                    aria-expanded={isOpen}
-                    title="More options"
-                  >
-                    <MoreVertical size={15} strokeWidth={2.4} />
-                  </button>
-                </div>
-
-                {/* Contextual menu — chunky card, slam language */}
-                <AnimatePresence>
-                  {isOpen && (
-                    <>
-                      <div
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenMenuId(null);
-                        }}
-                        style={{ position: 'fixed', inset: 0, zIndex: 90, cursor: 'default' }}
-                      />
-                      <motion.div
-                        initial={{ opacity: 0, scale: 0.94, y: -6 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.94, y: -6 }}
-                        transition={{ duration: 0.13, ease: 'easeOut' }}
-                        style={{
-                          position: 'absolute', top: 50, right: 16, zIndex: 100, overflow: 'hidden',
-                          minWidth: 150, padding: 5,
-                          backgroundColor: t.paper, border: `2px solid ${t.ink}`,
-                          borderRadius: 12, boxShadow: `5px 5px 0 ${t.ink}`,
-                        }}
-                      >
-                        <button
-                          type="button"
-                          className="match-menu-btn"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleUnmatch(match._id);
-                          }}
-                        >
-                          Unmatch
-                        </button>
-                      </motion.div>
-                    </>
-                  )}
-                </AnimatePresence>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default Matches;
+export default Chat;
 ```
 

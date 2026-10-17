@@ -1,7 +1,7 @@
-# Chunk 25 — Tools
+# Chunk 27 — Tools
 
-> Matchalize · `tools` · files 25 of 25 chunks · 4 file(s) · 42 KB · ~12,244 tokens
-> Generated 2026-10-09 14:03.
+> Matchalize · `tools` · files 27 of 27 chunks · 4 file(s) · 43 KB · ~12,436 tokens
+> Generated 2026-10-17 20:14.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -139,6 +139,12 @@ DOC_FILES = [
 # this whole script exists to prevent.
 DESIGN_SYSTEM_FILES = [
     "client/src/utils/theme.js",
+    # neu.js IS the canonical token layer (its own header calls itself the
+    # "single source of truth"), so it belongs in the chunk a designer is told
+    # to read before writing any UI. It was previously unmatched entirely:
+    # no GROUP_ORDER entry covered client/src/styles/, and the "never silently
+    # drop a file" invariant caught it.
+    "client/src/styles/neu.js",
     "client/src/components/ProfileCard.jsx",
     "client/src/components/Header.jsx",
     "client/src/pages/Splash.jsx",
@@ -163,6 +169,10 @@ GROUP_ORDER = [
     ("client-app", lambda p: p.startswith("client/src/")
                     and p.count("/") == 2),
     ("client-assets", lambda p: p.startswith("client/src/assets/")),
+    # Catch-all so a NEW file dropped in styles/ cannot silently fall through
+    # every matcher and trip the "matched no group" abort. Files listed in
+    # DESIGN_SYSTEM_FILES are consumed above; this catches the rest.
+    ("client-assets", lambda p: p.startswith("client/src/styles/")),
     ("client-utils", lambda p: p.startswith("client/src/utils/")),
     ("client-components", lambda p: p.startswith("client/src/components/")),
     ("client-pages", lambda p: p.startswith("client/src/pages/")),

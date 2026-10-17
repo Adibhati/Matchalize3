@@ -1,7 +1,7 @@
-# Chunk 02 — Shared
+# Chunk 03 — Shared
 
-> Matchalize · `shared` · files 2 of 25 chunks · 6 file(s) · 28 KB · ~8,165 tokens
-> Generated 2026-10-09 14:03.
+> Matchalize · `shared` · files 3 of 27 chunks · 6 file(s) · 28 KB · ~8,276 tokens
+> Generated 2026-10-17 20:14.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -108,6 +108,7 @@ import {
   PRONOUNS_OPTIONS, INTEREST_ICONS, INTEREST_ICON_FALLBACKS, APP_CONSTANTS,
 } from '../config/appData.js';
 import { LADDER } from '../utils/ladder.js';
+import { collegeGateFilter } from '../utils/campusGate.js';
 import College from '../models/College.js';
 
 const router = express.Router();
@@ -130,7 +131,12 @@ router.get('/', async (req, res) => {
     //
     // Only ACTIVE colleges: deactivating one removes it from signup immediately,
     // while students who already verified through it are untouched.
-    const colleges = await College.find({ active: true }).sort({ name: 1 }).lean();
+    //
+    // AND only gated-in ones. A campus outside ALLOWED_COLLEGES cannot sign up
+    // (routes/auth.js resolveCollege refuses it), so listing it here would show
+    // a student a selectable option that is guaranteed to fail at the email
+    // step — the worst place to discover a closed door.
+    const colleges = await College.find({ active: true, ...collegeGateFilter() }).sort({ name: 1 }).lean();
     const collegeList = colleges.map((c) => ({
       code: c.code,
       name: c.name,

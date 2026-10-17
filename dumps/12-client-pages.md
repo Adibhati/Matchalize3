@@ -1,1163 +1,2461 @@
 # Chunk 12 — Client Pages
 
-> Matchalize · `client-pages` · files 12 of 25 chunks · 1 file(s) · 60 KB · ~17,642 tokens
-> Generated 2026-10-09 14:03.
+> Matchalize · `client-pages` · files 12 of 27 chunks · 1 file(s) · 70 KB · ~20,443 tokens
+> Generated 2026-10-17 20:14.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
-> - `./client/src/pages/Chat.jsx`
+> - `./client/src/pages/Auth.jsx`
 
 ---
-### ./client/src/pages/Chat.jsx
+### ./client/src/pages/Auth.jsx
 
 ```
-import React, { useEffect, useState, useRef, useCallback, useLayoutEffect } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { motion, AnimatePresence } from 'framer-motion';
-import socket from '../utils/socket';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { api } from '../utils/api';
-import { useAuth } from '../utils/AuthContext';
-import { toast } from '../utils/toast';
+import { useChromeColor } from '../utils/chrome';
+import socket from '../utils/socket';
 import { triggerHaptic } from '../utils/haptics';
-import MessageBubble from '../components/chat/MessageBubble';
-import MessageActionMenu from '../components/chat/MessageActionMenu';
-import EmojiPicker from '../components/chat/EmojiPicker';
-import PhotoViewer from '../components/chat/PhotoViewer';
-import ReplyPreview from '../components/chat/ReplyPreview';
-import SearchOverlay from '../components/chat/SearchOverlay';
-import ReportModal from '../components/chat/ReportModal';
-import { theme as design } from '../utils/theme';
-import { Search, ChevronLeft, Sparkle, MapPin, Lock } from 'lucide-react';
+import { CheckCircle2, Search } from 'lucide-react';
+import AccountSuspendedScreen from '../components/AccountSuspendedScreen';
+import { useAuth } from '../utils/AuthContext';
+import neu from '../styles/neu';
+import { useIsDesktop } from '../utils/useIsDesktop';
+import campusPhoto from '../assets/college-town-aesthetic-cute-college-town.jpg';
 
-/* ==================================================================
-   ARCHIVAL THEME & TEXTURES
-================================================================== */
-const theme = {
-  paper: 'var(--paper)',
-  surface: 'var(--surface)',
-  surfaceAlt: 'var(--surface-alt)',
-  border: 'var(--line)',
-  borderDark: 'var(--line-dark)',
-  ink: 'var(--ink)',
-  inkMuted: 'var(--ink-muted)',
-  accent: 'var(--accent)',
-  crimson: 'var(--crimson)',
-  shadowWarm: 'var(--accent-12)',
+const M = neu;
+
+const C = {
+  ink: '#111211',
+  ink2: '#383832',
+  muted: '#77766F',
+  paper: '#F1EDE2',
+  card: '#F8F5EC',
+  amber: '#E0A15E',
+  coral: '#C96F68',
+  sage: '#779477',
+  concrete: '#A3A3A1',
+  red: '#A84F4A',
+  body: "'Space Grotesk', sans-serif",
+  display: "'Barlow Condensed', sans-serif",
+  mono: "'IBM Plex Mono', monospace",
 };
 
-// crypto.randomUUID fallback for non-HTTPS / LAN environments
-const genId = () =>
-  (typeof crypto !== 'undefined' && crypto.randomUUID)
-    ? crypto.randomUUID()
-    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+/* ============================================================
+   AUTH_CSS — desktop + shared foundation.
+   Mobile used to override this in three stacked layers; all
+   mobile styling now lives in one sheet: MOBILE_AUTH_CSS.
+   ============================================================ */
+export const AUTH_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Bowlby+One+SC&family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
-const Icon = React.memo(({ path, size = 20, color = 'currentColor', strokeWidth = 2 }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    {path}
-  </svg>
-));
+  .au-root {
+    --ink: ${C.ink};
+    --ink2: ${C.ink2};
+    --muted: ${C.muted};
+    --paper: ${C.paper};
+    --card: ${C.card};
+    --amber: ${C.amber};
+    --coral: ${C.coral};
+    --sage: ${C.sage};
+    --red: ${C.red};
+    --accent: var(--coral);
+    --tint: rgba(201,111,104,.14);
+    --body: ${C.body};
+    --display: ${C.display};
+    --mono: ${C.mono};
 
-const formatDateSeparator = (dateStr) => {
-  if (!dateStr) return '';
-  const today = new Date();
-  const msgDate = new Date(dateStr);
-  const isToday = msgDate.toDateString() === today.toDateString();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  const isYesterday = msgDate.toDateString() === yesterday.toDateString();
-  
-  if (isToday) return 'Today';
-  if (isYesterday) return 'Yesterday';
-  return msgDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-};
-
-const formatLastActive = (lastActive) => {
-  if (!lastActive) return 'Offline';
-  const now = new Date();
-  const last = new Date(lastActive);
-  const diffMs = now - last;
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-  
-  if (diffMins < 1) return 'Active now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return last.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-};
-
-async function fetchMessages(alignmentId, cursor = null, limit = 50) {
-  try {
-    const params = new URLSearchParams();
-    if (cursor) params.set('cursor', cursor);
-    params.set('limit', String(limit));
-    const qs = params.toString();
-    const data = await api.get(`/messages/${alignmentId}${qs ? '?' + qs : ''}`);
-    return {
-      messages: Array.isArray(data) ? data : data.messages || [],
-      hasMore: data.hasMore || false,
-      nextCursor: data.nextCursor || null,
-    };
-  } catch (err) {
-    console.error('Fetch messages error:', err);
-    return { messages: [], hasMore: false, nextCursor: null };
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 100dvh;
+    margin: 0;
+    padding: 0;
+    position: relative;
+    isolation: isolate;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    -webkit-font-smoothing: antialiased;
+    transition: background .4s ease, color .3s ease;
   }
-}
 
-/* ==================================================================
-   CHAT PROFILE VIEW (100% Visual Parity with Discovery ProfileCard)
-================================================================== */
-const chatTheme = {
-  color: {
-    paper: 'var(--paper)', surface: 'var(--surface)', surfaceAlt: 'var(--surface-alt)', border: 'var(--line)',
-    borderDark: 'var(--line-dark)', ink: 'var(--ink)', inkSoft: 'var(--ink-soft)', inkMuted: 'var(--ink-muted)',
-    accent: 'var(--accent)', crimson: 'var(--crimson)', shadowWarm: 'var(--accent-12)', shadowDark: 'var(--ink-20)',
-  },
-  font: { display: "'Playfair Display', Georgia, serif", body: "'Inter', -apple-system, sans-serif" },
-};
-
-function buildTornEdge(teeth = 64) {
-  const heights = [0, 18, 4, 22, 8, 16, 2, 24, 6, 14, 10, 20];
-  const pts = ['0% 100%'];
-  for (let i = 0; i <= teeth; i++) {
-    const x = ((i / teeth) * 100).toFixed(2);
-    const y = heights[i % heights.length];
-    pts.push(`${x}% ${y}%`);
+  .au-root *,
+  .au-root *::before,
+  .au-root *::after {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
   }
-  pts.push('100% 100%');
-  return `polygon(${pts.join(',')})`;
-}
-const CHAT_TORN_EDGE_CLIP = buildTornEdge();
 
-const TILT = { prompt_0: '1.4deg', photo_1: '-2.2deg', photo_2: '1.8deg', prompt_1: '-1.1deg', prompt_2: '0.5deg', photo_3: '-0.7deg' };
+  .au-root::before,
+  .au-root::after {
+    content: '';
+    position: fixed;
+    z-index: 0;
+    pointer-events: none;
+    border-radius: 50%;
+  }
 
-const ChatSectionLabel = React.memo(({ children }) => (
-  <p style={{ fontFamily: chatTheme.font.body, fontSize: '10px', fontWeight: 700, letterSpacing: '2px', textTransform: 'uppercase', color: chatTheme.color.accent, margin: '0 0 12px 0', display: 'flex', alignItems: 'center' }}>
-    <span aria-hidden="true" style={{ display: 'inline-block', width: '16px', height: '2px', backgroundColor: chatTheme.color.accent, marginRight: '8px', borderRadius: '2px' }} />
-    {children}
-  </p>
-));
+  .au-root::before {
+    width: min(55vw, 390px);
+    height: min(55vw, 390px);
+    top: -190px;
+    right: -100px;
+    background: var(--tint);
+    filter: blur(24px);
+    transition: background .4s ease;
+  }
 
-const ChatStitchSeam = React.memo(() => (
-  <div aria-hidden="true" style={{ height: '1px', backgroundImage: `repeating-linear-gradient(90deg, ${chatTheme.color.border} 0px, ${chatTheme.color.border} 8px, transparent 8px, transparent 14px)`, opacity: 0.8, margin: '16px 0' }} />
-));
+  .au-root::after {
+    width: 260px;
+    height: 260px;
+    bottom: -190px;
+    left: -110px;
+    background: rgba(119,148,119,.12);
+    filter: blur(20px);
+  }
 
-const ChatPhotoCorners = React.memo(() => (
-  <>
-    <span aria-hidden="true" style={{ position: 'absolute', top: 0, left: 0, width: 24, height: 24, background: chatTheme.color.surface, clipPath: 'polygon(0 0, 100% 0, 0 100%)', zIndex: 3 }} />
-    <span aria-hidden="true" style={{ position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, background: chatTheme.color.surface, clipPath: 'polygon(100% 100%, 0 100%, 100% 0)', zIndex: 3 }} />
-  </>
-));
+  .au-root ::selection {
+    background: var(--accent);
+    color: var(--ink);
+  }
 
-const ChatMountedPhoto = React.memo(({ src, alt, tilt, aspect }) => (
-  <div className="pc-dynamic-shadow" style={{ '--tilt': tilt, transform: 'rotate(var(--tilt, 0deg))', position: 'relative', width: '100%', height: aspect ? 'auto' : '200px', aspectRatio: aspect || undefined, borderRadius: '6px', border: `6px solid ${chatTheme.color.surface}`, backgroundColor: chatTheme.color.surfaceAlt, overflow: 'hidden' }}>
-    <img src={src} alt={alt} className="pc-photo-img" loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-    <ChatPhotoCorners />
-    <div aria-hidden="true" style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at var(--lamp-pct-x, 50%) var(--lamp-pct-y, 30%), rgba(255,255,255,0.35) 0%, transparent 50%)', pointerEvents: 'none', zIndex: 4, mixBlendMode: 'soft-light' }} />
+  .au-root-college {
+    --paper: #F1EDE2;
+    --ink: #111211;
+    --ink2: #383832;
+    --muted: #77766F;
+    --card: #F8F5EC;
+    --accent: #C96F68;
+    --tint: rgba(201,111,104,.14);
+  }
+
+  .au-root-request {
+    --paper: #E1E7D9;
+    --ink: #111211;
+    --ink2: #383832;
+    --muted: #77766F;
+    --card: #F8F5EC;
+    --accent: #779477;
+    --tint: rgba(119,148,119,.18);
+  }
+
+  .au-root-email {
+    --paper: #F1EDE2;
+    --ink: #111211;
+    --ink2: #383832;
+    --muted: #77766F;
+    --card: #F8F5EC;
+    --accent: #E0A15E;
+    --tint: rgba(224,161,94,.22);
+  }
+
+  .au-root-otp,
+  .au-root-verify {
+    --paper: #111211;
+    --ink: #F1EDE2;
+    --ink2: #D8D3C8;
+    --muted: #A3A3A1;
+    --card: #20211F;
+    --accent: #779477;
+    --tint: rgba(119,148,119,.18);
+  }
+
+  .au-fit {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .au-panel {
+    width: 100%;
+    min-height: 100vh;
+    min-height: 100dvh;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    margin: 0;
+    padding:
+      max(34px, env(safe-area-inset-top))
+      clamp(22px, 6vw, 88px)
+      max(30px, env(safe-area-inset-bottom));
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .au-step {
+    position: relative;
+    width: 100%;
+    max-width: 1040px;
+    min-width: 0;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, .72fr);
+    align-content: center;
+    align-items: center;
+    gap: 19px clamp(22px, 4vw, 45px);
+  }
+
+  .au-step > .au-headline {
+    grid-column: 1;
+    margin: 0;
+    max-width: 100%;
+  }
+
+  .au-step > .au-sub {
+    grid-column: 1;
+  }
+
+  .au-step > .au-art {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .au-step > *:not(.au-headline):not(.au-sub):not(.au-art) {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+
+  .au-headline {
+    margin: 0;
+    max-width: 100%;
+    color: var(--ink);
+    font-family: var(--display);
+    font-size: clamp(55px, 7.4vw, 91px);
+    font-weight: 800;
+    letter-spacing: -.035em;
+    line-height: .87;
+    text-transform: uppercase;
+    overflow-wrap: anywhere;
+    text-wrap: balance;
+    transition: color .3s ease;
+  }
+
+  .au-headline::after {
+    content: '';
+    display: block;
+    width: 62px;
+    height: 7px;
+    margin-top: 16px;
+    border-radius: 99px;
+    background: var(--accent);
+    transition: background .3s ease;
+  }
+
+  .au-sub {
+    margin: 0;
+    max-width: 570px;
+    color: var(--ink2);
+    font-family: var(--body);
+    font-size: 15px;
+    font-weight: 400;
+    line-height: 1.8;
+    overflow-wrap: anywhere;
+    transition: color .3s ease;
+  }
+
+  .au-sub b {
+    color: var(--ink);
+    font-weight: 700;
+  }
+
+  .au-sub b.low {
+    overflow-wrap: anywhere;
+    text-transform: lowercase;
+  }
+
+  /* Each screen has a little illustration of its own. */
+  .au-art {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+    height: clamp(190px, 25vw, 280px);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--tint);
+    border: 1px solid rgba(17,18,17,.1);
+    border-radius: 30px 30px 9px 30px;
+    transition: background .35s ease, border-color .35s ease;
+  }
+
+  .au-root-otp .au-art,
+  .au-root-verify .au-art {
+    border-color: rgba(241,237,226,.12);
+  }
+
+  .au-art::before {
+    content: '';
+    position: absolute;
+    width: 120px;
+    height: 120px;
+    top: -52px;
+    right: -42px;
+    border: 1px solid var(--accent);
+    border-radius: 50%;
+    opacity: .5;
+  }
+
+  .au-art::after {
+    content: '';
+    position: absolute;
+    bottom: -31px;
+    left: -20px;
+    width: 66px;
+    height: 66px;
+    border-radius: 22px;
+    background: var(--accent);
+    opacity: .17;
+    transform: rotate(-16deg);
+  }
+
+  .au-art svg {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+
+  .au-art .art-float {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: au-float 4s ease-in-out infinite;
+  }
+
+  .au-art .art-late {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: au-float 4.5s ease-in-out -1.5s infinite;
+  }
+
+  .au-art .art-pulse {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: au-pulse 3.4s ease-in-out infinite;
+  }
+
+  @keyframes au-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+
+  @keyframes au-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.035); }
+  }
+
+  .au-searchwrap {
+    width: 100%;
+    position: relative;
+  }
+
+  .au-searchicon {
+    width: 43px;
+    height: 43px;
+    position: absolute;
+    z-index: 1;
+    left: 11px;
+    top: 50%;
+    display: grid;
+    place-items: center;
+    transform: translateY(-50%);
+    color: var(--ink);
+    background: var(--tint);
+    border-radius: 15px;
+    pointer-events: none;
+  }
+
+  .au-search,
+  .au-input {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    height: 68px;
+    padding: 0 20px;
+    color: var(--ink);
+    background: var(--card);
+    border: 1.5px solid var(--line, rgba(17,18,17,.16));
+    border-radius: 17px;
+    outline: none;
+    box-shadow: 0 3px 0 rgba(17,18,17,.025);
+    font-family: var(--body);
+    font-size: 18px;
+    font-weight: 500;
+    -webkit-appearance: none;
+    appearance: none;
+    transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+  }
+
+  .au-search {
+    padding-left: 67px;
+  }
+
+  .au-search::placeholder,
+  .au-input::placeholder {
+    color: var(--muted);
+    opacity: .85;
+    font-weight: 400;
+  }
+
+  .au-search:focus,
+  .au-input:focus {
+    background: var(--card);
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 4px var(--tint);
+  }
+
+  .au-input:disabled {
+    opacity: .6;
+  }
+
+  .au-input:-webkit-autofill {
+    -webkit-box-shadow: 0 0 0 60px var(--card) inset;
+    -webkit-text-fill-color: var(--ink);
+  }
+
+  .au-results {
+    width: 100%;
+    max-height: max(230px, calc(100dvh - 350px));
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-content: start;
+    gap: 11px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 3px 4px 8px 2px;
+  }
+
+  .au-result {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 7px;
+    min-height: 94px;
+    width: 100%;
+    padding: 16px 38px 16px 16px;
+    text-align: left;
+    background: var(--card);
+    color: var(--ink);
+    border: 1px solid rgba(17,18,17,.1);
+    border-radius: 16px;
+    cursor: pointer;
+    box-shadow: 0 3px 0 rgba(17,18,17,.035);
+    transition: background .18s ease, border-color .18s ease, transform .18s ease;
+  }
+
+  .au-result:nth-child(5n + 2) {
+    background: #E8EBDD;
+  }
+
+  .au-result:nth-child(5n + 4) {
+    background: #F1DFD5;
+  }
+
+  .au-result::after {
+    content: '↗';
+    position: absolute;
+    top: 15px;
+    right: 14px;
+    color: var(--muted);
+    font: 16px var(--body);
+    transition: transform .18s ease, color .18s ease;
+  }
+
+  .au-result-name {
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  .au-result-meta {
+    color: #77766F;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1.5;
+    letter-spacing: .025em;
+    text-transform: uppercase;
+  }
+
+  .au-result.chosen {
+    background: #E6E8DA;
+    border-color: var(--sage);
+  }
+
+  .au-result.chosen::after {
+    content: '✓';
+    color: var(--sage);
+  }
+
+  .au-empty {
+    margin: 0;
+    padding: 10px 2px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.8;
+  }
+
+  .au-form {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 19px;
+  }
+
+  .au-cta {
+    min-height: 62px;
+    width: 100%;
+    padding: 15px 22px;
+    color: var(--ink);
+    background: var(--accent);
+    border: 1px solid rgba(17,18,17,.13);
+    border-radius: 17px 17px 6px 17px;
+    cursor: pointer;
+    box-shadow: 0 4px 0 rgba(17,18,17,.08);
+    font-family: var(--body);
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0;
+    transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
+  }
+
+  .au-cta:active:not(:disabled) {
+    transform: translateY(3px);
+    box-shadow: 0 1px 0 rgba(17,18,17,.08);
+  }
+
+  .au-cta:disabled {
+    background: #D6D0C3;
+    color: #77766F;
+    border-color: #77766F;
+    box-shadow: 0 3px 0 rgba(17,18,17,.06);
+    cursor: default;
+    opacity: .75;
+  }
+
+  .au-ghost {
+    align-self: flex-start;
+    min-height: 38px;
+    padding: 7px 0;
+    background: transparent;
+    color: var(--ink2);
+    border: 0;
+    border-bottom: 1px solid rgba(127,125,115,.4);
+    border-radius: 0;
+    cursor: pointer;
+    font-family: var(--body);
+    font-size: 13px;
+    font-weight: 600;
+    transition: color .15s ease, border-color .15s ease;
+  }
+
+  .au-ghost:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+  }
+
+  .au-otp {
+    width: 100%;
+    display: flex;
+    justify-content: flex-start;
+    gap: clamp(7px, 2vw, 13px);
+  }
+
+  .au-box {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 72px;
+    height: 70px;
+    padding: 0;
+    text-align: center;
+    color: var(--ink);
+    background: var(--card);
+    border: 1.5px solid var(--line, rgba(17,18,17,.16));
+    border-radius: 16px;
+    font-family: var(--display);
+    font-size: 32px;
+    font-weight: 800;
+    outline: none;
+    caret-color: var(--accent);
+    transition: background .15s ease, border-color .15s ease, transform .15s ease;
+  }
+
+  .au-box:focus {
+    background: var(--card);
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+    transform: translateY(-2px);
+  }
+
+  .au-box:disabled:not(.ok) {
+    opacity: .6;
+  }
+
+  .au-box.err {
+    border-color: var(--red);
+    animation: au-shake .3s steps(2) 2;
+  }
+
+  .au-box.ok {
+    background: #E1E9DB;
+    color: var(--ink2);
+    border-color: var(--sage);
+    transform: translateY(-2px);
+  }
+
+  @keyframes au-shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-4px); }
+    75% { transform: translateX(4px); }
+  }
+
+  .au-banner {
+    position: relative;
+    padding: 14px 16px;
+    background: #F0DCD3;
+    border: 1px solid rgba(168,79,74,.2);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+
+  .au-banner p {
+    margin: 0;
+    color: #111211;
+    font-family: var(--body);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.65;
+  }
+
+  .au-strip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 18px;
+    background: #E1E9DB;
+    color: #111211;
+    border: 1px solid rgba(119,148,119,.35);
+    border-radius: 15px;
+    font-family: var(--body);
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .au-field {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    min-width: 0;
+  }
+
+  .au-field label {
+    color: var(--ink2);
+    font-family: var(--body);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .au-field input {
+    width: 100%;
+    min-width: 0;
+    height: 60px;
+    padding: 0 16px;
+    color: var(--ink);
+    background: var(--card);
+    border: 1.5px solid var(--line, rgba(17,18,17,.16));
+    border-radius: 14px;
+    outline: none;
+    font-family: var(--body);
+    font-size: 16px;
+    font-weight: 500;
+    -webkit-appearance: none;
+    appearance: none;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+
+  .au-field input:focus {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 4px var(--tint);
+  }
+
+  .au-field input::-webkit-outer-spin-button,
+  .au-field input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  .au-revnote {
+    margin: 0;
+    color: var(--muted);
+    font-family: var(--body);
+    font-size: 12px;
+    line-height: 1.7;
+  }
+
+  .au-search:focus-visible,
+  .au-input:focus-visible,
+  .au-box:focus-visible,
+  .au-result:focus-visible,
+  .au-cta:focus-visible,
+  .au-ghost:focus-visible,
+  .au-field input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .au-result:hover:not(:disabled) {
+      border-color: rgba(17,18,17,.28);
+      transform: translateY(-2px);
+    }
+
+    .au-result:hover::after {
+      color: var(--coral);
+      transform: translate(2px, -2px);
+    }
+
+    .au-cta:hover:not(:disabled) {
+      filter: brightness(.96);
+    }
+
+    .au-ghost:hover:not(:disabled) {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+  }
+
+  @media (min-width: 1100px) {
+    .au-results {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      max-height: calc(100dvh - 360px);
+    }
+
+    .au-result {
+      min-height: 99px;
+    }
+
+    .au-art {
+      height: 280px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .au-art .art-float,
+    .au-art .art-late,
+    .au-art .art-pulse {
+      animation: none;
+    }
+
+    .au-search,
+    .au-input,
+    .au-result,
+    .au-cta,
+    .au-ghost,
+    .au-box,
+    .au-field input {
+      transition: none;
+    }
+
+    .au-box.err {
+      animation: none;
+    }
+  }
+
+  /* Mobile-only chrome: hidden on desktop, revealed by MOBILE_AUTH_CSS. */
+  .au-brandbar { display: none; }
+  .au-campus-scene,
+  .au-campus-blur,
+  .au-backdrop { display: none; }
+  .au-mobile-field-label,
+  .au-mobile-sub { display: none; }
+`;
+
+/* ============================================================
+   MOBILE_AUTH_CSS — the single, consolidated mobile sheet.
+   This is the final computed result of the old three-layer
+   stack (base skin + campus scene + smooth polish), with the
+   dead rules removed: the per-step photo grading and washes
+   were fully overridden by the full-bleed photo rules, and the
+   hand-built campus SVG was never visible (display:none on
+   every breakpoint).
+   ============================================================ */
+export const MOBILE_AUTH_CSS = `
+  @media (max-width: 700px) {
+    /* ---- tokens & root ---- */
+    .au-root {
+      --ink: ${M.ink};
+      --ink2: ${M.ink2};
+      --muted: ${M.ink2};
+      --paper: ${M.paper};
+      --card: ${M.card};
+      --accent: ${M.yellow};
+      --tint: rgba(255,212,61,.14);
+      --red: ${M.red};
+      --line: ${M.ink};
+      --body: ${M.fontBody};
+      --display: ${M.fontHeavy};
+      --mono: ${M.fontMono};
+      background: ${M.paper};
+      color: ${M.ink};
+      font-family: var(--body);
+    }
+
+    /* Desktop per-step palettes are replaced by one uniform skin. */
+    .au-root.au-root-college,
+    .au-root.au-root-request,
+    .au-root.au-root-email,
+    .au-root.au-root-otp,
+    .au-root.au-root-verify {
+      --ink: ${M.ink};
+      --ink2: ${M.ink2};
+      --muted: ${M.ink2};
+      --paper: ${M.paper};
+      --card: ${M.card};
+      --accent: ${M.yellow};
+      --tint: rgba(255,212,61,.14);
+      --red: ${M.red};
+      --line: ${M.ink};
+      background: ${M.paper};
+      color: ${M.ink};
+    }
+
+    .au-root::before,
+    .au-root::after { display: none; content: none; }
+
+    /* ---- layout frame ---- */
+    .au-fit {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 430px;
+      min-height: 100dvh;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .au-panel {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      min-height: 100dvh;
+      flex: 1 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+      gap: 0;
+      margin: 0;
+      padding:
+        max(18px, env(safe-area-inset-top, 0px))
+        22px
+        max(28px, env(safe-area-inset-bottom, 0px));
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    /* ---- brand: the product wordmark, set directly on the canvas ---- */
+    .au-brandbar {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      width: 100%;
+      max-width: 380px;
+      margin: 7px 0 0;
+      min-height: 0;
+      transition: opacity .35s ease, transform .5s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-wordmark {
+      display: inline-block;
+      color: ${M.ink};
+      font-family: 'Bowlby One SC', ${M.fontHeavy};
+      font-size: clamp(37px, 10vw, 47px);
+      font-weight: 400;
+      letter-spacing: -.065em;
+      line-height: .92;
+      text-shadow: 2px 2px 0 ${M.yellow};
+    }
+
+    .au-brand-question {
+      display: inline-block;
+      color: ${M.coral};
+      margin-left: .015em;
+      transform: rotate(7deg) translateY(-.015em);
+      transform-origin: 60% 65%;
+    }
+
+    .au-brand-whisper {
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .015em;
+      line-height: 1.35;
+    }
+
+    /* ---- step: content sits directly on the paper, pushed to the bottom ---- */
+    .au-step {
+      position: relative;
+      isolation: isolate;
+      z-index: 1;
+      width: 100%;
+      max-width: 380px;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+      margin: auto auto max(10px, env(safe-area-inset-bottom, 0px));
+      padding: 18px 0 max(8px, env(safe-area-inset-bottom, 0px));
+      background: transparent;
+      color: ${M.ink};
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    /* Soft veil so text never fights the photo directly behind it. */
+    .au-step::before {
+      content: '';
+      position: absolute;
+      z-index: -1;
+      pointer-events: none;
+      top: -34px;
+      right: -22px;
+      bottom: -24px;
+      left: -22px;
+      background: linear-gradient(180deg, rgba(241,237,226,0) 0%, rgba(241,237,226,.76) 18%, rgba(241,237,226,.92) 46%, ${M.paper} 100%);
+      opacity: .94;
+      transition: opacity .4s cubic-bezier(.32,.72,0,1);
+    }
+
+    /* The long request form gets extra breathing room at the bottom. */
+    .au-panel:has(.au-step .au-form .au-field:nth-of-type(3)) .au-step {
+      margin-bottom: max(28px, env(safe-area-inset-bottom, 0px));
+    }
+
+    .au-step .au-headline {
+      max-width: 21ch;
+      margin: 0;
+      color: ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: clamp(30px, 8.3vw, 36px);
+      font-weight: 800;
+      line-height: 1.04;
+      letter-spacing: -.06em;
+      text-transform: none;
+      overflow-wrap: anywhere;
+      text-wrap: balance;
+    }
+
+    .au-headline::after { display: none; content: none; }
+
+    .au-headline .au-huh-inline {
+      font-family: 'Bowlby One SC', ${M.fontHeavy};
+      font-size: 1.02em;
+      font-weight: 400;
+      letter-spacing: -.055em;
+      white-space: nowrap;
+      text-shadow: 1.5px 1.5px 0 ${M.yellow};
+    }
+
+    .au-step .au-sub {
+      max-width: 31ch;
+      margin: -2px 0 0;
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 13.5px;
+      font-weight: 400;
+      line-height: 1.48;
+      overflow-wrap: anywhere;
+    }
+
+    .au-sub b { color: ${M.ink}; font-weight: 700; }
+    .au-sub b.low { overflow-wrap: anywhere; text-transform: lowercase; }
+
+    .au-mobile-sub { display: block; }
+
+    .au-mobile-field-label {
+      display: block;
+      margin: 4px 0 -3px;
+      color: ${M.ink2};
+      font-family: ${M.fontMono};
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+
+    /* Mobile replaces the framed illustration with the full-bleed photo. */
+    .au-step > .au-art { display: none !important; }
+
+    /* ---- search field ---- */
+    .au-searchwrap { position: relative; z-index: 2; width: 100%; }
+
+    .au-searchicon {
+      position: absolute;
+      z-index: 1;
+      left: 15px;
+      top: 50%;
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      transform: translateY(-50%);
+      color: ${M.ink};
+      background: transparent;
+      pointer-events: none;
+    }
+
+    .au-search {
+      display: block;
+      width: 100%;
+      height: 56px;
+      padding: 0 14px 0 47px;
+      color: ${M.ink};
+      background: rgba(255,253,247,.97);
+      border: 2px solid ${M.ink};
+      border-radius: 15px;
+      outline: none;
+      box-shadow: 4px 4px 0 ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: 16px;
+      font-weight: 500;
+      -webkit-appearance: none;
+      appearance: none;
+      transition: box-shadow .2s cubic-bezier(.32,.72,0,1), background .2s ease, transform .2s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-search:focus {
+      background: #FFFEFA;
+      border-color: ${M.ink};
+      box-shadow: 4px 4px 0 ${M.ink};
+      transform: none;
+    }
+
+    /* ---- inputs & fields ---- */
+    .au-input,
+    .au-field input {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      height: 54px;
+      padding: 0 14px;
+      color: ${M.ink};
+      background: rgba(255,255,255,.94);
+      border: 2px solid ${M.ink};
+      border-radius: 12px;
+      outline: none;
+      box-shadow: 3px 3px 0 ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: 16px;
+      font-weight: 500;
+      -webkit-appearance: none;
+      appearance: none;
+      transition: box-shadow .2s cubic-bezier(.32,.72,0,1), background .2s ease, transform .2s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-search::placeholder,
+    .au-input::placeholder,
+    .au-field input::placeholder {
+      color: ${M.ink2};
+      opacity: .8;
+      font-weight: 400;
+    }
+
+    .au-input:focus,
+    .au-field input:focus {
+      background: #FFFFFF;
+      border-color: ${M.ink};
+      box-shadow: 4px 4px 0 ${M.ink};
+      transform: none;
+    }
+
+    .au-input:disabled,
+    .au-field input:disabled { opacity: .65; }
+
+    .au-input:-webkit-autofill,
+    .au-field input:-webkit-autofill {
+      -webkit-box-shadow: 0 0 0 60px ${M.card} inset, 3px 3px 0 ${M.ink};
+      -webkit-text-fill-color: ${M.ink};
+    }
+
+    /* ---- results: calm full-width rows, not a grid of cards ---- */
+    .au-results {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      width: 100%;
+      max-height: min(30dvh, 250px);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      padding: 0;
+      border-top: 1px solid rgba(17,18,17,.24);
+      scrollbar-width: thin;
+      scrollbar-color: ${M.ink2} transparent;
+    }
+
+    .au-result,
+    .au-result:nth-child(5n + 2),
+    .au-result:nth-child(5n + 4) {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 3px;
+      width: 100%;
+      min-height: 52px;
+      padding: 9px 34px 9px 2px;
+      text-align: left;
+      color: ${M.ink};
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid ${M.hair};
+      border-radius: 0;
+      box-shadow: none;
+      cursor: pointer;
+      transition: background .12s ease;
+    }
+
+    .au-result::after {
+      content: '→';
+      position: absolute;
+      top: 50%;
+      right: 10px;
+      transform: translateY(-50%);
+      color: ${M.ink};
+      font: 20px/1 ${M.fontBody};
+    }
+
+    .au-result:active { background: #FFF1AE; }
+
+    .au-result-name {
+      color: ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: 13.5px;
+      font-weight: 700;
+      line-height: 1.32;
+      overflow-wrap: anywhere;
+    }
+
+    .au-result-meta {
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 11px;
+      font-weight: 400;
+      line-height: 1.4;
+    }
+
+    .au-result.chosen { background: #E5F3E7; }
+    .au-result.chosen::after { content: '✓'; color: ${M.ink}; font-weight: 700; }
+
+    .au-empty {
+      margin: 0;
+      padding: 8px 0;
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.6;
+    }
+
+    /* ---- form controls ---- */
+    .au-form { width: 100%; display: flex; flex-direction: column; gap: 14px; }
+
+    .au-cta {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 52px;
+      width: 100%;
+      padding: 13px 18px;
+      color: ${M.ink};
+      background: ${M.yellow};
+      border: 2px solid ${M.ink};
+      border-radius: 12px;
+      box-shadow: 4px 4px 0 ${M.ink};
+      cursor: pointer;
+      font-family: ${M.fontBody};
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+      text-align: center;
+      transition: transform .08s steps(2), box-shadow .08s steps(2), background .12s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .au-cta:active:not(:disabled) {
+      transform: translate(4px, 4px);
+      box-shadow: 0 0 0 ${M.ink};
+      background: ${M.yellowDeep};
+    }
+
+    .au-cta:disabled {
+      color: ${M.ink2};
+      background: ${M.hair};
+      border-color: ${M.ink2};
+      box-shadow: 3px 3px 0 ${M.ink2};
+      cursor: not-allowed;
+      opacity: 1;
+    }
+
+    .au-ghost {
+      align-self: flex-start;
+      min-height: 42px;
+      padding: 9px 0;
+      color: ${M.ink2};
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid ${M.ink2};
+      border-radius: 0;
+      box-shadow: none;
+      cursor: pointer;
+      font-family: ${M.fontBody};
+      font-size: 13px;
+      font-weight: 600;
+      transition: color .12s ease;
+    }
+
+    .au-ghost:active:not(:disabled) { color: ${M.ink}; }
+    .au-ghost:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ---- OTP boxes ---- */
+    .au-otp {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      justify-content: stretch;
+      gap: clamp(5px, 1.7vw, 9px);
+      width: 100%;
+    }
+
+    .au-box {
+      width: 100%;
+      min-width: 0;
+      max-width: none;
+      height: 50px;
+      padding: 0;
+      text-align: center;
+      color: ${M.ink};
+      background: rgba(255,255,255,.94);
+      border: 2px solid ${M.ink};
+      border-radius: 12px;
+      box-shadow: 3px 3px 0 ${M.ink};
+      font-family: ${M.fontHeavy};
+      font-size: 23px;
+      font-weight: 400;
+      outline: none;
+      caret-color: ${M.ink};
+      transition: background .2s cubic-bezier(.32,.72,0,1), box-shadow .2s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-box:focus {
+      background: #FFF1AE;
+      border-color: ${M.ink};
+      box-shadow: 3px 3px 0 ${M.ink};
+      transform: none;
+    }
+
+    .au-box:disabled:not(.ok) { opacity: .65; }
+    .au-box.err { border-color: ${M.red}; animation: au-shake .3s steps(2) 2; }
+    .au-box.ok { background: #E5F3E7; color: ${M.ink}; border-color: ${M.ink}; transform: none; }
+
+    /* ---- notes, banners, misc ---- */
+    .au-banner {
+      position: relative;
+      padding: 5px 0 5px 11px;
+      background: transparent;
+      border: 0;
+      border-left: 3px solid ${M.red};
+      border-radius: 0;
+      overflow: visible;
+    }
+
+    .au-banner p {
+      margin: 0;
+      color: ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+
+    .au-strip {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 6px 0;
+      color: ${M.ink};
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      font-family: ${M.fontBody};
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .au-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+    .au-field label {
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .au-revnote {
+      margin: 0;
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .au-search:focus-visible,
+    .au-input:focus-visible,
+    .au-box:focus-visible,
+    .au-result:focus-visible,
+    .au-cta:focus-visible,
+    .au-ghost:focus-visible,
+    .au-field input:focus-visible {
+      outline: 2px solid ${M.ink};
+      outline-offset: 3px;
+    }
+
+    /* ---- campus photo scene: the photo is the canvas, the form floats above ---- */
+    .au-campus-scene {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      overflow: hidden;
+      pointer-events: none;
+      background: ${M.paper};
+      transition: opacity .35s ease;
+    }
+
+    .au-campus-photo {
+      display: block;
+      position: absolute;
+      z-index: 0;
+      top: 0;
+      left: 50%;
+      width: 100vw;
+      max-width: none;
+      height: 100dvh;
+      object-fit: cover;
+      object-position: center 48%;
+      transform: translateX(-50%) scale(1.01);
+      filter: saturate(.92) contrast(.98) brightness(.96);
+      transition: filter .42s cubic-bezier(.2,.8,.2,1), transform .55s cubic-bezier(.2,.8,.2,1);
+      will-change: transform, filter;
+    }
+
+    /* College step runs the slower iOS curve so the search-open blur reads as depth. */
+    .au-root .au-campus-scene-college .au-campus-photo {
+      filter: blur(0px) saturate(.92) contrast(.98) brightness(.96);
+      transition: filter .6s cubic-bezier(.32,.72,0,1), transform .8s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-campus-wash {
+      position: absolute;
+      z-index: 1;
+      inset: 0;
+      background: linear-gradient(
+        180deg,
+        rgba(241,237,226,.06) 0%,
+        rgba(241,237,226,.03) 30%,
+        rgba(241,237,226,.15) 44%,
+        rgba(241,237,226,.62) 58%,
+        rgba(241,237,226,.93) 70%,
+        ${M.paper} 83%,
+        ${M.paper} 100%
+      );
+      transition: background .55s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-campus-blur {
+      display: block;
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      pointer-events: none;
+      opacity: 0;
+      background: rgba(241,237,226,.5);
+      -webkit-backdrop-filter: blur(26px) saturate(1.45);
+      backdrop-filter: blur(26px) saturate(1.45);
+      transition: opacity .55s cubic-bezier(.32,.72,0,1);
+      will-change: opacity;
+    }
+
+    .au-backdrop {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      background: transparent;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ---- search-open state ---- */
+    .au-root.is-search-open { overflow: hidden; }
+
+    .au-root.is-search-open .au-campus-blur { opacity: 1; }
+
+    .au-root.is-search-open .au-campus-scene-college .au-campus-photo {
+      filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
+      transform: translateX(-50%) scale(1.06);
+    }
+
+    .au-root.is-search-open .au-brandbar {
+      opacity: 0;
+      transform: translateY(-10px);
+      pointer-events: none;
+    }
+
+    .au-root.is-search-open .au-step {
+      margin-top: clamp(18px, 7dvh, 64px);
+      margin-bottom: 0;
+      padding-top: 0;
+    }
+
+    .au-root.is-search-open .au-step::before {
+      opacity: 0;
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+
+    .au-root.is-search-open .au-mobile-field-label { margin-top: 2px; }
+
+    .au-root.is-search-open .au-results { max-height: min(28dvh, 230px); }
+
+    /* ---- compact screens (order matters: height first, then width) ---- */
+    @media (max-height: 760px) {
+      .au-brandbar { margin-top: 2px; }
+      .au-wordmark { font-size: 36px; }
+      .au-brand-whisper { font-size: 10px; }
+      .au-step { gap: 8px; }
+      .au-step .au-headline { font-size: 29px; }
+      .au-input,
+      .au-field input { height: 50px; }
+    }
+
+    @media (max-width: 360px) {
+      .au-panel { padding-left: 18px; padding-right: 18px; }
+      .au-step .au-headline { font-size: 28px; }
+      .au-search { font-size: 15px; }
+      .au-box { height: 45px; font-size: 21px; }
+      .au-form { gap: 12px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .au-campus-photo,
+      .au-campus-wash,
+      .au-campus-blur,
+      .au-brandbar,
+      .au-step,
+      .au-step::before,
+      .au-searchwrap,
+      .au-search,
+      .au-input,
+      .au-field input,
+      .au-box,
+      .au-result,
+      .au-cta,
+      .au-ghost,
+      .au-results { transition: none !important; }
+      .au-box.err { animation: none !important; }
+      .au-root.is-search-open .au-campus-scene-college .au-campus-photo {
+        filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
+        transform: translateX(-50%);
+      }
+    }
+  }
+`;
+
+/* The scene and polish layers were merged into MOBILE_AUTH_CSS above.
+   Kept as empty exports so any other module importing them keeps working —
+   delete these two lines if nothing else imports them. */
+export const AUTH_SCENE_CSS = '';
+export const AUTH_SMOOTH_CSS = '';
+
+const AuthBrand = () => (
+  <div className="au-brandbar" aria-label="huh?">
+    <span className="au-wordmark" aria-hidden="true">
+      huh<span className="au-brand-question">?</span>
+    </span>
+    <span className="au-brand-whisper">campus, chemistry, and a little curiosity.</span>
   </div>
-));
+);
 
-const ChatIndexCard = ({ children, tilt, wide, tape = 'center' }) => {
-  const getTapeConfig = () => {
-    const base = { position: 'absolute', top: '-10px', width: '36px', height: '16px', backgroundColor: 'var(--tape-90)', backdropFilter: 'blur(3px)', border: '1px solid var(--accent-20)', zIndex: 5 };
-    if (tape === 'top-right') return { ...base, right: '16px', '--tape-rot': '4deg', transform: 'rotate(4deg)' };
-    if (tape === 'top-left') return { ...base, left: '16px', '--tape-rot': '-4deg', transform: 'rotate(-4deg)' };
-    return { ...base, left: '50%', '--tape-rot': '-1deg', transform: 'translateX(-50%) rotate(-1deg)' };
+const AuthArtwork = ({ kind }) => {
+  const ink = M.ink;
+  const white = M.card;
+  const yellow = M.yellow;
+  const coral = M.coral;
+  const green = M.green;
+
+  const scenes = {
+    college: (
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          {/* Traditional academic pediment, labelled facade, columns and entrance. */}
+          <path d="M54 48 160 13 266 48Z" fill={yellow} />
+          <path d="M44 50H276" fill="none" strokeWidth="5" />
+          <path d="M62 54H258V119H62Z" fill={white} />
+          <path d="M104 58H216V76H104Z" fill={yellow} />
+          <text x="160" y="70.5" textAnchor="middle" fill={ink} stroke="none" fontFamily="Arial, sans-serif" fontSize="10" fontWeight="800" letterSpacing="1.3">COLLEGE</text>
+          {/* Five straight pillars and a centered entrance make the academic facade clear. */}
+          <path d="M77 82H94V111H77ZM111 82H128V111H111ZM145 82H162V111H145ZM179 82H196V111H179ZM213 82H230V111H213Z" fill={green} />
+          <path d="M142 91H178V119H142Z" fill={coral} />
+          <path d="M49 120H271M39 128H281M30 136H290" fill="none" strokeWidth="3.5" />
+          <path d="M244 16V4M244 5L264 11L244 17Z" fill={coral} strokeWidth="2.5" />
+        </g>
+        <circle cx="38" cy="29" r="5" fill={coral} />
+        <path d="M284 34h11M289.5 28.5v11" stroke={ink} strokeWidth="2.5" strokeLinecap="round" />
+      </svg>
+    ),
+    request: (
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          <path d="M90 15H202L235 48V127H90Z" fill={white} />
+          <path d="M202 15V48H235" fill={yellow} />
+          <path d="M111 58H186M111 70H205M111 82H177" fill="none" strokeWidth="3" />
+          <path d="M112 105 133 85 154 105V121H112Z" fill={green} />
+          <path d="M106 105 133 79 160 105" fill="none" strokeWidth="3" />
+          <path d="M126 105V121M139 105V121" fill="none" strokeWidth="2.5" />
+          <path d="M178 105h30v22h-30z" fill={coral} />
+          <path d="M184 116h18" fill="none" strokeWidth="2.5" />
+        </g>
+        <circle cx="67" cy="37" r="16" fill={yellow} stroke={ink} strokeWidth="2.5" />
+        <path d="M60 37h14M67 30v14" stroke={ink} strokeWidth="2.5" strokeLinecap="round" />
+      </svg>
+    ),
+    email: (
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          <path d="M58 42H244V125H58Z" fill={white} />
+          <path d="M61 45 151 100 241 45" fill={yellow} />
+          <path d="M61 122 119 80M241 122 183 80" fill="none" strokeWidth="2.5" />
+          <path d="M204 20h57v45h-57z" fill={green} />
+          <path d="M216 34h33M216 44h25M216 54h18" fill="none" strokeWidth="2.5" />
+        </g>
+        <circle cx="47" cy="29" r="6" fill={coral} />
+      </svg>
+    ),
+    otp: (
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          <path d="M66 31H234V118H66Z" fill={white} />
+          <path d="M68 34 150 85 232 34" fill={yellow} />
+          <path d="M68 115 119 77M232 115 181 77" fill="none" strokeWidth="2.5" />
+          <path d="M199 18 222 27V46C222 59 212 67 199 73 186 67 176 59 176 46V27Z" fill={green} />
+          <path d="M188 44 196 52 210 36" fill="none" strokeWidth="3.5" />
+        </g>
+        <circle cx="48" cy="104" r="7" fill={coral} />
+        <path d="M257 101h13M263.5 94.5v13" stroke={ink} strokeWidth="2.5" strokeLinecap="round" />
+      </svg>
+    ),
+    verify: (
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          {/* Graduation cap is the most direct visual cue for student verification. */}
+          <path d="M66 56 160 20 254 56 160 93Z" fill={yellow} />
+          <path d="M99 70V97C132 118 188 118 221 97V70L160 95Z" fill={green} />
+          <path d="M254 56V91" fill="none" />
+          <circle cx="254" cy="96" r="5" fill={coral} />
+          <path d="M119 84V102C143 115 177 115 201 102V84" fill={white} />
+        </g>
+        <path d="M43 34h15M50.5 26.5v15" stroke={ink} strokeWidth="2.5" strokeLinecap="round" />
+        <circle cx="275" cy="38" r="8" fill={coral} />
+      </svg>
+    ),
   };
-  return (
-    <div className="pc-dynamic-shadow" style={{ '--tilt': tilt, transform: 'rotate(var(--tilt, 0deg))', backgroundColor: chatTheme.color.surface, backgroundImage: `linear-gradient(${chatTheme.color.accent}11 1px, transparent 1px)`, backgroundSize: '100% 24px', border: `1px solid ${chatTheme.color.border}`, borderRadius: '8px', padding: '24px 16px 20px', height: wide ? 'auto' : '100%', minHeight: wide ? undefined : '140px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-      <span aria-hidden="true" className="pc-tape" style={getTapeConfig()} />
-      <span aria-hidden="true" className="pc-metallic-foil" style={{ fontFamily: chatTheme.font.display, fontSize: '32px', lineHeight: 0.5, opacity: 0.45, marginBottom: '8px', display: 'block', background: `linear-gradient(-135deg, var(--accent-strong) 0%, var(--accent) 30%, var(--gold) 50%, var(--accent) 70%, var(--accent-strong) 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>“</span>
-      <p style={{ fontFamily: chatTheme.font.display, fontSize: '15px', fontStyle: 'italic', color: chatTheme.color.ink, margin: '0 0 4px 0', lineHeight: 1.45, textAlign: 'center', fontWeight: 600 }}>{children}</p>
-    </div>
-  );
+
+  return <div className="au-art" aria-hidden="true">{scenes[kind]}</div>;
 };
 
-const ChatProfileView = ({ profile, onClose, unavailable }) => {
-  if (!profile) return null;
 
-  if (unavailable) {
-    return (
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(20,15,10,0.7)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
-        <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxHeight: '50dvh', backgroundColor: chatTheme.color.paper, borderTopLeftRadius: '24px', borderTopRightRadius: '24px', display: 'flex', flexDirection: 'column', boxShadow: '0 -12px 32px var(--wm-20)', alignItems: 'center', justifyContent: 'center', padding: '60px 24px' }}>
-          <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'var(--accent-08)', border: '2px solid var(--accent-15)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '20px' }}>
-            <Lock size={28} color={chatTheme.color.inkMuted} strokeWidth={1.5} />
+/* Mobile campus scene: the photo is the whole canvas, with a wash that
+   dissolves its lower edge into the paper color. The form stays live HTML
+   above it — never baked into the image. */
+const AuthCampusScene = ({ kind = 'college', verified = false }) => (
+  <div
+    className={`au-campus-scene au-campus-scene-${kind}${verified ? ' is-verified' : ''}`}
+    aria-hidden="true"
+  >
+    <img className="au-campus-photo" src={campusPhoto} alt="" draggable="false" />
+    <div className="au-campus-wash" />
+    <div className="au-campus-blur" />
+  </div>
+);
+
+const Auth = ({ onSuccess, reverifyOnly = false }) => {
+  const reduceMotion = useReducedMotion();
+  const isDesktop = useIsDesktop();
+
+  // Auth is cream where the splash is near-black, so the browser's status bar
+  // and the strip around the app must switch with it or the transition reads as
+  // two different apps.
+  useChromeColor(M.paper);
+
+  const [step, setStep] = useState(reverifyOnly ? 'otp' : 'college');
+  const [colleges, setColleges] = useState([]);
+  const [collegeQuery, setCollegeQuery] = useState('');
+  const [collegeSearchOpen, setCollegeSearchOpen] = useState(false);
+  const collegeSearchRef = useRef(null);
+  const [college, setCollege] = useState(null);
+  const [email, setEmail] = useState('');
+  const [otp, setOtp] = useState(['', '', '', '', '', '']);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [verified, setVerified] = useState(false);
+  const [requestDone, setRequestDone] = useState(false);
+  const [graduatingYear, setGraduatingYear] = useState('');
+  const inputRefs = useRef([]);
+  const { login, user: authUser } = useAuth();
+
+  const openCollegeSearch = useCallback(() => {
+    if (isDesktop) return;
+    setCollegeSearchOpen(true);
+  }, [isDesktop]);
+
+  const closeCollegeSearch = useCallback(() => {
+    setCollegeSearchOpen(false);
+    collegeSearchRef.current?.blur();
+  }, []);
+
+  const [requestForm, setRequestForm] = useState({
+    collegeName: '',
+    city: '',
+    state: '',
+    country: '',
+    name: '',
+    email: '',
+  });
+
+  const submitCollegeRequest = async (e) => {
+    e.preventDefault();
+    if (!requestForm.collegeName.trim() || !requestForm.email.trim()) return;
+
+    setLoading(true);
+    setError('');
+
+    try {
+      await api.post('/colleges/request', requestForm);
+      setRequestDone(true);
+      triggerHaptic('success');
+    } catch (err) {
+      setError(err.response?.data?.message || err.message || 'Could not send your request.');
+      triggerHaptic('heavy');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const [collegeLoadState, setCollegeLoadState] = useState('loading');
+
+  const loadColleges = useCallback(async () => {
+    setCollegeLoadState((s) => (s === 'ready' ? s : 'loading'));
+
+    try {
+      const res = await api.get('/colleges');
+      setColleges(res.colleges || []);
+      setCollegeLoadState('ready');
+    } catch {
+      setCollegeLoadState('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    loadColleges();
+
+    const onOnline = () => loadColleges();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadColleges();
+    };
+
+    window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      window.removeEventListener('online', onOnline);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [loadColleges]);
+
+  const collegeMatches = (college, rawQuery) => {
+    const norm = (s) => String(s || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const words = norm(college.name).split(' ').filter(Boolean);
+    const stopWords = new Set(['of', 'and', 'the', 'for', 'at', 'a', 'an']);
+    const acronym = words
+      .filter((w) => !stopWords.has(w))
+      .map((w) => w[0])
+      .join('');
+
+    const haystack = [
+      ...words,
+      norm(college.city),
+      norm(college.state),
+      norm(college.code),
+      acronym,
+    ].filter(Boolean);
+
+    const terms = rawQuery.split(' ').map(norm).filter(Boolean);
+
+    if (terms.length === 0) return false;
+    if (terms.every((t) => stopWords.has(t))) return false;
+
+    return terms.every((q) => haystack.some((h) => h.includes(q) || q.includes(h)));
+  };
+
+  const filteredColleges = collegeQuery.trim()
+    ? colleges.filter((c) => collegeMatches(c, collegeQuery))
+    : colleges;
+
+  // On desktop the results are always inline under the field. On mobile they
+  // only exist while the search is open, and only once something is typed — an
+  // empty list is noise, not help.
+  const showResults = !!collegeQuery.trim() && (isDesktop || collegeSearchOpen);
+  const searchActive = collegeSearchOpen && !isDesktop;
+
+  const pickCollege = (c) => {
+    setCollege(c);
+    setCollegeQuery(c.name);
+    setCollegeSearchOpen(false);
+    setError('');
+    collegeSearchRef.current?.blur();
+    triggerHaptic('light');
+    setTimeout(() => setStep('email'), 220);
+  };
+
+  const [suspendedData, setSuspendedData] = useState(() => {
+    try {
+      const data = JSON.parse(localStorage.getItem('matchalize_suspended'));
+      return data?.reason ? data : null;
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    if (step === 'otp' && inputRefs.current[0]) {
+      setTimeout(() => inputRefs.current[0].focus(), 150);
+    }
+  }, [step]);
+
+  const reverifyKicked = useRef(false);
+
+  useEffect(() => {
+    if (!reverifyOnly || reverifyKicked.current) return;
+    reverifyKicked.current = true;
+
+    api.post('/auth/reverify')
+      .catch((err) => {
+        setError(err.response?.data?.message || 'Could not send your verification code.');
+      });
+  }, [reverifyOnly]);
+
+  const reverifyCollege = authUser?.college || 'your college';
+
+  const handleInputBlur = () => {
+    // Desktop keeps its existing reset behavior. On mobile, forcing the page to
+    // the top on blur fights keyboard dismissal and causes a visible jump.
+    if (!window.matchMedia('(max-width: 700px)').matches) window.scrollTo(0, 0);
+  };
+
+  const handleSendOtp = async (e) => {
+    e.preventDefault();
+    if (!email.trim() || !college) return;
+
+    setError('');
+    setLoading(true);
+    triggerHaptic('medium');
+
+    if (document.activeElement) document.activeElement.blur();
+
+    try {
+      await api.post('/auth/send-otp', {
+        email: email.trim(),
+        collegeCode: college.code,
+      });
+      setStep('otp');
+    } catch (err) {
+      const exactError = err.response?.data?.message
+        || err.response?.data?.error
+        || err.message;
+
+      setError(exactError?.includes('Network Error')
+        ? 'Something went wrong. Check your connection.'
+        : exactError || 'Failed to send the code.');
+
+      triggerHaptic('heavy');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReverifyConfirm = useCallback(async (otpValue) => {
+    setLoading(true);
+    setError('');
+
+    try {
+      await api.post('/auth/reverify/confirm', { otp: otpValue });
+      setVerified(true);
+      triggerHaptic('heavy');
+      setTimeout(() => onSuccess(), 1200);
+    } catch (err) {
+      setError(err.response?.data?.message || 'That code was not right. Try again.');
+      setOtp(['', '', '', '', '', '']);
+
+      if (inputRefs.current[0]) inputRefs.current[0].focus();
+
+      triggerHaptic('heavy');
+      setLoading(false);
+    }
+  }, [onSuccess]);
+
+  const handleVerifyOtp = useCallback(async (otpValue) => {
+    if (reverifyOnly) return handleReverifyConfirm(otpValue);
+
+    setError('');
+    setLoading(true);
+
+    if (document.activeElement) document.activeElement.blur();
+
+    try {
+      const data = await api.post('/auth/verify-otp', {
+        email: email.trim(),
+        otp: otpValue,
+      });
+
+      localStorage.removeItem('matchalize_suspended');
+      login(data.user);
+
+      if (graduatingYear && data.user?._id && !data.user.graduatingYear) {
+        api.put('/users/profile', {
+          graduatingYear: Number(graduatingYear),
+        })
+          .then(() => {
+            const stored = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
+            stored.graduatingYear = Number(graduatingYear);
+            localStorage.setItem('matchalize_user', JSON.stringify(stored));
+          })
+          .catch(() => {});
+      }
+
+      if (socket && socket.disconnected) socket.connect();
+
+      setVerified(true);
+      triggerHaptic('heavy');
+      setTimeout(() => onSuccess(), 1200);
+    } catch (err) {
+      const exactError = err.response?.data?.message
+        || err.response?.data?.error
+        || err.message;
+
+      try {
+        const susData = JSON.parse(localStorage.getItem('matchalize_suspended'));
+
+        if (susData?.reason) {
+          setLoading(false);
+          setSuspendedData(susData);
+          return;
+        }
+      } catch {}
+
+      setError(exactError?.includes('Network Error')
+        ? 'Something went wrong. Check your connection.'
+        : exactError || 'Invalid code.');
+
+      setOtp(['', '', '', '', '', '']);
+
+      if (inputRefs.current[0]) inputRefs.current[0].focus();
+
+      triggerHaptic('heavy');
+      setLoading(false);
+    }
+  }, [email, onSuccess, login, reverifyOnly, handleReverifyConfirm, graduatingYear]);
+
+  const handleOtpChange = (e, index) => {
+    if (error) setError('');
+
+    const val = e.target.value;
+
+    if (val.length > 1) {
+      const pasted = val.replace(/\D/g, '').slice(0, 6).split('');
+      const newOtp = [...otp];
+
+      pasted.forEach((char, i) => {
+        if (index + i < 6) newOtp[index + i] = char;
+      });
+
+      setOtp(newOtp);
+
+      const nextIndex = Math.min(index + pasted.length, 5);
+      inputRefs.current[nextIndex]?.focus();
+
+      if (newOtp.every((d) => d !== '')) handleVerifyOtp(newOtp.join(''));
+      return;
+    }
+
+    if (isNaN(val)) return;
+
+    const newOtp = [...otp.map((v, i) => (i === index ? val : v))];
+    setOtp(newOtp);
+    triggerHaptic('light');
+
+    if (val && index < 5) inputRefs.current[index + 1]?.focus();
+    if (index === 5 && val) handleVerifyOtp(newOtp.join(''));
+  };
+
+  const handleOtpKeyDown = (e, index) => {
+    if (e.key === 'Backspace' && !otp[index] && index > 0) {
+      inputRefs.current[index - 1]?.focus();
+    }
+  };
+
+  const errorBanner = (
+    <AnimatePresence>
+      {error && (
+        <motion.div
+          key="au-banner"
+          role="alert"
+          initial={reduceMotion ? false : { opacity: 0, height: 0, y: -4 }}
+          animate={{ opacity: 1, height: 'auto', y: 0 }}
+          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0, y: -4 }}
+          transition={{ duration: 0.2, ease: 'easeOut' }}
+          style={{ overflow: 'hidden' }}
+        >
+          <div className="au-banner">
+            <p>{error}</p>
           </div>
-          <p style={{ fontFamily: chatTheme.font.display, fontSize: '20px', fontWeight: 700, color: chatTheme.color.ink, margin: '0 0 8px', textAlign: 'center', letterSpacing: '-0.02em' }}>
-            This user is no longer available
-          </p>
-          <p style={{ fontFamily: chatTheme.font.body, fontSize: '13px', color: chatTheme.color.inkMuted, margin: 0, textAlign: 'center', lineHeight: 1.5 }}>
-            This profile is no longer accessible.
-          </p>
         </motion.div>
-      </motion.div>
+      )}
+    </AnimatePresence>
+  );
+
+  const swapProps = isDesktop ? {
+    initial: reduceMotion ? false : { opacity: 0, y: 12, scale: .985, filter: 'blur(2px)' },
+    animate: { opacity: 1, y: 0, scale: 1, filter: 'blur(0px)' },
+    exit: reduceMotion
+      ? { opacity: 0 }
+      : { opacity: 0, y: -8, scale: .99, filter: 'blur(2px)' },
+    transition: { duration: .24, ease: [0.22, 1, 0.36, 1] },
+  } : {
+    initial: reduceMotion ? false : { opacity: 0, y: 6 },
+    animate: { opacity: 1, y: 0 },
+    exit: reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 },
+    transition: { duration: .18, ease: [0.22, 1, 0.36, 1] },
+  };
+
+  if (suspendedData) {
+    return (
+      <AccountSuspendedScreen
+        reason={suspendedData.reason}
+        suspendedAt={suspendedData.suspendedAt}
+        bottomSlot={
+          <button
+            type="button"
+            onClick={() => {
+              localStorage.removeItem('matchalize_suspended');
+              setSuspendedData(null);
+            }}
+          >
+            Suspension lifted? Try logging in again
+          </button>
+        }
+      />
+    );
+  }
+
+  if (reverifyOnly) {
+    return (
+      <div className="au-root au-root-verify">
+        <style>{AUTH_CSS}{MOBILE_AUTH_CSS}</style>
+        <AuthCampusScene kind="verify" verified={verified} />
+
+        <div className="au-fit">
+          <motion.div className="au-panel" {...swapProps}>
+            <AuthBrand />
+            <div className="au-step">
+              <h2 className="au-headline">Confirm you're still a student.</h2>
+
+              <p className="au-sub">
+                We check each year that your <b>{reverifyCollege}</b> email still works.
+              </p>
+
+              <AuthArtwork kind="verify" />
+
+              {errorBanner}
+
+              <div className="au-otp" role="group" aria-label="6-digit verification code">
+                {otp.map((digit, index) => (
+                  <input
+                    key={index}
+                    className={`au-box${error ? ' err' : ''}${verified ? ' ok' : ''}`}
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete={index === 0 ? 'one-time-code' : 'off'}
+                    maxLength={6}
+                    value={digit}
+                    ref={(el) => { inputRefs.current[index] = el; }}
+                    onChange={(e) => handleOtpChange(e, index)}
+                    onKeyDown={(e) => handleOtpKeyDown(e, index)}
+                    disabled={verified || loading}
+                    aria-label={`Digit ${index + 1}`}
+                  />
+                ))}
+              </div>
+
+              {verified ? (
+                <motion.div className="au-strip" {...swapProps}>
+                  <CheckCircle2 size={18} strokeWidth={2.5} /> All set
+                </motion.div>
+              ) : (
+                <button
+                  className="au-ghost"
+                  type="button"
+                  disabled={loading}
+                  onClick={() => {
+                    triggerHaptic('light');
+                    setError('');
+                    api.post('/auth/reverify')
+                      .catch(() => setError('Could not resend. Try again shortly.'));
+                  }}
+                >
+                  Resend code
+                </button>
+              )}
+
+              <p className="au-revnote">Your profile and chats are safe.</p>
+            </div>
+          </motion.div>
+        </div>
+      </div>
     );
   }
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(20,15,10,0.7)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
-      <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} style={{ width: '100%', maxHeight: '92vh', backgroundColor: chatTheme.color.paper, borderTopLeftRadius: '24px', borderTopRightRadius: '24px', display: 'flex', flexDirection: 'column', boxShadow: '0 -12px 32px var(--wm-20)' }} onClick={(e) => e.stopPropagation()}>
-        
-        {/* Header */}
-        <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${chatTheme.color.borderDark}`, backgroundColor: chatTheme.color.paper, borderTopLeftRadius: '24px', borderTopRightRadius: '24px', zIndex: 10, position: 'sticky', top: 0 }}>
-          <span style={{ fontFamily: chatTheme.font.display, fontSize: '20px', fontWeight: 700, color: chatTheme.color.ink }}>View Profile</span>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }} aria-label="Close profile">
-            <Icon path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} size={24} color={chatTheme.color.inkMuted} />
-          </button>
-        </div>
+    <div className={`au-root au-root-${step}${step === 'college' && collegeSearchOpen ? ' is-search-open' : ''}`}>
+      <style>{AUTH_CSS}{MOBILE_AUTH_CSS}</style>
+      <AuthCampusScene kind={step} verified={verified} />
 
-        {/* Scrollable Content */}
-        <div className="pc-scroll" style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: '40px', position: 'relative' }}>
-          
-          {/* 1. Hero Photo Section */}
-          <div style={{ width: '100%', position: 'relative' }}>
-            <div style={{ width: '100%', aspectRatio: '4/5.8', position: 'relative', backgroundColor: chatTheme.color.surfaceAlt, overflow: 'hidden' }}>
-              <img src={profile.photos?.[0] || 'https://via.placeholder.com/600x800/e8e4d9/1a1a1a?text=No+Photo'} alt={profile.name} className="pc-photo-img" loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-              <div aria-hidden="true" style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 50% 30%, rgba(255,255,255,0.2) 0%, transparent 50%), linear-gradient(to top, rgba(15,12,10,0.98) 0%, rgba(15,12,10,0.6) 40%, rgba(0,0,0,0.1) 75%, transparent 100%)', pointerEvents: 'none' }} />
-              <div style={{ position: 'absolute', bottom: '38px', left: '24px', right: '24px', zIndex: 2 }}>
-                <div className="pc-fade-1" style={{ display: 'inline-block', padding: '5px 12px', background: 'var(--paper-20)', backdropFilter: 'blur(12px)', borderRadius: design.radius.sm, border: '1px solid rgba(255,255,255,0.4)', marginBottom: '12px' }}>
-                  <span style={{ fontFamily: chatTheme.font.body, fontSize: '10px', color: '#fff', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: 700 }}>Archival Subject</span>
-                </div>
-                <h2 className="pc-fade-1" style={{ fontFamily: chatTheme.font.display, fontSize: 'clamp(30px, 7vw, 42px)', color: '#fff', margin: 0, fontWeight: 700, letterSpacing: '-0.025em', lineHeight: 1.05, textShadow: '0 4px 20px rgba(0,0,0,0.6)' }}>
-                  {profile.name || 'Anonymous'}<span style={{ fontWeight: 400, opacity: 0.85 }}>, {profile.age || '—'}</span>
+      <div className="au-fit">
+        <motion.div className="au-panel" {...swapProps}>
+          {searchActive && step === 'college' && (
+            <div className="au-backdrop" onClick={closeCollegeSearch} aria-hidden="true" />
+          )}
+          <AuthBrand />
+          <AnimatePresence mode="wait" initial={false}>
+            {step === 'college' ? (
+              <motion.section
+                key="college"
+                className="au-step"
+                {...swapProps}
+                layout={isDesktop ? false : 'position'}
+                transition={{
+                  ...swapProps.transition,
+                  layout: { type: 'spring', stiffness: 300, damping: 34, mass: 0.9 },
+                }}
+              >
+                <h2 className="au-headline">
+                  So, what&rsquo;s your college, <span className="au-huh-inline">huh?</span>
                 </h2>
-                <p className="pc-fade-2" style={{ fontFamily: chatTheme.font.body, fontSize: '11px', color: 'rgba(255,255,255,0.92)', margin: '8px 0 0 0', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: 600, display: 'flex', alignItems: 'center' }}>
-                  {profile.branch || 'General'} <Sparkle size={12} color="var(--gold)" style={{ margin: '0 8px', flexShrink: 0 }} /> {profile.year?.toUpperCase() || '—'}
-                </p>
-              </div>
-            </div>
-            <div aria-hidden="true" style={{ width: '100%', height: '24px', backgroundColor: chatTheme.color.paper, clipPath: CHAT_TORN_EDGE_CLIP, marginTop: '-14px', position: 'relative', zIndex: 3 }} />
-          </div>
 
-          <div style={{ padding: '24px 24px 0 24px' }}>
-            
-            {/* 2. Vitals */}
-            <ChatSectionLabel>Vitals</ChatSectionLabel>
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '24px', flexWrap: 'wrap' }}>
-              {profile.gender && <span className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${chatTheme.color.border}`, borderRadius: design.radius.sm, backgroundColor: chatTheme.color.surface, color: chatTheme.color.ink, fontFamily: chatTheme.font.body, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px' }}>{profile.gender}</span>}
-              {profile.pronouns && <span className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${chatTheme.color.border}`, borderRadius: design.radius.sm, backgroundColor: chatTheme.color.surface, color: chatTheme.color.ink, fontFamily: chatTheme.font.body, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px' }}>{profile.pronouns}</span>}
-              {profile.hostel && <span className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${chatTheme.color.border}`, borderRadius: design.radius.sm, backgroundColor: chatTheme.color.surface, color: chatTheme.color.ink, fontFamily: chatTheme.font.body, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px', display: 'inline-flex', alignItems: 'center' }}><MapPin size={12} style={{ marginRight: 4 }} /> {profile.hostel}</span>}
-            </div>
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.p
+                    key={searchActive ? 'typing' : 'idle'}
+                    className="au-sub au-mobile-sub"
+                    initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.16 }}
+                  >
+                    {searchActive
+                      ? 'Start typing. We’ll bring your campus into view.'
+                      : 'Your campus. Your people. Your next good story.'}
+                  </motion.p>
+                </AnimatePresence>
 
-            <ChatStitchSeam />
+                <AuthArtwork kind="college" />
 
-            {/* 4. Seeking Parameters */}
-            <div style={{ margin: '24px 0' }}>
-              <ChatSectionLabel>Seeking</ChatSectionLabel>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                {(profile.intent && profile.intent.length > 0 ? profile.intent : ['Long-term', 'Connection', 'Growth']).map((item, i) => (
-                  <span key={i} className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${chatTheme.color.ink}`, borderRadius: design.radius.sm, backgroundColor: chatTheme.color.ink, color: chatTheme.color.paper, fontFamily: chatTheme.font.body, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px' }}>
-                    {item}
+                {errorBanner}
+
+                <label className="au-mobile-field-label" htmlFor="college-search">Find your campus</label>
+                <div className="au-searchwrap">
+                  <span className="au-searchicon">
+                    <Search size={20} strokeWidth={1.9} aria-hidden="true" />
                   </span>
-                ))}
-              </div>
-            </div>
 
-            {/* 5. Recorded Curiosities */}
-            {profile.interests && profile.interests.length > 0 && (
-              <div style={{ marginBottom: '32px' }}>
-                <ChatSectionLabel>Recorded Curiosities</ChatSectionLabel>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                  {profile.interests.map((interest, i) => (
-                    <span key={i} className="pc-pill" style={{ padding: '6px 12px', border: `1px solid var(--tape-70)`, borderRadius: design.radius.sm, backgroundColor: chatTheme.color.surfaceAlt, color: chatTheme.color.ink, fontFamily: chatTheme.font.body, fontSize: '11px', fontWeight: 500 }}>
-                      {interest}
-                    </span>
+                  <input
+                    id="college-search"
+                    ref={collegeSearchRef}
+                    className="au-search"
+                    type="text"
+                    inputMode="text"
+                    enterKeyHint="search"
+                    autoComplete="off"
+                    autoCapitalize="words"
+                    autoCorrect="off"
+                    spellCheck="false"
+                    placeholder="Search your college"
+                    value={collegeQuery}
+                    onFocus={openCollegeSearch}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape' && collegeSearchOpen) {
+                        e.preventDefault();
+                        closeCollegeSearch();
+                      }
+                      if (e.key === 'Enter' && filteredColleges.length === 1) {
+                        e.preventDefault();
+                        pickCollege(filteredColleges[0]);
+                      }
+                    }}
+                    onChange={(e) => setCollegeQuery(e.target.value)}
+                    aria-expanded={showResults}
+                    aria-controls="college-suggestions"
+                    aria-label="Search your college"
+                  />
+                </div>
+
+                {collegeLoadState === 'error' && colleges.length === 0 && (
+                  <div>
+                    <p className="au-empty">Couldn&rsquo;t load the college list. Check your connection.</p>
+                    <button className="au-cta" type="button" onClick={loadColleges}>
+                      Try again
+                    </button>
+                  </div>
+                )}
+
+                <AnimatePresence>
+                  {showResults && collegeLoadState !== 'error' && (
+                    <motion.div
+                      key="results"
+                      className="au-results"
+                      id="college-suggestions"
+                      role="listbox"
+                      aria-label="College suggestions"
+                      initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 4 }}
+                      transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
+                    >
+                      {filteredColleges.length === 0 ? (
+                        <div style={{ gridColumn: '1 / -1' }}>
+                          <p className="au-empty">
+                            No college matches &ldquo;{collegeQuery.trim()}&rdquo;.
+                          </p>
+
+                          {requestDone ? (
+                            <div className="au-strip">
+                              <CheckCircle2 size={18} strokeWidth={2.5} /> Request received
+                            </div>
+                          ) : (
+                            <button
+                              className="au-cta"
+                              type="button"
+                              onClick={() => {
+                                setRequestForm((f) => ({
+                                  ...f,
+                                  collegeName: collegeQuery.trim(),
+                                  email,
+                                }));
+                                triggerHaptic('light');
+                                setCollegeSearchOpen(false);
+                                collegeSearchRef.current?.blur();
+                                setStep('request');
+                              }}
+                            >
+                              Request this college
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        filteredColleges.slice(0, 12).map((c) => (
+                          <button
+                            key={c.code}
+                            type="button"
+                            role="option"
+                            aria-selected={college?.code === c.code}
+                            className={`au-result${college?.code === c.code ? ' chosen' : ''}`}
+                            onClick={() => pickCollege(c)}
+                          >
+                            <span className="au-result-name">{c.name}</span>
+                            {(c.city || c.state) && (
+                              <span className="au-result-meta">
+                                {[c.city, c.state].filter(Boolean).join(', ')}
+                              </span>
+                            )}
+                          </button>
+                        ))
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {!collegeQuery.trim() && collegeLoadState === 'loading' && colleges.length === 0 && (
+                  <p className="au-empty">Loading colleges…</p>
+                )}
+              </motion.section>
+            ) : step === 'request' ? (
+              <motion.section key="request" className="au-step" {...swapProps}>
+                <h2 className="au-headline">Tell us your campus.</h2>
+
+                <p className="au-sub">
+                  We add campuses ourselves so only real students get in. You&rsquo;ll hear back once yours is live.
+                </p>
+
+                <AuthArtwork kind="request" />
+
+                {requestDone ? (
+                  <div className="au-strip">
+                    <CheckCircle2 size={18} strokeWidth={2.5} /> Request received
+                  </div>
+                ) : (
+                  <form className="au-form" onSubmit={submitCollegeRequest}>
+                    {errorBanner}
+
+                    <div className="au-field">
+                      <label htmlFor="rq-name">Full college name</label>
+                      <input
+                        id="rq-name"
+                        value={requestForm.collegeName}
+                        onChange={(e) => setRequestForm((f) => ({ ...f, collegeName: e.target.value }))}
+                        placeholder="Indian Institute of Technology Delhi"
+                        required
+                      />
+                    </div>
+
+                    <div className="au-field">
+                      <label htmlFor="rq-email">Your college email</label>
+                      <input
+                        id="rq-email"
+                        type="email"
+                        inputMode="email"
+                        autoComplete="email"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck="false"
+                        value={requestForm.email}
+                        onChange={(e) => setRequestForm((f) => ({ ...f, email: e.target.value }))}
+                        placeholder="you@college.ac.in"
+                        required
+                      />
+                    </div>
+
+                    <div className="au-field">
+                      <label htmlFor="rq-yourname">Your name (optional)</label>
+                      <input
+                        id="rq-yourname"
+                        value={requestForm.name}
+                        onChange={(e) => setRequestForm((f) => ({ ...f, name: e.target.value }))}
+                        placeholder="Anaya"
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                      <div className="au-field" style={{ flex: '1 1 180px' }}>
+                        <label htmlFor="rq-city">City</label>
+                        <input
+                          id="rq-city"
+                          value={requestForm.city}
+                          onChange={(e) => setRequestForm((f) => ({ ...f, city: e.target.value }))}
+                          placeholder="Delhi"
+                        />
+                      </div>
+
+                      <div className="au-field" style={{ flex: '1 1 180px' }}>
+                        <label htmlFor="rq-state">State</label>
+                        <input
+                          id="rq-state"
+                          value={requestForm.state}
+                          onChange={(e) => setRequestForm((f) => ({ ...f, state: e.target.value }))}
+                          placeholder="Delhi"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      className="au-cta"
+                      type="submit"
+                      disabled={loading || !requestForm.collegeName.trim() || !requestForm.email.trim()}
+                    >
+                      {loading ? 'Sending…' : 'Send request'}
+                    </button>
+
+                    <button
+                      className="au-ghost"
+                      type="button"
+                      onClick={() => {
+                        setStep('college');
+                        setError('');
+                      }}
+                    >
+                      Back
+                    </button>
+                  </form>
+                )}
+              </motion.section>
+            ) : step === 'email' ? (
+              <motion.section key="email" className="au-step" {...swapProps}>
+                <h2 className="au-headline">Your college email.</h2>
+
+                <p className="au-sub">
+                  <b>{college?.name}</b> students use an <b>@{college?.domains?.[0]}</b> address.
+                </p>
+
+                <AuthArtwork kind="email" />
+
+                <form className="au-form" onSubmit={handleSendOtp}>
+                  {errorBanner}
+                  <label className="au-mobile-field-label" htmlFor="college-email">College email</label>
+                  <input
+                    id="college-email"
+                    className="au-input"
+                    type="text"
+                    inputMode="email"
+                    autoComplete="email"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck="false"
+                    placeholder="you@iitb.ac.in"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    onBlur={handleInputBlur}
+                    disabled={loading}
+                    aria-label="College email address"
+                    required
+                  />
+
+                  <button className="au-cta" type="submit" disabled={loading || !email.trim()}>
+                    {loading ? 'Sending…' : 'Send my code'}
+                  </button>
+
+                  <button
+                    className="au-ghost"
+                    type="button"
+                    onClick={() => {
+                      setCollegeSearchOpen(false);
+                      setStep('college');
+                      setError('');
+                    }}
+                  >
+                    Change college
+                  </button>
+                </form>
+              </motion.section>
+            ) : (
+              <motion.section key="otp" className="au-step" {...swapProps}>
+                <h2 className="au-headline">Enter the code.</h2>
+
+                <p className="au-sub">
+                  Sent to <b className="low">{email.trim()}</b>
+                </p>
+
+                <AuthArtwork kind="otp" />
+
+                {errorBanner}
+
+                <div className="au-otp" role="group" aria-label="6-digit verification code">
+                  {otp.map((digit, index) => (
+                    <input
+                      key={index}
+                      className={`au-box${error ? ' err' : ''}${verified ? ' ok' : ''}`}
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete={index === 0 ? 'one-time-code' : 'off'}
+                      maxLength={6}
+                      value={digit}
+                      ref={(el) => { inputRefs.current[index] = el; }}
+                      onChange={(e) => handleOtpChange(e, index)}
+                      onKeyDown={(e) => handleOtpKeyDown(e, index)}
+                      disabled={verified || loading}
+                      aria-label={`Digit ${index + 1}`}
+                    />
                   ))}
                 </div>
-              </div>
-            )}
 
-            {/* 6. Bento Grid */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px 16px', marginBottom: '48px', paddingTop: '8px' }}>
-              <ChatIndexCard tilt={TILT.prompt_0} tape="top-right">
-                {profile.prompts?.[0]?.question || "A shower thought I recently had..."}
-              </ChatIndexCard>
-
-              {profile.photos?.[1] ? (
-                <ChatMountedPhoto src={profile.photos[1]} alt={`${profile.name}, photo 2`} tilt={TILT.photo_1} />
-              ) : <div />}
-
-              {profile.photos?.[2] ? (
-                <ChatMountedPhoto src={profile.photos[2]} alt={`${profile.name}, photo 3`} tilt={TILT.photo_2} />
-              ) : <div />}
-
-              <ChatIndexCard tilt={TILT.prompt_1} tape="top-left">
-                {profile.prompts?.[1]?.question || "My ideal weekend looks like..."}
-              </ChatIndexCard>
-
-              {profile.prompts?.[2] && (
-                <ChatIndexCard tilt={TILT.prompt_2} wide tape="center">
-                  {profile.prompts[2].question}
-                </ChatIndexCard>
-              )}
-
-              {profile.photos?.[3] && (
-                <ChatMountedPhoto src={profile.photos[3]} alt={`${profile.name}, photo 4`} tilt={TILT.photo_3} aspect="16/9" />
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Archival Animations */}
-        <style>{`
-          @keyframes pcFadeUp { from { opacity: 0; transform: translate3d(0, 16px, 0); filter: blur(2px); } to { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0px); } }
-          @keyframes pcRadarSweep { 0% { transform: rotate(-90deg); opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { transform: rotate(270deg); opacity: 0; } }
-          @keyframes pcHintPulse { 0% { opacity: 0.4; transform: scale(1); } 50% { opacity: 0.95; transform: scale(1.03); } 100% { opacity: 0.4; transform: scale(1); } }
-          .pc-fade-1 { animation: pcFadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.05s both; }
-          .pc-fade-2 { animation: pcFadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both; }
-          .pc-scroll::-webkit-scrollbar { width: 4px; }
-          .pc-scroll::-webkit-scrollbar-track { background: transparent; }
-          .pc-scroll::-webkit-scrollbar-thumb { background: ${chatTheme.color.borderDark}; border-radius: 4px; }
-          .pc-sweep { animation: pcRadarSweep 1.6s cubic-bezier(0.22, 1, 0.36, 1) forwards; transform-origin: 44px 44px; }
-          .pc-hint-pulse { animation: pcHintPulse 2.8s ease-in-out infinite; }
-          .pc-dynamic-shadow { will-change: transform; transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.25s ease; }
-          .pc-dynamic-shadow:active { transform: scale3d(0.98, 0.98, 1) translate3d(0, 0, 0) !important; transition: transform 0.1s cubic-bezier(0, 0, 0.2, 1) !important; }
-          .pc-metallic-foil { background: linear-gradient(-135deg, var(--accent-strong) 0%, var(--accent) 30%, var(--gold) 50%, var(--accent) 70%, var(--accent-strong) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-          .pc-pill { transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.25s ease; display: inline-flex; align-items: center; will-change: transform; }
-          .pc-tape { transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1); will-change: transform; }
-          .pc-photo-img { transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1); will-change: transform; }
-          @media (prefers-reduced-motion: reduce) { .pc-fade-1, .pc-fade-2, .pc-sweep, .pc-hint-pulse { animation: none !important; opacity: 1 !important; transform: none !important; } .pc-dynamic-shadow, .pc-photo-img, .pc-pill, .pc-tape { transition: none !important; } }
-        `}</style>
-      </motion.div>
-    </motion.div>
-  );
-};
-
-/* ==================================================================
-   MAIN CHAT COMPONENT
-================================================================== */
-const Chat = ({ match, onBack }) => {
-  const matchUser = match?.user;
-  const alignmentId = match?._id;
-  const otherUserId = matchUser?._id;
-  
-  const [inputText, setInputText] = useState('');
-  const [otherTyping, setOtherTyping] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [recording, setRecording] = useState(false);
-  const [showActionSheet, setShowActionSheet] = useState(false);
-  const [pendingFile, setPendingFile] = useState(null);
-  
-  // Online status
-  const [isOnline, setIsOnline] = useState(false);
-  const [lastActive, setLastActive] = useState(null);
-  
-  // Pagination (cursor-based)
-  const [cursor, setCursor] = useState(null);
-  const [hasMore, setHasMore] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  
-  // Scroll to bottom
-  const [showScrollButton, setShowScrollButton] = useState(false);
-  
-  const [showHeaderMenu, setShowHeaderMenu] = useState(false);
-  const [showProfile, setShowProfile] = useState(false);
-  const [selectedMessage, setSelectedMessage] = useState(null);
-  const [menuAnchor, setMenuAnchor] = useState(null);
-  const [replyTo, setReplyTo] = useState(null);
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [emojiPickerAnchor, setEmojiPickerAnchor] = useState(null);
-  const [showPhotoViewer, setShowPhotoViewer] = useState(false);
-  const [photoViewerUrl, setPhotoViewerUrl] = useState(null);
-  const [showSearch, setShowSearch] = useState(false);
-  const [showReportModal, setShowReportModal] = useState(false);
-
-  const fileInputRef = useRef(null);
-  const recorderRef = useRef(null);
-  const chunksRef = useRef([]);
-  const typingTimer = useRef(null);
-  const listEndRef = useRef(null);
-  const messagesContainerRef = useRef(null);
-  const prevScrollHeightRef = useRef(0);
-  const prevMessagesLengthRef = useRef(0);
-  const pendingMsgIdRef = useRef(null);
-  const [socketConnected, setSocketConnected] = useState(socket?.connected ?? true);
-  const otherUnavailable = matchUser?.suspended || matchUser?.isDeleted;
-
-  const { user } = useAuth();
-  const myId = user?._id;
-  const myName = user?.name;
-
-  const queryClient = useQueryClient();
-  const { data: queryMessages = [], isLoading: loading, isError, error: queryError } = useQuery({
-    queryKey: ['messages', alignmentId],
-    queryFn: async () => {
-      const d = await fetchMessages(alignmentId, null, 50);
-      setHasMore(d.hasMore);
-      setCursor(d.nextCursor);
-      if (socket) socket.emit('read-messages', { alignmentId });
-      return d.messages;
-    },
-    enabled: !!alignmentId,
-  });
-  const messages = queryMessages;
-  const error = isError ? (queryError?.message || 'Failed to load messages') : null;
-
-  // Socket Subscriptions
-  useEffect(() => {
-    if (!socket || !alignmentId) return;
-    setCursor(null);
-    socket.emit('join-alignment', alignmentId);
-
-    const onReconnect = () => {
-      if (alignmentId) socket.emit('join-alignment', alignmentId);
-    };
-    socket.on('connect', onReconnect);
-
-    const onConnect = () => setSocketConnected(true);
-    const onDisconnect = () => setSocketConnected(false);
-    socket.on('connect', onConnect);
-    socket.on('disconnect', onDisconnect);
-
-    const onNew = (msg) => {
-      if (msg?.alignmentId === alignmentId) {
-        queryClient.setQueryData(['messages', alignmentId], (prev = []) => (prev.some((p) => p._id === msg._id) ? prev : [...prev, msg]));
-        socket.emit('read-messages', { alignmentId });
-        triggerHaptic('light');
-      }
-    };
-    const onRead = () => {
-      queryClient.setQueryData(['messages', alignmentId], (prev = []) => prev.map((m) => (String(m.sender || m.senderId) === String(myId) ? { ...m, read: true, readAt: new Date().toISOString() } : m)));
-    };
-    const onTyping = () => setOtherTyping(true);
-    const onStop = () => setOtherTyping(false);
-    const onReactionUpdate = ({ msgId, reactions }) => {
-      queryClient.setQueryData(['messages', alignmentId], (prev = []) => prev.map((m) => (m._id === msgId ? { ...m, reactions } : m)));
-    };
-    const onMessageDeleted = ({ msgId }) => {
-      queryClient.setQueryData(['messages', alignmentId], (prev = []) => prev.map((m) => (m._id === msgId ? { ...m, deleted: true, text: '', mediaUrl: '' } : m)));
-    };
-    const onOnlineUpdate = ({ userId, online, lastActive: la }) => {
-      if (userId === otherUserId) {
-        setIsOnline(online);
-        setLastActive(la);
-      }
-    };
-
-    socket.on('new-message', onNew);
-    socket.on('messages-read', onRead);
-    socket.on('user-typing', onTyping);
-    socket.on('user-stop-typing', onStop);
-    socket.on('reaction-update', onReactionUpdate);
-    socket.on('message-deleted', onMessageDeleted);
-    socket.on('online-update', onOnlineUpdate);
-
-    // Declared at effect scope (not inside the `if`) so the cleanup below can pass
-    // it to socket.off. `socket.off(event)` with no listener removes EVERY
-    // listener for that event, so a bare unsubscribe deafens chat app-wide — this
-    // line was previously `socket.off('online-status')`.
-    const onOnlineStatus = ({ online, lastActive: la }) => {
-      setIsOnline(online);
-      setLastActive(la);
-    };
-
-    if (otherUserId) {
-      socket.emit('check-online', { alignmentId, targetUserId: otherUserId });
-      socket.on('online-status', onOnlineStatus);
-    }
-
-    return () => {
-      if (typingTimer.current) {
-        clearTimeout(typingTimer.current);
-        typingTimer.current = null;
-        socket.emit('stop-typing', { alignmentId });
-      }
-      socket.off('connect', onReconnect);
-      socket.off('connect', onConnect);
-      socket.off('disconnect', onDisconnect);
-      socket.off('new-message', onNew);
-      socket.off('messages-read', onRead);
-      socket.off('user-typing', onTyping);
-      socket.off('user-stop-typing', onStop);
-      socket.off('reaction-update', onReactionUpdate);
-      socket.off('message-deleted', onMessageDeleted);
-      socket.off('online-update', onOnlineUpdate);
-      // `socket.off(event)` with no listener removes EVERY listener for that
-      // event — one careless unsubscribe deafens chat for the whole app. Every
-      // other line above passes its handler; this one didn't. Harmless today
-      // (online-status has a single subscriber) but it breaks silently the day
-      // a second component subscribes.
-      socket.off('online-status', onOnlineStatus);
-    };
-  }, [alignmentId, myId, otherUserId, queryClient]);
-
-  // ⚓ ZERO-LAG SCROLL ANCHOR: Freezes viewport when older messages are prepended to DOM
-  useLayoutEffect(() => {
-    const container = messagesContainerRef.current;
-    if (!container) return;
-
-    // If messages grew because we loaded history (not because we sent a new message at the bottom)
-    if (messages.length > prevMessagesLengthRef.current && prevScrollHeightRef.current > 0) {
-      const heightDifference = container.scrollHeight - prevScrollHeightRef.current;
-      if (container.scrollTop < 100 && heightDifference > 0) {
-        container.scrollTop = heightDifference;
-      }
-    }
-    
-    prevScrollHeightRef.current = container.scrollHeight;
-    prevMessagesLengthRef.current = messages.length;
-  }, [messages]);
-
-  // Auto-scroll to bottom on new messages
-  useEffect(() => {
-    if (!showScrollButton) {
-      listEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages, otherTyping, loading, showScrollButton]);
-
-  const loadMoreMessages = useCallback(async () => {
-    if (loadingMore || !hasMore) return;
-    setLoadingMore(true);
-    const { messages: olderMsgs, hasMore: more, nextCursor } = await fetchMessages(alignmentId, cursor, 50);
-    queryClient.setQueryData(['messages', alignmentId], (prev = []) => [...olderMsgs, ...prev]);
-    setCursor(nextCursor);
-    setHasMore(more);
-    setLoadingMore(false);
-  }, [loadingMore, hasMore, cursor, alignmentId, queryClient]);
-
-  const handleScroll = useCallback(() => {
-    if (!messagesContainerRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
-    const isNearBottom = scrollHeight - scrollTop - clientHeight < 200;
-    setShowScrollButton(!isNearBottom);
-
-    if (scrollTop < 5 && hasMore && !loadingMore && !loading) {
-      loadMoreMessages();
-    }
-  }, [hasMore, loadingMore, loading, loadMoreMessages]);
-
-  const handleInputChange = (e) => {
-    setInputText(e.target.value);
-    if (!socket) return;
-    if (!typingTimer.current) socket.emit('typing', { alignmentId, userName: myName });
-    clearTimeout(typingTimer.current);
-    typingTimer.current = setTimeout(() => {
-      socket.emit('stop-typing', { alignmentId });
-      typingTimer.current = null;
-    }, 500);
-  };
-
-  const handleSend = async () => {
-    const text = inputText.trim();
-    if (!text || !alignmentId) {
-      console.error('Cannot send: missing text or alignmentId');
-      return;
-    }
-    if (!pendingMsgIdRef.current) pendingMsgIdRef.current = genId();
-    triggerHaptic('medium');
-    socket.emit('stop-typing', { alignmentId });
-    if (typingTimer.current) { clearTimeout(typingTimer.current); typingTimer.current = null; }
-
-    try {
-      const msg = await api.post(`/messages/${alignmentId}`, {
-        text,
-        replyTo: replyTo?._id || null,
-        clientMsgId: pendingMsgIdRef.current,
-      });
-      queryClient.setQueryData(['messages', alignmentId], (prev = []) => [...prev, msg]);
-      setInputText('');
-      setReplyTo(null);
-      setShowScrollButton(false);
-      pendingMsgIdRef.current = null;
-    } catch (err) {
-      console.error('Send failed:', err);
-      if (!err?.toasted) {
-        toast.error('Couldn\'t send message. Check your connection.', {
-          label: 'Retry',
-          onClick: () => handleSend()
-        });
-      }
-    }
-  };
-
-  const handleFileClick = () => { triggerHaptic('light'); fileInputRef.current?.click(); };
-
-  const onFileSelected = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setPendingFile(file);
-    setShowActionSheet(true);
-    triggerHaptic('medium');
-    e.target.value = '';
-  };
-
-  const uploadAndSend = async (kind) => {
-    const file = pendingFile;
-    setShowActionSheet(false);
-    if (!file) return;
-    setUploading(true);
-    try {
-      const { url } = await api.upload(file);
-      if (url) {
-        triggerHaptic('heavy');
-        if (!pendingMsgIdRef.current) pendingMsgIdRef.current = genId();
-        const msg = await api.post(`/messages/${alignmentId}`, {
-          type: kind,
-          mediaUrl: url,
-          replyTo: replyTo?._id || null,
-          clientMsgId: pendingMsgIdRef.current,
-        });
-        queryClient.setQueryData(['messages', alignmentId], (prev = []) => [...prev, msg]);
-        pendingMsgIdRef.current = null;
-        setReplyTo(null);
-        setShowScrollButton(false);
-      }
-    } catch (err) { 
-      console.error('Upload failed:', err);
-      if (!err?.toasted) {
-        toast.error('Couldn\'t upload photo. Check your connection.', {
-          label: 'Retry',
-          onClick: () => uploadAndSend(kind)
-        }); 
-      }
-    } finally { 
-      setUploading(false);
-      setPendingFile(null);
-    }
-  };
-
-  const startRecording = async () => {
-    triggerHaptic('medium');
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/mp4';
-      const rec = new MediaRecorder(stream, { mimeType });
-      chunksRef.current = [];
-      rec.ondataavailable = (e) => chunksRef.current.push(e.data);
-      rec.onstop = async () => {
-        const ext = mimeType.includes('mp4') ? 'm4a' : 'webm';
-        const blob = new Blob(chunksRef.current, { type: mimeType });
-        const file = new File([blob], `voice.${ext}`, { type: mimeType });
-        setPendingFile(file);
-        setShowActionSheet(true);
-        stream.getTracks().forEach((t) => t.stop());
-      };
-      recorderRef.current = rec;
-      rec.start();
-      setRecording(true);
-    } catch { setRecording(false); }
-  };
-
-  const stopRecording = () => { triggerHaptic('heavy'); recorderRef.current?.stop(); setRecording(false); };
-
-  const handleLongPress = (message, event) => {
-    if (message.deleted) return;
-    const rect = event.target.closest('[data-bubble="true"]')?.getBoundingClientRect();
-    if (rect) { setSelectedMessage(message); setMenuAnchor(rect); }
-  };
-
-  const handleCloseMenu = () => { setSelectedMessage(null); setMenuAnchor(null); };
-  const handleReply = () => { setReplyTo(selectedMessage); handleCloseMenu(); triggerHaptic('light'); };
-  
-  const handleReact = () => {
-    setEmojiPickerAnchor(menuAnchor);
-    setMenuAnchor(null);
-    setShowEmojiPicker(true);
-  };
-
-  const handleEmojiSelect = async (emoji) => {
-    setShowEmojiPicker(false);
-    setEmojiPickerAnchor(null);
-    const target = selectedMessage;
-    setSelectedMessage(null);
-    if (!target) return;
-    try {
-      const data = await api.post(`/messages/${alignmentId}/reaction`, { msgId: target._id, emoji });
-      queryClient.setQueryData(['messages', alignmentId], (prev = []) => prev.map((m) => (m._id === target._id ? { ...m, reactions: data.reactions } : m)));
-    } catch (err) { console.error('Reaction failed:', err); }
-  };
-
-  const handleCopy = () => {
-    if (selectedMessage?.text) navigator.clipboard.writeText(selectedMessage.text);
-    triggerHaptic('light');
-    handleCloseMenu();
-  };
-
-  const handleReport = () => {
-    setShowReportModal(true);
-    handleCloseMenu();
-  };
-
-  const handleDelete = async () => {
-    if (!selectedMessage) return;
-    if (!window.confirm('Delete this message?')) return;
-    try {
-      await api.delete(`/messages/${alignmentId}/${selectedMessage._id}`);
-      queryClient.setQueryData(['messages', alignmentId], (prev = []) => prev.map((m) => (m._id === selectedMessage._id ? { ...m, deleted: true } : m)));
-      triggerHaptic('heavy');
-    } catch (err) { 
-      console.error('Delete failed:', err);
-      if (!err?.toasted) {
-        toast.error('Failed to delete. Please try again.');
-      }
-    }
-    handleCloseMenu();
-  };
-
-  const handleImageClick = (url) => { setPhotoViewerUrl(url); setShowPhotoViewer(true); triggerHaptic('light'); };
-
-  // Optimized Search Jump utilizing CSS class animations to prevent DOM style lag
-  const handleSearchJump = (msgId) => {
-    const el = document.querySelector(`[data-msg-id="${msgId}"]`);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.classList.add('highlight-pulse');
-      setTimeout(() => { el.classList.remove('highlight-pulse'); }, 2000);
-    }
-  };
-
-  const handleUnmatch = async () => {
-    if (!window.confirm('End this conversation? This cannot be undone.')) return;
-    try {
-      await api.delete(`/alignments/${alignmentId}`);
-      triggerHaptic('heavy');
-      onBack();
-    } catch (err) {
-      console.error('Unmatch failed:', err);
-      if (!err?.toasted) {
-        toast.error('Failed to end this conversation. Please try again.');
-      }
-    }
-    setShowHeaderMenu(false);
-  };
-
-  const handleBlock = async () => {
-    if (!window.confirm('Block this user? They will no longer be able to message you.')) return;
-    try {
-      await api.post(`/report/block/${otherUserId}`);
-      triggerHaptic('heavy');
-      onBack();
-    } catch (err) {
-      console.error('Block failed:', err);
-      if (!err?.toasted) {
-        toast.error('Failed to block this user. Please try again.', {
-          label: 'Retry',
-          onClick: () => handleBlock()
-        });
-      }
-    }
-    setShowHeaderMenu(false);
-  };
-
-  const scrollToBottom = () => {
-    listEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    setShowScrollButton(false);
-  };
-
-  return (
-    <div style={styles.page}>
-      <div style={styles.paperGrain} aria-hidden="true" />
-
-      {/* ARCHIVAL HEADER WITH ONLINE STATUS */}
-      <div style={styles.header}>
-        <button style={styles.backBtn} onPointerDown={(e) => { e.preventDefault(); triggerHaptic('light'); onBack(); }} onClick={() => { triggerHaptic('light'); onBack(); }} aria-label="Go back to letters"><ChevronLeft size={24} color={theme.ink} /></button>
-
-        <div style={styles.headerLeft} onClick={() => setShowProfile(true)}>
-          <div style={{ position: 'relative' }}>
-            <img 
-              src={matchUser?.photos?.[0] || 'https://via.placeholder.com/80'} 
-              alt={matchUser?.name} 
-              loading="lazy"
-              decoding="async"
-              onLoad={(e) => { e.currentTarget.style.opacity = 1; }}
-              onError={(e) => { e.currentTarget.src = 'https://via.placeholder.com/80'; e.currentTarget.style.opacity = 1; }}
-              style={{ ...styles.headerAvatar, opacity: 0, transition: 'opacity 0.3s ease-out' }} 
-            />
-            {isOnline && <div style={styles.onlineDot} />}
-          </div>
-          <div style={styles.headerInfo}>
-            <span style={styles.headerName}>{matchUser?.name || 'Connection'}</span>
-            <span style={styles.headerStatus}>
-              {otherTyping ? 'Typing...' : isOnline ? 'Online' : formatLastActive(lastActive)}
-            </span>
-          </div>
-        </div>
-        
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button style={styles.iconBtn} onClick={() => setShowSearch(true)} title="Search" aria-label="Search messages">
-            <Search size={20} color={theme.ink} />
-          </button>
-
-          <div style={{ position: 'relative' }}>
-            <button style={styles.iconBtn} onClick={() => setShowHeaderMenu(!showHeaderMenu)} aria-label="Open chat options">
-              <Icon path={<><circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" /></>} size={20} color={theme.ink} />
-            </button>
-            
-            <AnimatePresence>
-              {showHeaderMenu && (
-                <motion.div 
-                  initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-                  style={styles.dropdownMenu}
-                >
-                  <button style={styles.dropdownItem} onClick={() => { setShowProfile(true); setShowHeaderMenu(false); }}>
-                    <Icon path={<><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>} size={16} />
-                    View Profile
+                {verified ? (
+                  <motion.div className="au-strip" {...swapProps}>
+                    <CheckCircle2 size={18} strokeWidth={2.5} /> Access granted
+                  </motion.div>
+                ) : (
+                  <button
+                    className="au-ghost"
+                    type="button"
+                    disabled={loading}
+                    onClick={() => {
+                      triggerHaptic('light');
+                      setStep('email');
+                      setError('');
+                      setOtp(['', '', '', '', '', '']);
+                    }}
+                  >
+                    Wrong email? Go back
                   </button>
-                  <button style={{...styles.dropdownItem, color: theme.crimson}} onClick={() => { handleReport(); setShowHeaderMenu(false); }}>
-                    <Icon path={<><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" /></>} size={16} color={theme.crimson} />
-                    Report User
-                  </button>
-                  <button style={{...styles.dropdownItem, color: theme.crimson}} onClick={handleBlock}>
-                    <Icon path={<><circle cx="12" cy="12" r="10" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /></>} size={16} color={theme.crimson} />
-                    Block User
-                  </button>
-                  <button style={{...styles.dropdownItem, color: theme.crimson}} onClick={handleUnmatch}>
-                    <Icon path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} size={16} color={theme.crimson} />
-                    Unmatch
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        </div>
-
-        <div style={styles.tornEdgeBottom} aria-hidden="true" />
-      </div>
-
-      {!socketConnected && (
-        <div style={{ background: '#f59e0b', color: '#fff', textAlign: 'center', padding: '6px 12px', fontSize: '13px', fontWeight: 500, letterSpacing: '0.3px' }}>
-          Reconnecting...
-        </div>
-      )}
-
-      {otherUnavailable && (
-        <div style={{
-          background: 'var(--accent-06)',
-          borderBottom: '1px solid var(--accent-12)',
-          padding: '10px 24px',
-          textAlign: 'center',
-          position: 'relative', zIndex: 5,
-        }}>
-          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 600, color: 'var(--ink-muted)', margin: 0 }}>
-            This user can no longer receive messages
-          </p>
-        </div>
-      )}
-
-      {/* MESSAGES STAGE WITH ZERO-LAG ENGINE */}
-      <div 
-        ref={messagesContainerRef}
-        className="archival-scrollbar" 
-        style={styles.messages}
-        onScroll={handleScroll}
-      >
-        <style>{`
-          .archival-scrollbar::-webkit-scrollbar { width: 4px; }
-          .archival-scrollbar::-webkit-scrollbar-track { background: transparent; }
-          .archival-scrollbar::-webkit-scrollbar-thumb { background: ${theme.borderDark}; border-radius: 4px; }
-          @keyframes blink { 0% { opacity: 0.2; } 20% { opacity: 1; } 100% { opacity: 0.2; } }
-          @keyframes highlightBg { 0% { background-color:'var(--accent-20)'; } 100% { background-color: transparent; } }
-          .highlight-pulse { animation: highlightBg 2s ease-out forwards; }
-          
-          /* Interactive Button Tactile Physics */
-          .tactile-btn { transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.2s ease; will-change: transform; }
-          @media (hover: hover) { .tactile-btn:hover { transform: translate3d(0, -2px, 0) scale3d(1.02, 1.02, 1); } }
-          .tactile-btn:active { transform: scale3d(0.96, 0.96, 1) translate3d(0, 0, 0) !important; transition: transform 0.08s cubic-bezier(0, 0, 0.2, 1) !important; }
-        `}</style>
-        
-        {loading ? (
-          <div style={{ padding: '60px 20px', textAlign: 'center', color: theme.inkMuted, fontFamily: "'Inter', sans-serif", fontSize: '13px' }}>
-            Opening chat...
-          </div>
-        ) : error ? (
-          <div style={{ padding: '60px 20px', textAlign: 'center', color: theme.crimson, fontFamily: "'Inter', sans-serif", fontSize: '13px' }}>
-            {error}
-          </div>
-        ) : (
-          <>
-            {loadingMore && (
-              <div style={{ padding: '20px', textAlign: 'center', color: theme.inkMuted, fontFamily: "'Inter', sans-serif", fontSize: '12px' }}>
-                Loading older messages...
-              </div>
-            )}
-
-            {/* Opening Letter Card */}
-            {messages.filter(m => m.type === 'opening_letter').map(m => (
-              <div key={m._id} style={styles.openingLetterCard}>
-                <div style={styles.openingLetterLabel}>Opening Letter</div>
-                {(m.mediaUrl || m.image) && (
-                  <img
-                    src={m.mediaUrl || m.image}
-                    alt="Opening letter"
-                    onClick={() => handleImageClick(m.mediaUrl || m.image)}
-                    style={{ width: '100%', borderRadius: design?.radius?.md || '8px', margin: '8px 0', cursor: 'zoom-in', display: 'block' }}
-                  />
                 )}
-                <div style={styles.openingLetterText}>{m.text}</div>
-                <div style={styles.openingLetterDate}>
-                  {m.createdAt ? new Date(m.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
+
+                <div className="au-field">
+                  <label htmlFor="grad-year">Graduating year (optional)</label>
+                  <input
+                    id="grad-year"
+                    type="number"
+                    inputMode="numeric"
+                    min={new Date().getFullYear()}
+                    max={new Date().getFullYear() + 10}
+                    value={graduatingYear}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D/g, '').slice(0, 4);
+                      setGraduatingYear(v);
+                    }}
+                    onBlur={handleInputBlur}
+                    placeholder={String(new Date().getFullYear() + 3)}
+                    disabled={loading}
+                  />
                 </div>
-              </div>
-            ))}
-
-            {messages.filter(m => m.type !== 'opening_letter').map((m, i, filteredArr) => {
-              const isMine = String(m.sender || m.senderId) === String(myId);
-              const time = m.createdAt ? new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-              const receipt = isMine ? (m.read || m.readAt ? 'SEEN' : 'SENT') : null;
-              const msgDate = formatDateSeparator(m.createdAt);
-              const prevDate = i > 0 ? formatDateSeparator(filteredArr[i-1].createdAt) : null;
-              const showDate = msgDate && msgDate !== prevDate;
-              const replyPreview = m.replyTo ? messages.find((msg) => msg._id === (m.replyTo._id || m.replyTo)) : null;
-
-              return (
-                <React.Fragment key={m._id || i}>
-                  {showDate && (
-                    <div style={styles.dateSeparator}>
-                      <span style={styles.dateText}>{msgDate}</span>
-                    </div>
-                  )}
-                  <div data-msg-id={m._id} style={{ borderRadius: '8px' }}>
-                    <MessageBubble
-                      message={m}
-                      isMine={isMine}
-                      time={time}
-                      receipt={receipt}
-                      onLongPress={handleLongPress}
-                      onImageClick={handleImageClick}
-                      replyPreview={replyPreview}
-                    />
-                  </div>
-                </React.Fragment>
-              );
-            })}
-            {otherTyping && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={styles.typing}>
-                <span style={styles.typingDot} />
-                <span style={{...styles.typingDot, animationDelay: '0.2s'}} />
-                <span style={{...styles.typingDot, animationDelay: '0.4s'}} />
-              </motion.div>
+              </motion.section>
             )}
-            <div ref={listEndRef} style={{ height: '10px' }} />
-          </>
-        )}
+          </AnimatePresence>
+        </motion.div>
       </div>
-
-      {/* SCROLL TO BOTTOM BUTTON */}
-      <AnimatePresence>
-        {showScrollButton && (
-          <motion.button
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.8 }}
-            whileTap={{ scale: 0.97 }}
-            whileHover={{ scale: 1.02 }}
-            onClick={scrollToBottom}
-            style={styles.scrollButton}
-            aria-label="Scroll to bottom"
-          >
-            <Icon path={<polyline points="6 9 12 15 18 9" />} size={20} color={theme.accent} />
-          </motion.button>
-        )}
-      </AnimatePresence>
-
-      {/* REPLY PREVIEW */}
-      <AnimatePresence>
-        {replyTo && <ReplyPreview replyTo={replyTo} otherName={matchUser?.name} onCancel={() => setReplyTo(null)} />}
-      </AnimatePresence>
-
-      {/* INPUT BAR WITH WASHI TAPE */}
-      {match.isActive !== false && !otherUnavailable ? (
-      <div style={styles.inputBar}>
-        <div style={styles.washiTape} aria-hidden="true" />
-        
-        <button 
-          className="tactile-btn"
-          style={styles.attachBtn} 
-          onClick={handleFileClick} 
-          title="Attach"
-          aria-label="Attach photo or file"
-        >
-          <Icon path={<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />} size={22} color={theme.accent} />
-        </button>
-        
-        <div style={styles.inputWrapper}>
-          <input
-            style={styles.input}
-            value={inputText}
-            onChange={handleInputChange}
-            placeholder={uploading ? "Transmitting..." : "Write a message..."}
-            disabled={uploading}
-            maxLength={5000}
-            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-          />
-        </div>
-
-        {inputText.trim() ? (
-          <button 
-            className="tactile-btn"
-            style={styles.sendBtn} 
-            onClick={handleSend}
-            title="Send"
-            aria-label="Send message"
-          >
-            <Icon path={<><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></>} size={20} color="#fff" />
-          </button>
-        ) : (
-          <button 
-            className="tactile-btn"
-            style={styles.attachBtn} 
-            onClick={recording ? stopRecording : startRecording}
-            title="Voice"
-            aria-label="Record voice message"
-          >
-            <Icon 
-              path={<><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></>} 
-              size={22} 
-              color={recording ? theme.crimson : theme.accent}
-            />
-          </button>
-        )}
-      </div>
-      ) : (
-      <div style={{...styles.inputBar, justifyContent: 'center', padding: '12px 16px'}}>
-        <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', color: theme.inkMuted, fontStyle: 'italic' }}>
-          This conversation has ended
-        </span>
-      </div>
-      )}
-
-      <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onFileSelected} />
-
-      {/* OVERLAYS */}
-      {selectedMessage && menuAnchor && (
-        <MessageActionMenu
-          anchorRect={menuAnchor}
-          isMine={String(selectedMessage.sender || selectedMessage.senderId) === String(myId)}
-          isMedia={selectedMessage.type === 'image' || selectedMessage.type === 'audio'}
-          onClose={handleCloseMenu}
-          onReply={handleReply}
-          onReact={handleReact}
-          onCopy={handleCopy}
-          onReport={handleReport}
-          onDelete={handleDelete}
-        />
-      )}
-
-      {showEmojiPicker && (
-        <EmojiPicker
-          anchorRect={emojiPickerAnchor}
-          onSelect={handleEmojiSelect}
-          onClose={() => { setShowEmojiPicker(false); setEmojiPickerAnchor(null); setSelectedMessage(null); }}
-        />
-      )}
-
-      {showPhotoViewer && <PhotoViewer src={photoViewerUrl} onClose={() => setShowPhotoViewer(false)} />}
-
-      {showSearch && (
-        <SearchOverlay
-          messages={messages}
-          alignmentId={alignmentId}
-          myId={myId}
-          onClose={() => setShowSearch(false)}
-          onJumpTo={handleSearchJump}
-        />
-      )}
-
-      {showReportModal && (
-        <ReportModal
-          reportedUserId={otherUserId}
-          onClose={() => setShowReportModal(false)}
-          onReported={() => {
-            setShowReportModal(false);
-            toast.success('Report submitted. Thank you for keeping the community safe.');
-          }}
-        />
-      )}
-
-      {/* ACTION SHEET */}
-      <AnimatePresence>
-        {showActionSheet && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={styles.sheetBackdrop} onClick={() => { setShowActionSheet(false); setPendingFile(null); }}>
-            <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} style={styles.sheet} onClick={(e) => e.stopPropagation()}>
-              <div style={{ padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.border}` }}>
-                <span style={{ fontFamily: "'Playfair Display', serif", fontSize: '18px', fontWeight: '700', color: theme.ink }}>Attach Media</span>
-                <button onClick={() => { setShowActionSheet(false); setPendingFile(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-                  <Icon path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} size={20} color={theme.inkMuted} />
-                </button>
-              </div>
-              <div style={{ padding: '16px 24px 24px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <button className="tactile-btn" style={styles.sheetBtn} onClick={() => uploadAndSend('image')}>
-                  <Icon path={<><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></>} size={20} />
-                  Send as Photograph
-                </button>
-                <button className="tactile-btn" style={styles.sheetBtn} onClick={() => uploadAndSend('audio')}>
-                  <Icon path={<><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /></>} size={20} />
-                  Send as Voice Note
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ARCHIVAL PROFILE SHEET */}
-      <AnimatePresence>
-        {showProfile && <ChatProfileView profile={matchUser} unavailable={otherUnavailable} onClose={() => setShowProfile(false)} />}
-      </AnimatePresence>
     </div>
   );
 };
 
-/* ==================================================================
-   STYLES
-================================================================== */
-const styles = {
-  page: { position: 'fixed', inset: 0, backgroundColor: theme.paper, display: 'flex', flexDirection: 'column', zIndex: 50, overflow: 'hidden' },
-  paperGrain: { position: 'absolute', inset: 0, backgroundImage: `url("${design?.texture?.grain || ''}")`, mixBlendMode: 'multiply', opacity: 0.85, pointerEvents: 'none', zIndex: 1 },
-  
-  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '64px', boxSizing: 'border-box', padding: '0 24px', backgroundColor: theme.surface, borderBottom: `2px solid ${theme.borderDark}`, position: 'relative', zIndex: 10, contain: 'layout style' },
-  backBtn: { background: theme.surface, border: `1px solid ${theme.border}`, color: theme.ink, borderRadius: design?.radius?.md || '8px', padding: '10px', marginRight: '4px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'transform 0.15s ease', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation', minWidth: '44px', minHeight: '44px' },
-  headerLeft: { display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', flex: 1 },
-  headerAvatar: { width: '44px', height: '44px', borderRadius: '12px', objectFit: 'cover', border: `2px solid ${theme.borderDark}` },
-  onlineDot: { position: 'absolute', bottom: '2px', right: '2px', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: 'var(--success)', border: `2px solid ${theme.surface}` },
-  headerInfo: { display: 'flex', flexDirection: 'column' },
-  headerName: { fontFamily: "'Playfair Display', serif", fontSize: '18px', fontWeight: '700', color: theme.ink, lineHeight: 1.2 },
-  headerStatus: { fontFamily: "'Inter', sans-serif", fontSize: '11px', color: theme.inkMuted, marginTop: '2px', letterSpacing: '0.5px' },
-  iconBtn: { background: 'none', border: 'none', padding: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: design?.radius?.md || '8px' },
-  dropdownMenu: { position: 'absolute', top: '100%', right: 0, backgroundColor: theme.surface, border: `1px solid ${theme.border}`, borderRadius: '12px', zIndex: 100, overflow: 'hidden', minWidth: '180px', marginTop: '8px' },
-  dropdownItem: { display: 'flex', alignItems: 'center', gap: '12px', width: '100%', padding: '14px 16px', background: 'none', border: 'none', fontFamily: "'Inter', sans-serif", fontSize: '14px', fontWeight: '500', color: theme.ink, cursor: 'pointer', textAlign: 'left' },
-  tornEdgeBottom: { position: 'absolute', bottom: '-12px', left: 0, right: 0, height: '12px', backgroundColor: theme.surface, clipPath: 'polygon(0 0, 2% 60%, 4% 20%, 6% 80%, 8% 40%, 10% 90%, 12% 30%, 14% 70%, 16% 50%, 18% 100%, 20% 20%, 22% 80%, 24% 40%, 26% 90%, 28% 30%, 30% 70%, 32% 50%, 34% 100%, 36% 20%, 38% 80%, 40% 40%, 42% 90%, 44% 30%, 46% 70%, 48% 50%, 50% 100%, 52% 20%, 54% 80%, 56% 40%, 58% 90%, 60% 30%, 62% 70%, 64% 50%, 66% 100%, 68% 20%, 70% 80%, 72% 40%, 74% 90%, 76% 30%, 78% 70%, 80% 50%, 82% 100%, 84% 20%, 86% 80%, 88% 40%, 90% 90%, 92% 30%, 94% 70%, 96% 50%, 98% 100%, 100% 0)', zIndex: 11 },
-
-  messages: { flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '24px 28px', position: 'relative', zIndex: 2, contain: 'content', willChange: 'scroll-position' },
-  dateSeparator: { display: 'flex', justifyContent: 'center', margin: '24px 0 16px' },
-  dateText: { fontFamily: "'Inter', sans-serif", fontSize: '10px', fontWeight: '700', color: theme.inkMuted, backgroundColor: theme.surfaceAlt, padding: '5px 14px', borderRadius: design?.radius?.sm || '4px', border: `1px solid ${theme.border}`, textTransform: 'uppercase', letterSpacing: '1px' },
-  openingLetterCard: { margin: '8px 16px 16px', padding: '16px 20px', background: 'linear-gradient(135deg, var(--paper) 0%, var(--surface-alt) 100%)', border: `1px solid ${theme.border}`, borderRadius: '12px', textAlign: 'center' },
-  openingLetterLabel: { fontFamily: "'Playfair Display', Georgia, serif", fontSize: '11px', fontWeight: 700, letterSpacing: '2px', textTransform: 'uppercase', color: theme.accent, marginBottom: '8px' },
-  openingLetterText: { fontFamily: "'Inter', sans-serif", fontSize: '15px', lineHeight: '1.5', color: theme.ink, fontStyle: 'italic' },
-  openingLetterDate: { fontFamily: "'Inter', sans-serif", fontSize: '11px', color: theme.inkMuted, marginTop: '8px' },
-  typing: { color: theme.inkMuted, padding: '0 16px 6px', display: 'flex', alignItems: 'center', gap: '4px' },
-  typingDot: { display: 'inline-block', width: '6px', height: '6px', backgroundColor: theme.accent, borderRadius: '50%', animation: 'blink 1.4s infinite both' },
-  
-  scrollButton: {
-    position: 'absolute',
-    bottom: '140px',
-    right: '24px',
-    width: '44px',
-    height: '44px',
-    borderRadius: design?.radius?.md || '8px',
-    backgroundColor: theme.surface,
-    border: `2px solid ${theme.borderDark}`,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    cursor: 'pointer',
-    zIndex: 20,
-  },
-  
-inputBar: { display: 'flex', alignItems: 'center', gap: '12px', padding: '16px 24px', paddingBottom: 'max(16px, env(safe-area-inset-bottom))', borderTop: `2px solid ${theme.borderDark}`, backgroundColor: theme.surface, position: 'relative', zIndex: 10, contain: 'layout style' },
-  washiTape: { position: 'absolute', top: '-8px', left: '50%', transform: 'translateX(-50%) rotate(-1deg)', width: '60px', height: '16px', backgroundColor: 'var(--tape-90)', backdropFilter: 'blur(2px)', border: '1px solid var(--accent-20)', zIndex: 11 },
-  attachBtn: { background: theme.surfaceAlt, border: `1.5px solid ${theme.border}`, borderRadius: design?.radius?.md || '8px', width: '44px', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 },
-  inputWrapper: { flex: 1, backgroundColor: theme.surfaceAlt, border: `1.5px solid ${theme.border}`, borderRadius: '24px', padding: '0 20px', display: 'flex', alignItems: 'center' },
-  sendBtn: { width: '44px', height: '44px', borderRadius: design?.radius?.md || '8px', backgroundColor: theme.crimson, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 },
-
-  sheetBackdrop: { position: 'fixed', inset: 0, backgroundColor: 'rgba(20,15,10,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-end', zIndex: 120 },
-  sheet: { backgroundColor: theme.paper, backgroundImage: `url("${design?.texture?.grain || ''}")`, width: '100%', borderTopLeftRadius: '24px', borderTopRightRadius: '24px', boxShadow: '0 -12px 32px var(--wm-20)' },
-  sheetBtn: { display: 'flex', alignItems: 'center', gap: '12px', width: '100%', background: theme.surface, border: `1.5px solid ${theme.borderDark}`, color: theme.ink, fontFamily: "'Inter', sans-serif", fontWeight: '600', padding: '16px', borderRadius: '12px', fontSize: '14px', cursor: 'pointer' },
-};
-
-export default Chat;
+export default Auth;
 ```
 

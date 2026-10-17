@@ -32,7 +32,7 @@ const ProfileCardSkeleton = () => (
     <div className="sk-photo" style={{ position: 'absolute', inset: 0 }} />
     <div style={{
       position: 'absolute', inset: 0, pointerEvents: 'none',
-      background: 'linear-gradient(to top, rgba(15,13,10,.4) 0%, rgba(15,13,10,.08) 42%, rgba(15,13,10,.18) 100%)',
+      background: 'linear-gradient(to top, rgba(17,18,17,.65) 0%, rgba(17,18,17,.08) 44%, rgba(17,18,17,.20) 100%)',
     }} />
   </div>
 );

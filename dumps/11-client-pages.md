@@ -1,1173 +1,1140 @@
 # Chunk 11 — Client Pages
 
-> Matchalize · `client-pages` · files 11 of 25 chunks · 1 file(s) · 53 KB · ~15,550 tokens
-> Generated 2026-10-09 14:03.
+> Matchalize · `client-pages` · files 11 of 27 chunks · 1 file(s) · 60 KB · ~17,514 tokens
+> Generated 2026-10-17 20:14.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
-> - `./client/src/pages/Auth.jsx`
+> - `./client/src/pages/Admin.jsx`
 
 ---
-### ./client/src/pages/Auth.jsx
+### ./client/src/pages/Admin.jsx
 
 ```
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
-import { api } from '../utils/api';
-import socket from '../utils/socket';
-import { triggerHaptic } from '../utils/haptics';
-import { CheckCircle2, Search, GraduationCap } from 'lucide-react';
-import AccountSuspendedScreen from '../components/AccountSuspendedScreen';
-import { useAuth } from '../utils/AuthContext';
+import React, { useState, useEffect } from 'react';
+import neu from '../styles/neu';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  LayoutDashboard, AlertTriangle, Users, BarChart3, Settings,
+  Search, ChevronLeft, ChevronRight, RefreshCw,
+  Ban, EyeOff, X, Clock, GraduationCap, Plus, Send, Trash2
+} from 'lucide-react';
 
-/* ── Locked tokens — the exact candy-box set Header / ProfileCard / AppShell /
-      Settings use. This screen was the last cream-page holdout; it now sits on
-      the same desk as everything after login, so Splash → Auth → Deck reads as
-      one product. Hardcoded hex on purpose: the deck chrome ignores theme.js,
-      and this screen must stand alone before any of it has mounted. ── */
-const T = {
-  desk: '#131313',
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  red: '#E5484D',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-  fontHand: "'Caveat', 'Segoe Script', cursive",
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const T = neu;
 
-/* One injected stylesheet, au- prefix — same pattern as Header's hd- /
-   ProfileCard's pc- / Settings' st-. Restraint is deliberate: no grain, no
-   decorative icon tiles — the candy-box family identifies sections with
-   marker squares and type, and yellow does all the accent work. */
-const AUTH_CSS = `
-  /* Caveat is not in the global <link> set in index.html — Header and Splash
-     each declare it, and this screen has to stand on its own because it can
-     be reached without either having mounted. */
-  @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@700&display=swap');
-
-  .au-root {
-    --paper: ${T.paper}; --card: ${T.card}; --ink: ${T.ink};
-    --ink2: ${T.ink2}; --ink3: ${T.ink3};
-    --yellow: ${T.yellow}; --coral: ${T.coral}; --green: ${T.green}; --red: ${T.red};
-    --desk: ${T.desk}; --bw: 2px;
-    --heavy: ${T.fontHeavy}; --body: ${T.fontBody};
-    --mono: ${T.fontMono}; --hand: ${T.fontHand};
-
-    min-height: 100vh; min-height: 100dvh; width: 100%;
-    display: flex;
-    padding: max(24px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
-    background: var(--desk); box-sizing: border-box; position: relative;
-    /* overflowY auto, not hidden — keeps the Phantom Hitbox fix (native scroll
-       instead of a clipped layout that desyncs touch targets after the keyboard). */
-    overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch;
-  }
-  .au-root * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
-  .au-root ::selection { background: var(--yellow); color: var(--ink); }
-
-  /* margin:auto centers when it fits and SCROLLS when it doesn't — the same
-     scroll-safe pattern PopoutItem uses (.po-scroll). justify-content:center
-     would clip the wordmark off the top on short screens. */
-  .au-fit { margin: auto; width: 100%; max-width: 400px;
-    display: flex; flex-direction: column; align-items: center; gap: 28px; }
-
-  /* ── HERO — the header wordmark, one size up, on the dark desk.
-     Identical letterform recipe to .hd-display: white interior, 2px ink stroke,
-     paint-order keeps the stroke behind the fill so Caveat isn't chewed. ── */
-  .au-hero { display: flex; flex-direction: column; align-items: center;
-    gap: 8px; text-align: center; }
-  .au-wordmark { font-family: var(--hand); font-weight: 700; font-size: 54px;
-    line-height: 1; color: #ffffff; -webkit-text-stroke: 2px var(--ink);
-    paint-order: stroke fill; text-shadow: 2.5px 2.5px 0 var(--ink);
-    letter-spacing: .02em; margin: 0; user-select: none; -webkit-user-select: none; }
-  .au-tagline { font-family: var(--mono); font-size: 10px; font-weight: 700;
-    letter-spacing: .24em; text-transform: uppercase; color: var(--ink3); margin: 0; }
-
-  /* ── PANEL — the deck's sheet object: cream, chunky border, ONE big shadow.
-     Byte-for-byte the .pc-sheet recipe (ProfileCard.jsx). ── */
-  .au-panel { width: 100%; background: var(--paper);
-    border: var(--bw) solid var(--ink); border-radius: 22px;
-    box-shadow: 8px 8px 0 var(--ink); padding: 26px 22px; }
-
-  .au-step { display: flex; flex-direction: column; gap: 16px; }
-
-  /* step head — ProfileCard's marker-square + mono label language */
-  .au-shead { display: flex; align-items: center; gap: 10px; }
-  .au-mark { width: 11px; height: 11px; flex-shrink: 0;
-    border: var(--bw) solid var(--ink); border-radius: 3px; background: var(--coral); }
-  .au-mark.yellow { background: var(--yellow); }
-  .au-steplabel { font-family: var(--mono); font-size: 11.5px; font-weight: 700;
-    letter-spacing: .18em; text-transform: uppercase; color: var(--ink); }
-
-  /* Headline — pc-name's marker highlight (ProfileCard.jsx uses the identical
-     linear-gradient). Two details matter here:
-       • clamp() — 28px Archivo Black made "Your campus email." overflow 320px
-         viewports, and a wrapped block-level gradient smears the swatch across
-         the whole block instead of sitting under the last line.
-       • box-decoration-break: clone — so that IF it still wraps at an extreme
-         width (or a user has a min 18px font size), each line box gets its own
-         highlight instead of one stripe across both.
-     width:fit-content is why the highlight hugs the text rather than the panel. */
-  .au-headline { font-family: var(--heavy); font-weight: 400;
-    font-size: clamp(20px, 6.2vw, 28px);
-    line-height: 1.12; letter-spacing: -.01em; color: var(--ink); margin: 0;
-    width: fit-content; max-width: 100%; padding: 0 6px 3px 0;
-    background-image: linear-gradient(180deg, transparent 58%, var(--yellow) 58%);
-    -webkit-box-decoration-break: clone; box-decoration-break: clone; }
-
-  .au-sub { font-family: var(--mono); font-size: 10.5px; font-weight: 700;
-    letter-spacing: .1em; text-transform: uppercase; color: var(--ink2);
-    margin: 0; line-height: 1.8; word-break: break-word; }
-  .au-sub b { color: var(--ink); }
-  /* the sent-to email reads lowercase — uppercase emails look broken */
-  .au-sub b.low { text-transform: lowercase; letter-spacing: .03em; }
-
-  /* ── COLLEGE SEARCH ──
-     Step 1. The search field is deliberately EMPTY on open — nothing is
-     pre-filled and no institution is assumed. It filters on the full official
-     name plus city/state, because a student often knows "Delhi" rather than the
-     full name of the campus. */
-  .au-search { width: 100%; height: 56px; padding: 0 16px; background: var(--card);
-    border: var(--bw) solid var(--ink); border-radius: 14px;
-    box-shadow: 4px 4px 0 var(--ink);
-    font-family: var(--body); font-size: 16px; font-weight: 600; color: var(--ink);
-    outline: none; -webkit-appearance: none; appearance: none;
-    transition: transform .08s steps(2), box-shadow .08s steps(2); }
-  .au-search::placeholder { color: var(--ink3); font-weight: 500; }
-  .au-search:focus { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 var(--ink); }
-
-  /* Results list. Max-height + scroll rather than an unbounded column, so a
-     long list can't push the CTA off-screen on a short viewport. */
-  .au-results { display: flex; flex-direction: column; gap: 8px;
-    max-height: 260px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-  .au-result { display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
-    width: 100%; text-align: left; padding: 12px 14px;
-    background: var(--card); border: var(--bw) solid var(--ink); border-radius: 12px;
-    box-shadow: 3px 3px 0 var(--ink); cursor: pointer;
-    transition: transform .08s steps(2), box-shadow .08s steps(2); }
-  .au-result:active:not(:disabled) { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink); }
-  .au-result-name { font-family: var(--body); font-size: 15px; font-weight: 700;
-    color: var(--ink); line-height: 1.3; }
-  .au-result-meta { font-family: var(--mono); font-size: 10px; font-weight: 700;
-    letter-spacing: .08em; text-transform: uppercase; color: var(--ink3); }
-  .au-result.chosen { background: var(--yellow); }
-  .au-result.chosen .au-result-meta { color: var(--ink2); }
-
-  .au-empty { padding: 14px 4px; font-family: var(--mono); font-size: 11px; font-weight: 700;
-    letter-spacing: .08em; text-transform: uppercase; color: var(--ink2); line-height: 1.7; }
-
-  /* ── EMAIL ──
-     The domain is PRE-FILLED from the college the student picked, and it is
-     EDITABLE — not locked. Locking it would lock out anyone whose real address
-     sits on a department subdomain (cse.iitb.ac.in). The server validates
-     whatever is typed against the selected college's domains using exact-or-
-     subdomain matching, so an editable field is safe here. */
-  .au-form { display: flex; flex-direction: column; gap: 14px; }
-  .au-suffix { font-family: var(--mono); font-size: 14px; font-weight: 700;
-    color: var(--ink2); letter-spacing: .04em; flex-shrink: 0; }
-  .au-input { width: 100%; height: 56px; padding: 0 16px; background: var(--card);
-    border: var(--bw) solid var(--ink); border-radius: 14px;
-    box-shadow: 4px 4px 0 var(--ink);
-    font-family: var(--body); font-size: 16px; font-weight: 600; color: var(--ink);
-    outline: none; -webkit-appearance: none; appearance: none;
-    transition: transform .08s steps(2), box-shadow .08s steps(2); }
-  .au-input::placeholder { color: var(--ink3); font-weight: 500; }
-  .au-input:focus { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 var(--ink); }
-  .au-input:disabled { opacity: .55; }
-  /* Safari autofill paints its own yellow over the card — repaint it with ours */
-  .au-input:-webkit-autofill { -webkit-box-shadow: 0 0 0 60px var(--card) inset;
-    -webkit-text-fill-color: var(--ink); }
-
-  /* ── CTA — the one yellow moment. Slam like every tile in the deck. ── */
-  .au-cta { height: 56px; border: var(--bw) solid var(--ink); border-radius: 14px;
-    background: var(--yellow); color: var(--ink); cursor: pointer;
-    font-family: var(--mono); font-size: 12.5px; font-weight: 700;
-    letter-spacing: .18em; text-transform: uppercase;
-    box-shadow: 5px 5px 0 var(--ink);
-    transition: transform .08s steps(2), box-shadow .08s steps(2),
-      background .08s steps(2), color .08s steps(2); }
-  .au-cta:active:not(:disabled) { transform: translate(5px, 5px);
-    box-shadow: 0 0 0 var(--ink); background: var(--ink); color: var(--yellow); }
-  /* Disabled was paper-on-paper, which made the button vanish into the panel
-     and left only its border. Card keeps a visible surface; ink3 keeps it
-     clearly inactive without pretending to be a live CTA. */
-  .au-cta:disabled { background: var(--card); color: var(--ink3);
-    box-shadow: 3px 3px 0 var(--ink); cursor: default; }
-
-  /* ── GHOST CHIP — quiet secondary (back to email) ── */
-  .au-ghost { align-self: center; padding: 10px 16px;
-    border: var(--bw) solid var(--ink); border-radius: 999px;
-    background: var(--card); color: var(--ink2); cursor: pointer;
-    font-family: var(--mono); font-size: 10px; font-weight: 700;
-    letter-spacing: .14em; text-transform: uppercase;
-    box-shadow: 3px 3px 0 var(--ink);
-    transition: transform .08s steps(2), box-shadow .08s steps(2),
-      background .08s steps(2), color .08s steps(2); }
-  .au-ghost:active:not(:disabled) { transform: translate(3px, 3px);
-    box-shadow: 0 0 0 var(--ink); background: var(--ink); color: var(--paper); }
-  .au-ghost:disabled { opacity: .5; cursor: not-allowed; }
-
-  /* ── OTP — flex-sized so six always fit, from 320px up ── */
-  .au-otp { display: flex; gap: 9px; justify-content: center; }
-  .au-box { flex: 1 1 0; min-width: 0; max-width: 54px; height: 60px;
-    text-align: center; padding: 0; background: var(--card);
-    border: var(--bw) solid var(--ink); border-radius: 12px;
-    box-shadow: 4px 4px 0 var(--ink);
-    font-family: var(--mono); font-size: 24px; font-weight: 700; color: var(--ink);
-    caret-color: var(--coral); outline: none;
-    transition: transform .08s steps(2), box-shadow .08s steps(2),
-      background-color .15s ease, border-color .08s steps(2); }
-  .au-box:focus { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 var(--ink);
-    background: #FFFDF6; }
-  /* Dim only the "checking" disables. Verified boxes stay full-strength green —
-     dimming them would wash out the success moment. */
-  .au-box:disabled:not(.ok) { opacity: .6; }
-  .au-box.err { border-color: var(--red); animation: au-shake .3s steps(2) 2; }
-  .au-box.ok { background: var(--green); border-color: var(--ink);
-    transform: translate(-1px, -3px); box-shadow: 3px 3px 0 var(--ink); }
-  @keyframes au-shake {
-    0%, 100% { transform: translateX(0); }
-    25% { transform: translateX(-4px); }
-    75% { transform: translateX(4px); }
-  }
-
-  /* ── ERROR — the hd-toast object, inlined: card + red spine ── */
-  .au-banner { position: relative; background: var(--card);
-    border: var(--bw) solid var(--ink); border-radius: 14px;
-    box-shadow: 4px 4px 0 var(--ink); padding: 12px 14px 12px 20px; overflow: hidden; }
-  .au-banner::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0;
-    width: 5px; background: var(--red); }
-  .au-banner p { margin: 0; font-family: var(--body); font-size: 13.5px;
-    font-weight: 600; color: var(--ink); line-height: 1.5; }
-
-  /* ── VERIFIED — green strip, the vitals-tile language ── */
-  .au-strip { display: flex; align-items: center; justify-content: center; gap: 10px;
-    padding: 16px; background: var(--green); color: var(--ink);
-    border: var(--bw) solid var(--ink); border-radius: 14px;
-    box-shadow: 4px 4px 0 var(--ink);
-    font-family: var(--mono); font-size: 12px; font-weight: 700;
-    letter-spacing: .12em; text-transform: uppercase; }
-
-  /* universal focus token — yellow ring, same as every other component */
-  .au-input:focus-visible, .au-box:focus-visible, .au-search:focus-visible,
-  .au-result:focus-visible, .au-cta:focus-visible, .au-ghost:focus-visible {
-    outline: 3px solid var(--yellow); outline-offset: 2px; }
-
-  /* request-college form rows */
-  .au-field { display: flex; flex-direction: column; gap: 7px; }
-  .au-field label { font-family: var(--mono); font-size: 10px; font-weight: 700;
-    letter-spacing: .12em; text-transform: uppercase; color: var(--ink2); }
-  .au-field input { width: 100%; height: 50px; padding: 0 14px; background: var(--card);
-    border: var(--bw) solid var(--ink); border-radius: 12px; box-shadow: 3px 3px 0 var(--ink);
-    font-family: var(--body); font-size: 15px; font-weight: 600; color: var(--ink);
-    outline: none; -webkit-appearance: none; appearance: none;
-    transition: transform .08s steps(2), box-shadow .08s steps(2); }
-  .au-field input:focus { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--ink); }
-  .au-field input::-webkit-outer-spin-button,
-  .au-field input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-
-  /* ── RE-VERIFY (annual student check) ── */
-  .au-revnote { font-family: var(--mono); font-size: 10px; font-weight: 700;
-    letter-spacing: .1em; text-transform: uppercase; color: var(--ink2); line-height: 1.8; }
-
-  /* Hover rules sit BEFORE the active rules inside this block, so pressing
-     while hovering still slams — same ordering Header.jsx uses. */
+const ADMIN_CSS = `
+  .adm-slam { transition: transform .08s steps(2), box-shadow .08s steps(2), background .08s steps(2);
+    -webkit-tap-highlight-color: transparent; }
+  .adm-slam:active:not(:disabled) { transform: translate(3px, 3px) !important; box-shadow: 0 0 0 #191919 !important; }
   @media (hover: hover) and (pointer: fine) {
-    .au-cta:hover:not(:disabled) { transform: translate(-1px, -1px);
-      box-shadow: 6px 6px 0 var(--ink); }
-    .au-cta:active:not(:disabled) { transform: translate(5px, 5px);
-      box-shadow: 0 0 0 var(--ink); background: var(--ink); color: var(--yellow); }
-    .au-ghost:hover:not(:disabled) { transform: translate(-1px, -1px);
-      box-shadow: 4px 4px 0 var(--ink); }
-    .au-ghost:active:not(:disabled) { transform: translate(3px, 3px);
-      box-shadow: 0 0 0 var(--ink); background: var(--ink); color: var(--paper); }
+    .adm-slam:hover:not(:active):not(:disabled) { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 #191919; }
   }
+  .adm-slam:disabled { opacity: .4; cursor: not-allowed; transform: none !important; box-shadow: 3px 3px 0 #191919 !important; }
+
+  .adm-card:focus-visible, .adm-slam:focus-visible, .adm-input:focus-visible {
+    outline: 3px solid #FFD43D; outline-offset: 2px; }
+
+  input:focus, textarea:focus, select:focus { box-shadow: 3px 3px 0 #191919; }
+
   @media (prefers-reduced-motion: reduce) {
-    .au-input, .au-cta, .au-ghost, .au-box, .au-search, .au-result, .au-field input { transition: none; }
-    .au-box.err { animation: none; }
+    .adm-slam { transition: none; }
   }
 `;
 
-const Auth = ({ onSuccess, reverifyOnly = false }) => {
-  const reduceMotion = useReducedMotion();
+const label = { fontFamily: T.fontMono, fontSize: 9.5, fontWeight: 700, letterSpacing: '.16em', textTransform: 'uppercase', color: T.ink3 };
 
-  /* ── STEPS: college → email → otp ──
-     The college is chosen BEFORE the email, and the server binds the two: the
-     picked code is stored on the OTP record server-side, so a client can't ask
-     for a code against one college and then verify as another.
-     `reverifyOnly` skips all of that — a returning student's college is already
-     on their account and cannot be changed by this screen. */
-  const [step, setStep] = useState(reverifyOnly ? 'otp' : 'college');
-  const [colleges, setColleges] = useState([]);
-  const [collegeQuery, setCollegeQuery] = useState('');
-  const [college, setCollege] = useState(null);
-  const [email, setEmail] = useState('');
-  const [otp, setOtp] = useState(['', '', '', '', '', '']);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [verified, setVerified] = useState(false);
-  const [requestDone, setRequestDone] = useState(false);
-  const [graduatingYear, setGraduatingYear] = useState('');
-  const inputRefs = useRef([]);
-  const { login, user: authUser } = useAuth();
+const API = '/api/admin';
+const TABS = ['overview', 'reports', 'users', 'colleges', 'analytics', 'settings'];
 
-  /* ── ANNUAL RE-VERIFICATION ──
-     The product claims "Students only", which is only true because we re-check
-     each year. A student returning after the due date sees this instead of the
-     college search. Nudge, not a wall: existing chats and profile stay put,
-     and a failed check never deletes anything. */
-  const reverifyNeeded = Boolean(authUser?.reverifyRequired);
-
-  /* ── College request: "can't find my college" ──
-     Deliberately does NOT grant access. It lands in the admin queue, the
-     operator verifies the domain from the college's official site, adds it, and
-     presses Notify. The student's college email is the only evidence they
-     actually belong there. */
-  const [requestForm, setRequestForm] = useState({
-    collegeName: '', city: '', state: '', country: '', name: '', email: '',
+async function apiFetch(path, opts = {}) {
+  const res = await fetch(`${API}${path}`, {
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
   });
-
-  const submitCollegeRequest = async (e) => {
-    e.preventDefault();
-    if (!requestForm.collegeName.trim() || !requestForm.email.trim()) return;
-    setLoading(true);
-    setError('');
-    try {
-      await api.post('/colleges/request', requestForm);
-      setRequestDone(true);
-      triggerHaptic('success');
-    } catch (err) {
-      setError(err.response?.data?.message || err.message || 'Could not send your request.');
-      triggerHaptic('heavy');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  /* Fetch the college list once. Served from the DB, so a campus added in
-     /admin appears without a client change. Failing this is non-fatal: the
-     picker shows an empty state and the student can still request their
-     college, which is exactly what they would do for a new campus anyway. */
-  /* ── Fetch the college list ──
-     Served from the DB, so a campus added in /admin appears without a client
-     change.
-
-     ⚠️ THIS USED TO BE A ONE-SHOT FETCH WITH A SILENT CATCH, and it produced the
-     exact bug the user reported: open the app while the server was
-     unreachable (a dead backend, a phone dropping wifi, a port conflict) and
-     the request failed, `colleges` became `[]`, and NOTHING ever retried it. The
-     picker then claimed "No college matches" about colleges that were listed
-     and sitting right there in the database — and the only cure was a full
-     browser refresh, which remounted the component and refetched.
-
-     So the load state is tracked explicitly, the failure is shown instead of
-     being disguised as "no results", and it retries itself when the connection
-     comes back rather than waiting for a reload. */
-  const [collegeLoadState, setCollegeLoadState] = useState('loading'); // loading | ready | error
-
-  const loadColleges = useCallback(async () => {
-    setCollegeLoadState((s) => (s === 'ready' ? s : 'loading'));
-    try {
-      const res = await api.get('/colleges');
-      setColleges(res.colleges || []);
-      setCollegeLoadState('ready');
-    } catch {
-      // Deliberately NOT cleared to [] on failure — leaving the previous value
-      // in place means a transient blip doesn't wipe a list that already
-      // loaded. The error state surfaces the problem either way.
-      setCollegeLoadState('error');
-    }
-  }, []);
-
-  useEffect(() => {
-    loadColleges();
-
-    // Retry when the OS reports connectivity is back, and when the tab is
-    // refocused — both are moments a failed mount-time fetch is most likely
-    // to succeed. Cheap: /colleges is a couple of documents, no caching layer.
-    const onOnline = () => loadColleges();
-    const onVisible = () => { if (document.visibilityState === 'visible') loadColleges(); };
-    window.addEventListener('online', onOnline);
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      window.removeEventListener('online', onOnline);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [loadColleges]);
-
-  /* 📍 COLLEGE SEARCH — matches how students actually type, not just how the
-     name is formally written.
-     *
-     * ⚠️ THIS USED TO BE A PLAIN SUBSTRING TEST over name + city + state, and it
-     failed on the single most common way anyone looks for their own college.
-     * "Indian Institute of Technology Bombay" does not contain the letters "IIT"
-     * anywhere, nor "IITB", nor "IIT Bombay" — so typing any of those returned
-     * "No college matches" for a campus that was sitting right there, correctly
-     * spelled, one row away. There is a "request your college" fallback directly
-     * below, so the failure mode was actively harmful: a student searching for
-     * IIT Bombay was walked into requesting a college that already existed.
-     *
-     * Nobody types a college's full legal name. They type the acronym, or the
-     * acronym plus the city, or a fragment. All of those now match:
-     *
-     *   "IIT"      → acronym prefix of IITB
-     *   "IITB"     → exact acronym
-     *   "IIT Bombay" → every word matches something (acronym prefix, then word)
-     *   "Bombay" / "Mumbai" / "Maharashtra" → as before
-     *
-     * A query matches when EVERY word in it is accounted for by SOME word in the
-     * record. Requiring all words rather than any is what keeps "IIT" from
-     * matching every college in the country once the list grows past one entry.
-     *
-     * Still no regex: accent- and punctuation-stripped substring tests only, so
-     * there is nothing here for a search box to be injected into. */
-  const collegeMatches = (college, rawQuery) => {
-    const norm = (s) => String(s || '')
-      .toLowerCase()
-      .normalize('NFD').replace(/[̀-ͯ]/g, '')   // "Mumbai" vs "Mumbái"
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-
-    const words = norm(college.name).split(' ').filter(Boolean);
-    /* Connectives carry no identifying information: "Indian INSTITUTE OF
-       Technology Bombay" must still give IITB, not ITOFTB. */
-    const ACRONYM_STOP = new Set(['of', 'and', 'the', 'for', 'at', 'a', 'an']);
-    const acronym = words
-      .filter((w) => !ACRONYM_STOP.has(w))
-      .map((w) => w[0])
-      .join('');
-
-    /* Words a query can match against: the name, the city, the state, and the
-       acronym as its own token. */
-    const haystack = [
-      ...words,
-      norm(college.city),
-      norm(college.state),
-      norm(college.code),
-      acronym,
-    ].filter(Boolean);
-
-    const terms = rawQuery
-      .split(' ')
-      .map(norm)
-      .filter(Boolean);
-
-    /* An empty query matches NOTHING here, rather than everything.
-       `.every()` on an empty array is `true`, so without this a whitespace-only
-       box would return the whole list. The caller already guards on `.trim()`,
-       but a filter that silently inverts on empty input is a trap for whoever
-       wires it up next. */
-    if (terms.length === 0) return false;
-
-    /* A query made ENTIRELY of connectives is not a search. "of" on its own
-       sits inside "Indian Institute OF Technology", so it would otherwise match
-       every college in the country — while "Indian Institute of Technology"
-       still has to keep working, so stopwords can only be rejected once the
-       whole query consists of them. */
-    if (terms.every((t) => ACRONYM_STOP.has(t))) return false;
-
-    return terms.every((q) => haystack.some((h) => h.includes(q) || q.includes(h)));
-  };
-
-  const filteredColleges = collegeQuery.trim()
-    ? colleges.filter((c) => collegeMatches(c, collegeQuery))
-    : colleges;
-
-  const [suspendedData, setSuspendedData] = useState(() => {
-    try {
-      const data = JSON.parse(localStorage.getItem('matchalize_suspended'));
-      return data?.reason ? data : null;
-    } catch { return null; }
-  });
-
-  useEffect(() => {
-    if (step === 'otp' && inputRefs.current[0]) {
-      setTimeout(() => inputRefs.current[0].focus(), 150);
-    }
-  }, [step]);
-
-  /* Re-verify kickoff: request a fresh code as soon as this screen mounts, so
-     the student lands on the code boxes with the email already sent rather than
-     having to press anything first. */
-  const reverifyKicked = useRef(false);
-  useEffect(() => {
-    if (!reverifyOnly || reverifyKicked.current) return;
-    reverifyKicked.current = true;
-    api.post('/auth/reverify')
-      .catch((err) => {
-        setError(err.response?.data?.message || 'Could not send your verification code.');
-      });
-  }, [reverifyOnly]);
-
-  /* In re-verify mode the student has no college picker, so the endpoint can't
-     read collegeCode from the client. Send the stored one off the user object
-     for the display only — the server resolves the college from the session. */
-  const reverifyCollege = authUser?.college || 'your college';
-
-  // THE PHANTOM HITBOX FIX: Forces mobile browsers to recalculate touch targets when keyboard closes.
-  // Deliberately NOT wired to the OTP boxes — they blur on every digit as focus
-  // advances, so scrollTo(0,0) there yanked the panel around mid-entry. The email
-  // field is the one that closes the keyboard, which is the case this fixes.
-  const handleInputBlur = () => {
-    window.scrollTo(0, 0);
-  };
-
-  const handleSendOtp = async (e) => {
-    e.preventDefault();
-    if (!email.trim() || !college) return;
-    setError('');
-    setLoading(true);
-    triggerHaptic('medium');
-
-    // Force blur to close keyboard and fix hitboxes before making API call
-    if (document.activeElement) {
-      document.activeElement.blur();
-    }
-
-    try {
-      // collegeCode travels with the request so the server can check the email
-      // against THAT college's domains. It's re-checked at verify time from the
-      // stored OTP record, not trusted from here.
-      await api.post('/auth/send-otp', { email: email.trim(), collegeCode: college.code });
-      setStep('otp');
-    } catch (err) {
-      const exactError = err.response?.data?.message || err.response?.data?.error || err.message;
-
-      if (exactError?.includes('Network Error')) {
-        setError('Something went wrong. Check your connection.');
-      } else {
-        setError(exactError || 'Failed to send the code.');
-      }
-      triggerHaptic('heavy');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  /* Re-verify confirm is a separate endpoint from sign-in verify: it re-proves
-   inbox control without touching identity, and on success just renews the date.
-   It must never be fallable-through to the sign-in path — a student past due
-   would otherwise create a second account instead. */
-  const handleReverifyConfirm = useCallback(async (otpValue) => {
-    setLoading(true);
-    setError('');
-    try {
-      await api.post('/auth/reverify/confirm', { otp: otpValue });
-      setVerified(true);
-      triggerHaptic('heavy');
-      setTimeout(() => onSuccess(), 1200);
-    } catch (err) {
-      setError(err.response?.data?.message || 'That code was not right. Try again.');
-      setOtp(['', '', '', '', '', '']);
-      if (inputRefs.current[0]) inputRefs.current[0].focus();
-      triggerHaptic('heavy');
-      setLoading(false);
-    }
-  }, [onSuccess]);
-
-  const handleVerifyOtp = useCallback(async (otpValue) => {
-    if (reverifyOnly) return handleReverifyConfirm(otpValue);
-    setError('');
-    setLoading(true);
-
-    // Force blur to fix hitboxes
-    if (document.activeElement) {
-      document.activeElement.blur();
-    }
-
-    try {
-      const data = await api.post('/auth/verify-otp', { email: email.trim(), otp: otpValue });
-      // Token is set as httpOnly cookie by the server Set-Cookie header
-      // Server confirmed login — user is NOT suspended. Clear any stale suspension flag.
-      localStorage.removeItem('matchalize_suspended');
-      login(data.user);
-
-      /* Graduating year is captured AFTER the account exists, and only when the
-         user typed one. Onboarding is the screen that collects profile content,
-         so a best-effort save here (swallowing failure) is enough — the field is
-         optional and never worth blocking a verified login over. */
-      if (graduatingYear && data.user?._id && !data.user.graduatingYear) {
-        api.put('/users/profile', { graduatingYear: Number(graduatingYear) })
-          .then(() => {
-            const stored = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
-            stored.graduatingYear = Number(graduatingYear);
-            localStorage.setItem('matchalize_user', JSON.stringify(stored));
-          })
-          .catch(() => {});
-      }
-
-      if (socket && socket.disconnected) socket.connect();
-
-      setVerified(true);
-      triggerHaptic('heavy');
-
-      setTimeout(() => {
-        onSuccess();
-      }, 1200);
-
-    } catch (err) {
-      const exactError = err.response?.data?.message || err.response?.data?.error || err.message;
-
-      // If this was a suspension, show the lock screen
-      try {
-        const susData = JSON.parse(localStorage.getItem('matchalize_suspended'));
-        if (susData?.reason) {
-          // Clear loading before handing off — this used to return with loading
-          // stuck true, which left the step dead if the screen ever fell back.
-          setLoading(false);
-          setSuspendedData(susData);
-          return;
-        }
-      } catch {}
-
-      if (exactError?.includes('Network Error')) {
-        setError('Something went wrong. Check your connection.');
-      } else {
-        setError(exactError || 'Invalid code.');
-      }
-
-      setOtp(['', '', '', '', '', '']);
-      if (inputRefs.current[0]) inputRefs.current[0].focus();
-      triggerHaptic('heavy');
-      setLoading(false);
-    }
-  }, [email, onSuccess, login, reverifyOnly, handleReverifyConfirm]);
-
-  const handleOtpChange = (e, index) => {
-    // Presentational only: a fresh keystroke clears the red state so the boxes
-    // don't stay angry while retyping. Delete this line to restore exact old behavior.
-    if (error) setError('');
-
-    const val = e.target.value;
-
-    if (val.length > 1) {
-      const pasted = val.replace(/\D/g, '').slice(0, 6).split('');
-      const newOtp = [...otp];
-      // Fill from current index, not from 0
-      pasted.forEach((char, i) => {
-        if (index + i < 6) newOtp[index + i] = char;
-      });
-      setOtp(newOtp);
-
-      const nextIndex = Math.min(index + pasted.length, 5);
-      inputRefs.current[nextIndex].focus();
-
-      if (newOtp.every(d => d !== '')) {
-        handleVerifyOtp(newOtp.join(''));
-      }
-      return;
-    }
-
-    if (isNaN(val)) return;
-
-    const newOtp = [...otp.map((v, i) => (i === index ? val : v))];
-    setOtp(newOtp);
-    triggerHaptic('light');
-
-    if (val && index < 5) {
-      inputRefs.current[index + 1].focus();
-    }
-
-    if (index === 5 && val) {
-      handleVerifyOtp(newOtp.join(''));
-    }
-  };
-
-  const handleOtpKeyDown = (e, index) => {
-    if (e.key === 'Backspace' && !otp[index] && index > 0) {
-      inputRefs.current[index - 1].focus();
-    }
-  };
-
-  if (suspendedData) {
-    /* The "unlock" action rides in bottomSlot instead of position:fixed over
-       the screen. Fixed meant it floated on top of content that centred itself
-       with justify-content:center, so on short viewports the two overlapped. */
-    return (
-      <AccountSuspendedScreen
-        reason={suspendedData.reason}
-        suspendedAt={suspendedData.suspendedAt}
-        bottomSlot={
-          <button
-            type="button"
-            onClick={() => {
-              localStorage.removeItem('matchalize_suspended');
-              setSuspendedData(null);
-            }}
-          >
-            Suspension lifted? Try logging in again
-          </button>
-        }
-      />
-    );
+  if (res.status === 401 || res.status === 403) {
+    window.location.href = '/';
+    throw new Error('Unauthorized');
   }
 
-/* ── RE-VERIFY SCREEN ──
-     Shown instead of the college/email flow for a returning student whose annual
-     check is due. Copy says what happened and why it matters, without alarming
-     them — a failed check never deletes anything, and their profile and chats
-     are untouched. */
-  if (reverifyOnly) {
+  const text = await res.text();
+  let payload = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = null;
+    }
+  }
+
+  if (!res.ok) {
+    const msg = payload?.message || text || 'Request failed';
+    throw new Error(msg);
+  }
+
+  return payload ?? {};
+}
+
+function Card({ children, style = {}, ...props }) {
+  return (
+    <div style={{
+      backgroundColor: T.card,
+      border: `2px solid ${T.ink}`,
+      borderRadius: 16,
+      boxShadow: `5px 5px 0 ${T.ink}`,
+      ...style,
+    }} {...props}>
+      {children}
+    </div>
+  );
+}
+
+function Badge({ children, color = T.ink3, style = {} }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      fontSize: 9, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase',
+      padding: '3px 9px', borderRadius: 999,
+      color: color === T.yellow || color === T.green || color === T.coral ? T.ink : color,
+      border: `1.5px solid ${color}`,
+      backgroundColor: color === T.ink3 ? T.hair : 'transparent',
+      fontFamily: T.fontMono,
+      ...style,
+    }}>{children}</span>
+  );
+}
+
+function Skeleton({ style = {} }) {
+  return <div style={{ backgroundColor: T.hair, borderRadius: 6, ...style }} />;
+}
+
+function PageHeader({ title, subtitle }) {
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <h2 style={{
+        fontFamily: T.fontHeavy, fontSize: 22, fontWeight: 400, color: T.ink, margin: 0,
+        letterSpacing: '-.01em', textTransform: 'uppercase',
+        textShadow: `2px 2px 0 ${T.yellow}, 4px 4px 0 ${T.ink}`,
+      }}>{title}</h2>
+      {subtitle && <p style={{ ...label, marginTop: 8, color: T.ink2 }}>{subtitle}</p>}
+    </div>
+  );
+}
+
+const pillBtn = (variant = 'quiet') => ({
+  background: variant === 'danger' ? T.red : variant === 'active' ? T.yellow : T.card,
+  border: `2px solid ${T.ink}`,
+  borderRadius: 11,
+  boxShadow: `3px 3px 0 ${T.ink}`,
+  padding: '8px 15px',
+  cursor: 'pointer',
+  fontSize: 10.5,
+  fontWeight: 700,
+  letterSpacing: '.08em',
+  textTransform: 'uppercase',
+  color: variant === 'danger' ? '#fff' : variant === 'active' ? T.ink : T.ink2,
+  fontFamily: T.fontMono,
+  transition: 'transform .08s steps(2), box-shadow .08s steps(2)',
+});
+
+function Pagination({ page, totalPages, onPage }) {
+  if (!totalPages || totalPages <= 1) return null;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginTop: 24 }}>
+      <button className="adm-slam" onClick={() => onPage(page - 1)} disabled={page <= 1}
+        style={{ ...pillBtn(), width: 38, height: 38, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: page <= 1 ? 'not-allowed' : 'pointer', opacity: page <= 1 ? 0.4 : 1 }}>
+        <ChevronLeft size={16} strokeWidth={2.6} />
+      </button>
+      <span style={{ fontFamily: T.fontMono, fontSize: 12, fontWeight: 700, color: T.ink2, fontVariantNumeric: 'tabular-nums' }}>{page} / {totalPages}</span>
+      <button className="adm-slam" onClick={() => onPage(page + 1)} disabled={page >= totalPages}
+        style={{ ...pillBtn(), width: 38, height: 38, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: page >= totalPages ? 'not-allowed' : 'pointer', opacity: page >= totalPages ? 0.4 : 1 }}>
+        <ChevronRight size={16} strokeWidth={2.6} />
+      </button>
+    </div>
+  );
+}
+
+function StatusBadge({ status }) {
+  const colors = {
+    pending: T.yellow,
+    reviewed: T.ink,
+    actioned: T.red,
+    dismissed: T.ink3,
+  };
+  const c = colors[status] || colors.pending;
+  return (
+    <span style={{
+      fontFamily: T.fontMono,
+      fontSize: 9, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase',
+      padding: '3px 10px', borderRadius: 999,
+      border: `1.5px solid ${c}`,
+      color: c,
+      backgroundColor: c === T.yellow ? t.paper : 'transparent',
+    }}>{status}</span>
+  );
+}
+
+/* ─── OVERVIEW TAB ─── */
+function OverviewTab() {
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const loadStats = async () => {
+    try {
+      const data = await apiFetch('/stats');
+      setStats(data);
+    } catch (e) {
+      console.error('Failed to load stats:', e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadStats(); }, []);
+
+  const cards = stats ? [
+    { label: 'Total Users', value: stats.totalUsers, icon: <Users size={18} strokeWidth={2.4} />, bg: T.coral, dark: false },
+    { label: 'New Today', value: stats.newToday, icon: <Users size={18} strokeWidth={2.4} />, bg: T.yellow, dark: false },
+    { label: 'Active (7d)', value: stats.active7d, icon: <LayoutDashboard size={18} strokeWidth={2.4} />, bg: T.green, dark: false },
+    { label: 'Active (30d)', value: stats.active30d, icon: <Clock size={18} strokeWidth={2.4} />, bg: T.card, dark: true },
+    { label: 'Pending Reports', value: stats.pendingReports, icon: <AlertTriangle size={18} strokeWidth={2.4} />, bg: T.red, dark: true },
+    { label: 'Active Bans', value: stats.activeBans, icon: <Ban size={18} strokeWidth={2.4} />, bg: T.ink, dark: false },
+    { label: 'Shadowbans', value: stats.activeShadowbans, icon: <EyeOff size={18} strokeWidth={2.4} />, bg: T.hair, dark: false },
+  ] : [];
+
+  if (loading) {
     return (
-      <div className="au-root">
-        <style>{AUTH_CSS}</style>
-        <div className="au-fit">
-          <motion.header
-            className="au-hero"
-            initial={reduceMotion ? false : { opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-          >
-            <h1 className="au-wordmark">matchalize</h1>
-            <p className="au-tagline">Your Campus. Your Story.</p>
-          </motion.header>
-
-          <motion.div
-            className="au-panel"
-            initial={reduceMotion ? false : { opacity: 0, y: 24 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-          >
-            <div className="au-step">
-              <div className="au-shead">
-                <span className="au-mark yellow" aria-hidden="true" />
-                <span className="au-steplabel">Quick check</span>
-              </div>
-              <h2 className="au-headline">Confirm you're still a student.</h2>
-              <p className="au-sub">
-                We check each year that your <b>{reverifyCollege}</b> email still works.
-                That's how we keep Matchalize <b>students only</b>.
-              </p>
-
-              {errorBanner}
-
-              <div className="au-otp" role="group" aria-label="6-digit verification code">
-                {otp.map((digit, index) => (
-                  <input
-                    key={index}
-                    className={`au-box stamp-box${error ? ' err' : ''}${verified ? ' ok' : ''}`}
-                    type="text"
-                    inputMode="numeric"
-                    autoComplete={index === 0 ? 'one-time-code' : 'off'}
-                    maxLength={6}
-                    value={digit}
-                    ref={(el) => { inputRefs.current[index] = el; }}
-                    onChange={(e) => handleOtpChange(e, index)}
-                    onKeyDown={(e) => handleOtpKeyDown(e, index)}
-                    disabled={verified || loading}
-                    aria-label={`Digit ${index + 1}`}
-                  />
-                ))}
-              </div>
-
-              {verified ? (
-                <motion.div
-                  className="au-strip"
-                  initial={reduceMotion ? false : { opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-                >
-                  <CheckCircle2 size={16} strokeWidth={2.6} /> All set
-                </motion.div>
-              ) : (
-                <button
-                  className="au-ghost"
-                  type="button"
-                  disabled={loading}
-                  onClick={() => {
-                    triggerHaptic('light');
-                    setError('');
-                    api.post('/auth/reverify').catch(() => setError('Could not resend. Try again shortly.'));
-                  }}
-                >
-                  Resend code
-                </button>
-              )}
-
-              <p className="au-revnote">
-                Your profile and chats are safe. This just keeps the app students only.
-              </p>
-            </div>
-          </motion.div>
-        </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
+        {Array.from({ length: 7 }).map((_, i) => (
+          <Card key={i} style={{ padding: 20 }}>
+            <Skeleton style={{ height: 10, width: 100, marginBottom: 14 }} />
+            <Skeleton style={{ height: 30, width: 80 }} />
+          </Card>
+        ))}
       </div>
     );
   }
 
-  /* Step swap — AppShell's tab transition (x ±16 + fade, 0.2s).
-      Banner wrapper animates height so the layout never jumps. */
-  const swapProps = {
-    initial: reduceMotion ? false : { opacity: 0, x: 16 },
-    animate: { opacity: 1, x: 0 },
-    exit: reduceMotion ? { opacity: 0 } : { opacity: 0, x: -16 },
-    transition: { duration: 0.2, ease: [0.2, 0.8, 0.2, 1] },
-  };
-
-  const errorBanner = (
-    <AnimatePresence>
-      {error && (
-        <motion.div
-          key="au-banner"
-          role="alert"
-          initial={reduceMotion ? false : { opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0 }}
-          transition={{ duration: 0.2, ease: 'easeOut' }}
-          style={{ overflow: 'hidden' }}
-        >
-          <div className="au-banner"><p>{error}</p></div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
+  if (!stats) {
+    return <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ fontFamily: T.fontBody, fontSize: 13.5, fontWeight: 500, color: T.ink2, margin: 0 }}>Failed to load stats. Check your connection and admin access.</p></Card>;
+  }
 
   return (
-    <div className="au-root">
-      <style>{AUTH_CSS}</style>
-
-      <div className="au-fit">
-        {/* HERO — the header's wordmark treatment, one size up */}
-        <motion.header
-          className="au-hero"
-          initial={reduceMotion ? false : { opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-        >
-          <h1 className="au-wordmark">matchalize</h1>
-          <p className="au-tagline">Your campus. Your story.</p>
-        </motion.header>
-
-        {/* PANEL — the deck's sheet object */}
-        <motion.div
-          className="au-panel"
-          initial={reduceMotion ? false : { opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-        >
-          <AnimatePresence mode="wait" initial={false}>
-            {step === 'college' ? (
-              /* ── STEP 1 — YOUR COLLEGE ──
-                 Full official name is what's stored, so a typed official name
-                 matches. City/state are searched too, because plenty of students
-                 know their city and not their campus name. Nothing is
-                 pre-filled: no institution is assumed. */
-              <motion.section key="college" className="au-step" {...swapProps}>
-                <div className="au-shead">
-                  <span className="au-mark" aria-hidden="true" />
-                  <span className="au-steplabel">Step 1 — Your college</span>
-                </div>
-                <h2 className="au-headline">Enter your college.</h2>
-                <p className="au-sub">Matchalize is <b>students only</b>.</p>
-
-                {errorBanner}
-
-                <div style={{ position: 'relative' }}>
-                  <Search
-                    size={17}
-                    strokeWidth={2.6}
-                    aria-hidden="true"
-                    style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: T.ink3, pointerEvents: 'none' }}
-                  />
-                  <input
-                    className="au-search"
-                    type="text"
-                    inputMode="text"
-                    autoComplete="off"
-                    autoCapitalize="words"
-                    autoCorrect="off"
-                    spellCheck="false"
-                    placeholder="Indian Institute of Technology Bombay"
-                    value={collegeQuery}
-                    onChange={(e) => setCollegeQuery(e.target.value)}
-                    aria-label="Search your college"
-                    style={{ paddingLeft: 40 }}
-                  />
-                </div>
-
-                {collegeLoadState === 'error' && colleges.length === 0 && (
-                  /* Distinguished from "no matches" on purpose — the earlier
-                     silent catch made a network failure look like a student
-                     typing the wrong college, which sent them down the
-                     "request this college" path for a campus already listed. */
-                  <div className="au-results">
-                    <p className="au-empty">
-                      Couldn&rsquo;t load the college list. Check your connection.
-                    </p>
-                    <button className="au-cta" type="button" onClick={loadColleges}>
-                      Try again
-                    </button>
-                  </div>
-                )}
-
-                {collegeQuery.trim() && collegeLoadState !== 'error' && (
-                  <div className="au-results">
-                    {filteredColleges.length === 0 ? (
-                      <>
-                        <p className="au-empty">
-                          No college matches &ldquo;{collegeQuery.trim()}&rdquo;.
-                        </p>
-                        {requestDone ? (
-                          <div className="au-strip">
-                            <CheckCircle2 size={16} strokeWidth={2.6} /> Request received
-                          </div>
-                        ) : (
-                          <button
-                            className="au-cta"
-                            type="button"
-                            onClick={() => {
-                              setRequestForm((f) => ({ ...f, collegeName: collegeQuery.trim(), email }));
-                              triggerHaptic('light');
-                              setStep('request');
-                            }}
-                          >
-                            Request this college
-                          </button>
-                        )}
-                      </>
-                    ) : (
-                      filteredColleges.map((c) => (
-                        <button
-                          key={c.code}
-                          type="button"
-                          className="au-result"
-                          onClick={() => {
-                            setCollege(c);
-                            setCollegeQuery(c.name);
-                            setError('');
-                            triggerHaptic('light');
-                            setTimeout(() => setStep('email'), 120);
-                          }}
-                        >
-                          <span className="au-result-name">{c.name}</span>
-                          {(c.city || c.state) && (
-                            <span className="au-result-meta">
-                              {[c.city, c.state].filter(Boolean).join(', ')}
-                            </span>
-                          )}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-
-                {!collegeQuery.trim() && collegeLoadState === 'loading' && colleges.length === 0 && (
-                  <p className="au-empty">Loading colleges&hellip;</p>
-                )}
-
-                {!collegeQuery.trim() && collegeLoadState === 'ready' && colleges.length > 0 && (
-                  <p className="au-empty">
-                    {colleges.length === 1
-                      ? 'Start typing to find it.'
-                      : `${colleges.length} campuses listed — start typing.`}
-                  </p>
-                )}
-
-                {!collegeQuery.trim() && collegeLoadState === 'ready' && colleges.length === 0 && (
-                  <p className="au-empty">
-                    No campuses listed yet. Type yours below to request one.
-                  </p>
-                )}
-              </motion.section>
-            ) : step === 'request' ? (
-              /* ── REQUEST A COLLEGE ──
-                 Does not grant access. It reaches the operator, who verifies the
-                 domain from the college's official site and adds it. The student's
-                 college email is the only evidence they belong there — so it's
-                 required, and a public address like gmail is rejected. */
-              <motion.section key="request" className="au-step" {...swapProps}>
-                <div className="au-shead">
-                  <span className="au-mark yellow" aria-hidden="true" />
-                  <span className="au-steplabel">Request a college</span>
-                </div>
-                <h2 className="au-headline">Tell us your campus.</h2>
-                <p className="au-sub">
-                  We add campuses ourselves so only real students get in. You&rsquo;ll hear back once yours is live.
-                </p>
-
-                {requestDone ? (
-                  <div className="au-strip">
-                    <CheckCircle2 size={16} strokeWidth={2.6} /> Request received
-                  </div>
-                ) : (
-                  <form className="au-form" onSubmit={submitCollegeRequest}>
-                    {errorBanner}
-                    <div className="au-field">
-                      <label htmlFor="rq-name">Full college name</label>
-                      <input id="rq-name" value={requestForm.collegeName} onChange={(e) => setRequestForm((f) => ({ ...f, collegeName: e.target.value }))} placeholder="Indian Institute of Technology Delhi" required />
-                    </div>
-                    <div className="au-field">
-                      <label htmlFor="rq-email">Your college email</label>
-                      <input id="rq-email" type="email" inputMode="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck="false" value={requestForm.email} onChange={(e) => setRequestForm((f) => ({ ...f, email: e.target.value }))} placeholder="you@college.ac.in" required />
-                    </div>
-                    <div className="au-field">
-                      <label htmlFor="rq-yourname">Your name (optional)</label>
-                      <input id="rq-yourname" value={requestForm.name} onChange={(e) => setRequestForm((f) => ({ ...f, name: e.target.value }))} placeholder="Anaya" />
-                    </div>
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <div className="au-field" style={{ flex: 1 }}>
-                        <label htmlFor="rq-city">City</label>
-                        <input id="rq-city" value={requestForm.city} onChange={(e) => setRequestForm((f) => ({ ...f, city: e.target.value }))} placeholder="Delhi" />
-                      </div>
-                      <div className="au-field" style={{ flex: 1 }}>
-                        <label htmlFor="rq-state">State</label>
-                        <input id="rq-state" value={requestForm.state} onChange={(e) => setRequestForm((f) => ({ ...f, state: e.target.value }))} placeholder="Delhi" />
-                      </div>
-                    </div>
-                    <button className="au-cta" type="submit" disabled={loading || !requestForm.collegeName.trim() || !requestForm.email.trim()}>
-                      {loading ? 'Sending…' : 'Send request'}
-                    </button>
-                    <button className="au-ghost" type="button" onClick={() => { setStep('college'); setError(''); }}>
-                      Back
-                    </button>
-                  </form>
-                )}
-              </motion.section>
-            ) : step === 'email' ? (
-              /* ── STEP 2 — YOUR COLLEGE EMAIL ──
-                 The domain is pre-filled from the picked college but stays
-                 EDITABLE, because a student's real address is often on a
-                 department subdomain (cse.iitb.ac.in) that isn't the one we
-                 registered. The server validates whatever is typed against the
-                 selected college using exact-or-subdomain matching, so an open
-                 field is safe — and a locked one would lock people out. */
-              <motion.section key="email" className="au-step" {...swapProps}>
-                <div className="au-shead">
-                  <span className="au-mark" aria-hidden="true" />
-                  <span className="au-steplabel">Step 2 — Your email</span>
-                </div>
-                <h2 className="au-headline">Your college email.</h2>
-                <p className="au-sub">
-                  <b>{college?.name}</b> students use an <b>@{college?.domains?.[0]}</b> address.
-                </p>
-
-                <form className="au-form" onSubmit={handleSendOtp}>
-                  {errorBanner}
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <input
-                      className="au-input"
-                      type="text"
-                      inputMode="email"
-                      autoComplete="email"
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck="false"
-                      placeholder="you@iitb.ac.in"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      onBlur={handleInputBlur}
-                      disabled={loading}
-                      aria-label="College email address"
-                      required
-                      style={{ flex: '1 1 200px' }}
-                    />
-                  </div>
-
-                  <button className="au-cta" type="submit" disabled={loading || !email.trim()}>
-                    {loading ? 'Sending…' : 'Send my code'}
-                  </button>
-
-                  <button className="au-ghost" type="button" onClick={() => { setStep('college'); setError(''); }}>
-                    Change college
-                  </button>
-                </form>
-              </motion.section>
-            ) : (
-              /* ── STEP 2 — THE CODE ── */
-              <motion.section key="otp" className="au-step" {...swapProps}>
-                <div className="au-shead">
-                  <span className="au-mark yellow" aria-hidden="true" />
-                  <span className="au-steplabel">Step 2 — The code</span>
-                </div>
-                <h2 className="au-headline">Enter the code.</h2>
-                <p className="au-sub">Sent to <b className="low">{email.trim()}</b></p>
-
-                {errorBanner}
-
-                <div className="au-otp" role="group" aria-label="6-digit verification code">
-                  {otp.map((digit, index) => (
-                    <input
-                      key={index}
-                      /* stamp-box: the QA harness (server/tests/qa/browser.mjs)
-                         drives login through input.stamp-box — keep this class
-                         or every login-dependent scene stalls 15s in startAuth. */
-                      className={`au-box stamp-box${error ? ' err' : ''}${verified ? ' ok' : ''}`}
-                      type="text"
-                      inputMode="numeric"
-                      autoComplete={index === 0 ? 'one-time-code' : 'off'}
-                      maxLength={6}
-                      value={digit}
-                      ref={(el) => { inputRefs.current[index] = el; }}
-                      onChange={(e) => handleOtpChange(e, index)}
-                      onKeyDown={(e) => handleOtpKeyDown(e, index)}
-                      disabled={verified || loading}
-                      aria-label={`Digit ${index + 1}`}
-                    />
-                  ))}
-                </div>
-
-                {verified ? (
-                  /* The 1.2s window before onSuccess() — the boxes above turn
-                     green and this strip stamps in. Watching your own code get
-                     accepted beats a panel swap. */
-                  <motion.div
-                    className="au-strip"
-                    initial={reduceMotion ? false : { opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-                  >
-                    <CheckCircle2 size={16} strokeWidth={2.6} /> Access granted
-                  </motion.div>
-                ) : (
-                  <button
-                    className="au-ghost"
-                    type="button"
-                    disabled={loading}
-                    onClick={() => { triggerHaptic('light'); setStep('email'); setError(''); setOtp(['', '', '', '', '', '']); }}
-                  >
-                    Wrong email? Go back
-                  </button>
-                )}
-
-                {/* Graduating year: NOT proof of enrolment (anyone can type a
-                    future year) but it's the honest signal that drives the
-                    annual re-check date, and "Graduating 2027" is a real dating
-                    signal. Optional so a student who genuinely doesn't know it
-                    isn't blocked at the door. */}
-                <div className="au-field" style={{ marginTop: 4 }}>
-                  <label htmlFor="grad-year">Graduating year (optional)</label>
-                  <input
-                    id="grad-year"
-                    type="number"
-                    inputMode="numeric"
-                    min={new Date().getFullYear()}
-                    max={new Date().getFullYear() + 10}
-                    value={graduatingYear}
-                    onChange={(e) => {
-                      const v = e.target.value.replace(/\D/g, '').slice(0, 4);
-                      setGraduatingYear(v);
-                    }}
-                    onBlur={handleInputBlur}
-                    placeholder={String(new Date().getFullYear() + 3)}
-                    disabled={loading}
-                  />
-                </div>
-              </motion.section>
-            )}
-          </AnimatePresence>
-        </motion.div>
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <PageHeader title="Overview" subtitle="Platform health at a glance" />
+        <button onClick={loadStats} className="adm-slam" style={{ ...pillBtn(), display: 'flex', alignItems: 'center', gap: 6 }}>
+          <RefreshCw size={13} strokeWidth={2.6} /> Refresh
+        </button>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
+        {cards.map((c, i) => (
+          <motion.div key={c.label} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}>
+            <Card style={{ padding: 20 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                <span style={label}>{c.label}</span>
+                <div style={{
+                  width: 34, height: 34, borderRadius: 10,
+                  border: `2px solid ${T.ink}`,
+                  backgroundColor: c.bg,
+                  color: c.dark ? '#fff' : T.ink,
+                  boxShadow: `2.5px 2.5px 0 ${T.ink}`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>{c.icon}</div>
+              </div>
+              <p style={{ fontFamily: T.fontHeavy, fontSize: 27, fontWeight: 400, color: T.ink, margin: 0, letterSpacing: '-.01em', fontVariantNumeric: 'tabular-nums' }}>
+                {(c.value ?? 0).toLocaleString()}
+              </p>
+            </Card>
+          </motion.div>
+        ))}
       </div>
     </div>
   );
-};
+}
 
-export default Auth;
+/* ─── REPORTS TAB ─── */
+function ReportsTab() {
+  const [reports, setReports] = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
+  const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const [detailReport, setDetailReport] = useState(null);
+
+  const load = async (page = 1) => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ page, perPage: 15 });
+      if (statusFilter !== 'all') params.set('status', statusFilter);
+      if (search) params.set('search', search);
+      const json = await apiFetch(`/reports?${params}`);
+      setReports(json.data || []);
+      setPagination(json.pagination);
+    } catch (e) {
+      console.error('Failed to load reports:', e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, [statusFilter]);
+
+  const updateReport = async (id, body) => {
+    try {
+      await apiFetch(`/reports/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+      load(pagination.page);
+      setDetailReport(null);
+    } catch (e) {
+      alert('Failed to update report: ' + e.message);
+    }
+  };
+
+  return (
+    <div>
+      <PageHeader title="Reports" subtitle={`${pagination.total} total reports`} />
+      <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
+          <Search size={15} strokeWidth={2.4} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', color: T.ink3 }} />
+          <input
+            placeholder="Search by name or email..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && load(1)}
+            style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px 11px 38px', borderRadius: 11, border: `2px solid ${T.ink}`, backgroundColor: T.card, fontSize: 13.5, fontWeight: 500, color: T.ink, outline: 'none', fontFamily: T.fontBody }}
+          />
+        </div>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+          style={{ padding: '10px 16px', borderRadius: 11, border: `2px solid ${T.ink}`, backgroundColor: T.card, fontSize: 12, fontWeight: 700, color: T.ink, cursor: 'pointer', fontFamily: T.fontMono, textTransform: 'uppercase', letterSpacing: '.06em' }}>
+          <option value="all">All Status</option>
+          <option value="pending">Pending</option>
+          <option value="reviewed">Reviewed</option>
+          <option value="actioned">Actioned</option>
+          <option value="dismissed">Dismissed</option>
+        </select>
+      </div>
+
+      {loading ? (
+        <div style={{ display: 'grid', gap: 12 }}>
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Card key={i} style={{ padding: 16 }}>
+              <Skeleton style={{ height: 14, width: '60%', marginBottom: 10 }} />
+              <Skeleton style={{ height: 12, width: '40%' }} />
+            </Card>
+          ))}
+        </div>
+      ) : reports.length === 0 ? (
+        <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ fontFamily: T.fontBody, fontSize: 13.5, fontWeight: 500, color: T.ink2, margin: 0 }}>No reports found</p></Card>
+      ) : (
+        <div style={{ display: 'grid', gap: 12 }}>
+          {reports.map(r => (
+            <Card key={r._id} style={{ padding: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center', flex: 1, minWidth: 0 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 12, backgroundColor: T.hair, border: `2px solid ${T.ink}`, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
+                    {r.reported.photo ? <img src={r.reported.photo} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" /> : <Users size={16} strokeWidth={2.4} style={{ color: T.ink3 }} />}
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 700, fontSize: 14, color: T.ink }}>{r.reported.name}</span>
+                      <StatusBadge status={r.status} />
+                      <Badge color={T.ink}>{r.reportCount} reports</Badge>
+                    </div>
+                    <p style={{ fontSize: 12.5, fontWeight: 500, color: T.ink2, margin: '4px 0 0' }}>{r.reason} — by {r.reporter.name}</p>
+                    <p style={{ fontFamily: T.fontMono, fontSize: 10, fontWeight: 700, color: T.ink3, margin: '3px 0 0', fontVariantNumeric: 'tabular-nums' }}>{new Date(r.createdAt).toLocaleDateString()}</p>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  <button className="adm-slam" onClick={() => setDetailReport(r)} style={pillBtn()}>View</button>
+                  {r.status === 'pending' && <>
+                    <button className="adm-slam" onClick={() => updateReport(r._id, { status: 'dismissed' })} style={pillBtn()}>Dismiss</button>
+                    <button className="adm-slam" onClick={() => updateReport(r._id, { status: 'actioned' })} style={pillBtn('danger')}>Action</button>
+                  </>}
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+      <Pagination page={pagination.page} totalPages={pagination.totalPages} onPage={p => load(p)} />
+
+      <AnimatePresence>
+        {detailReport && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 }}
+            onClick={() => setDetailReport(null)}
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(12,12,14,0.62)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+            <motion.div initial={{ scale: 0.94, opacity: 0, y: 16 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.95, opacity: 0, y: 16 }} transition={{ type: 'spring', damping: 26, stiffness: 300 }}
+              onClick={e => e.stopPropagation()}
+              style={{ background: T.paper, borderRadius: 20, border: `2px solid ${T.ink}`, boxShadow: `8px 8px 0 ${T.ink}`, maxWidth: 500, width: '100%', maxHeight: '80vh', overflowY: 'auto', padding: 24, boxSizing: 'border-box' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <h3 style={{ fontFamily: T.fontHeavy, fontSize: 18, fontWeight: 400, color: T.ink, margin: 0, letterSpacing: '-.01em', textTransform: 'uppercase' }}>Report Detail</h3>
+                <button className="adm-slam" onClick={() => setDetailReport(null)} aria-label="Close" style={{ backgroundColor: T.card, border: `2px solid ${T.ink}`, borderRadius: 11, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: T.ink, boxShadow: `3px 3px 0 ${T.ink}`, flexShrink: 0 }}><X size={16} strokeWidth={2.8} /></button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+                <div style={{ backgroundColor: T.paper, borderRadius: 11, border: `2px solid ${T.ink}`, padding: 12 }}>
+                  <p style={label}>Reporter</p>
+                  <p style={{ fontWeight: 700, fontSize: 14, color: T.ink, margin: '6px 0 0' }}>{detailReport.reporter.name}</p>
+                  <p style={{ fontFamily: T.fontMono, fontSize: 10.5, color: T.ink3, margin: '3px 0 0', wordBreak: 'break-word' }}>{detailReport.reporter.email}</p>
+                </div>
+                <div style={{ backgroundColor: T.paper, borderRadius: 11, border: `2px solid ${T.ink}`, padding: 12 }}>
+                  <p style={label}>Reported</p>
+                  <p style={{ fontWeight: 700, fontSize: 14, color: T.ink, margin: '6px 0 0' }}>{detailReport.reported.name}</p>
+                  <p style={{ fontFamily: T.fontMono, fontSize: 10.5, color: T.ink3, margin: '3px 0 0', wordBreak: 'break-word' }}>{detailReport.reported.email}</p>
+                </div>
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <p style={{ ...label, marginBottom: 8 }}>Reason</p>
+                <Badge color={T.ink}>{detailReport.reason}</Badge>
+              </div>
+              {detailReport.details && (
+                <div style={{ marginBottom: 16 }}>
+                  <p style={{ ...label, marginBottom: 8 }}>Details</p>
+                  <p style={{ fontFamily: T.fontBody, fontSize: 13, fontWeight: 500, color: T.ink, backgroundColor: T.paper, padding: 12, borderRadius: 11, border: `2px solid ${T.ink}`, lineHeight: 1.6, margin: 0, wordBreak: 'break-word' }}>{detailReport.details}</p>
+                </div>
+              )}
+              <div style={{ marginBottom: 20 }}>
+                <p style={{ ...label, marginBottom: 8 }}>Total Reports Against This User</p>
+                <p style={{ fontFamily: T.fontHeavy, fontSize: 26, fontWeight: 400, color: T.red, margin: 0, fontVariantNumeric: 'tabular-nums' }}>{detailReport.reportCount}</p>
+              </div>
+              {detailReport.status === 'pending' && (
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  <button className="adm-slam" onClick={() => updateReport(detailReport._id, { status: 'dismissed' })} style={{ ...pillBtn(), flex: 1 }}>Dismiss</button>
+                  <button className="adm-slam" onClick={() => updateReport(detailReport._id, { status: 'actioned' })} style={{ ...pillBtn('danger'), flex: 1 }}>Action</button>
+                </div>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/* ─── USERS TAB ─── */
+function UsersTab() {
+  const [users, setUsers] = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
+  const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const [detailUser, setDetailUser] = useState(null);
+
+  const load = async (page = 1) => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ page, perPage: 15 });
+      if (statusFilter !== 'all') params.set('status', statusFilter);
+      if (search) params.set('search', search);
+      const json = await apiFetch(`/users?${params}`);
+      setUsers(json.data || []);
+      setPagination(json.pagination);
+    } catch (e) {
+      console.error('Failed to load users:', e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, [statusFilter]);
+
+  const updateUser = async (id, body) => {
+    try {
+      await apiFetch(`/users/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+      load(pagination.page);
+      setDetailUser(null);
+    } catch (e) {
+      alert('Failed to update user: ' + e.message);
+    }
+  };
+
+  const userStatus = (u) => {
+    if (u.suspended) return 'Suspended';
+    if (u.shadowbannedAt) return 'Shadowbanned';
+    return 'Active';
+  };
+
+  const statusColor = (s) => {
+    if (s === 'Suspended') return T.red;
+    if (s === 'Shadowbanned') return T.coral;
+    return T.green;
+  };
+
+  return (
+    <div>
+      <PageHeader title="Users" subtitle={`${pagination.total} total users`} />
+      <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
+          <Search size={15} strokeWidth={2.4} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', color: T.ink3 }} />
+          <input placeholder="Search by name or email..." value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && load(1)}
+            style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px 11px 38px', borderRadius: 11, border: `2px solid ${T.ink}`, backgroundColor: T.card, fontSize: 13.5, fontWeight: 500, color: T.ink, outline: 'none', fontFamily: T.fontBody }} />
+        </div>
+        {['all', 'active', 'shadowbanned', 'suspended'].map(s => (
+          <button key={s} className="adm-slam" onClick={() => setStatusFilter(s)}
+            style={{ ...pillBtn(statusFilter === s ? 'active' : 'quiet'), textTransform: 'capitalize', letterSpacing: '.04em', fontFamily: T.fontBody, fontSize: 12, fontWeight: 600 }}>
+            {s}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div style={{ display: 'grid', gap: 12 }}>{Array.from({ length: 5 }).map((_, i) => <Card key={i} style={{ padding: 16 }}><Skeleton style={{ height: 14, width: '50%', marginBottom: 10 }} /><Skeleton style={{ height: 12, width: '30%' }} /></Card>)}</div>
+      ) : users.length === 0 ? (
+        <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ fontFamily: T.fontBody, fontSize: 13.5, fontWeight: 500, color: T.ink2, margin: 0 }}>No users found</p></Card>
+      ) : (
+        <div style={{ display: 'grid', gap: 12 }}>
+          {users.map(u => {
+            const status = userStatus(u);
+            return (
+              <Card key={u._id} style={{ padding: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', flex: 1, minWidth: 0 }}>
+                    <div style={{ width: 44, height: 44, borderRadius: 12, backgroundColor: T.hair, border: `2px solid ${T.ink}`, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
+                      {u.photos?.[0] ? <img src={u.photos[0]} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" /> : <span style={{ fontWeight: 700, color: T.ink3, fontSize: 16 }}>{u.name?.[0]}</span>}
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 700, fontSize: 14, color: T.ink }}>{u.name}</span>
+                        <Badge color={statusColor(status)}>{status}</Badge>
+                      </div>
+                      <p style={{ fontSize: 12.5, fontWeight: 500, color: T.ink2, margin: '3px 0 0' }}>{u.email} · {u.branch} · {u.year}</p>
+                      <p style={{ fontFamily: T.fontMono, fontSize: 10, fontWeight: 700, color: T.ink3, margin: '3px 0 0', fontVariantNumeric: 'tabular-nums' }}>Reports: {u.reportStats?.count || 0} · Last active: {u.lastActive ? new Date(u.lastActive).toLocaleDateString() : 'Never'}</p>
+                    </div>
+                  </div>
+                  <button className="adm-slam" onClick={() => setDetailUser(u)} style={{ ...pillBtn(), flexShrink: 0 }}>Manage</button>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+      <Pagination page={pagination.page} totalPages={pagination.totalPages} onPage={p => load(p)} />
+
+      <AnimatePresence>
+        {detailUser && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 }}
+            onClick={() => setDetailUser(null)}
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(12,12,14,0.62)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+            <motion.div initial={{ scale: 0.94, opacity: 0, y: 16 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.95, opacity: 0, y: 16 }} transition={{ type: 'spring', damping: 26, stiffness: 300 }}
+              onClick={e => e.stopPropagation()}
+              style={{ background: T.paper, borderRadius: 20, border: `2px solid ${T.ink}`, boxShadow: `8px 8px 0 ${T.ink}`, maxWidth: 500, width: '100%', maxHeight: '80vh', overflowY: 'auto', padding: 24, boxSizing: 'border-box' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <h3 style={{ fontFamily: T.fontHeavy, fontSize: 19, fontWeight: 400, color: T.ink, margin: 0, letterSpacing: '-.01em', textTransform: 'uppercase' }}>{detailUser.name}</h3>
+                <button className="adm-slam" onClick={() => setDetailUser(null)} aria-label="Close" style={{ backgroundColor: T.card, border: `2px solid ${T.ink}`, borderRadius: 11, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: T.ink, boxShadow: `3px 3px 0 ${T.ink}`, flexShrink: 0 }}><X size={16} strokeWidth={2.8} /></button>
+              </div>
+              <div style={{ backgroundColor: T.paper, borderRadius: 12, border: `2px solid ${T.ink}`, padding: 16, marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {[
+                  ['Email', detailUser.email],
+                  // Branch was removed from the schema, so including it rendered a literal
+// "undefined" for every user. year alone is what's stored.
+['College', [detailUser.college, detailUser.year].filter(Boolean).join(' · ') || '—'],
+                  ['Joined', new Date(detailUser.createdAt).toLocaleDateString()],
+                  ['Last Active', detailUser.lastActive ? new Date(detailUser.lastActive).toLocaleString() : 'Never'],
+                  ['Reports', `${detailUser.reportStats?.count || 0} total, ${detailUser.reportStats?.pendingCount || 0} pending`],
+                ].map(([k, v]) => (
+                  <div key={k}>
+                    <span style={label}>{k}</span>
+                    <p style={{ fontFamily: T.fontBody, fontSize: 13.5, fontWeight: 600, color: T.ink, margin: '3px 0 0', wordBreak: 'break-word' }}>{v}</p>
+                  </div>
+                ))}
+                {detailUser.suspendedReason && (
+                  <div>
+                    <span style={{ ...label, color: T.red }}>Suspension Reason</span>
+                    <p style={{ fontFamily: T.fontBody, fontSize: 13, fontWeight: 600, color: T.red, margin: '3px 0 0' }}>{detailUser.suspendedReason}</p>
+                  </div>
+                )}
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <p style={{ ...label, marginBottom: 8 }}>Admin Notes</p>
+                <textarea value={detailUser.adminNotes || ''} onChange={e => setDetailUser({ ...detailUser, adminNotes: e.target.value })}
+                  placeholder="Internal notes..."
+                  style={{ width: '100%', boxSizing: 'border-box', minHeight: 60, padding: 12, borderRadius: 11, border: `2px solid ${T.ink}`, backgroundColor: T.card, fontSize: 13, fontWeight: 500, color: T.ink, resize: 'vertical', fontFamily: T.fontBody, outline: 'none' }} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <button className="adm-slam" onClick={() => updateUser(detailUser._id, { suspended: !detailUser.suspended, suspendedReason: !detailUser.suspended ? 'Admin action' : '' })}
+                  style={{ ...pillBtn(detailUser.suspended ? 'quiet' : 'danger'), padding: '12px 8px' }}>
+                  {detailUser.suspended ? 'Unsuspend' : 'Suspend'}
+                </button>
+                <button className="adm-slam" onClick={() => updateUser(detailUser._id, { shadowbanned: !detailUser.shadowbannedAt })}
+                  style={{ ...pillBtn('quiet'), padding: '12px 8px', color: detailUser.shadowbannedAt ? T.ink2 : T.red }}>
+                  {detailUser.shadowbannedAt ? 'Unshadowban' : 'Shadowban'}
+                </button>
+                <button className="adm-slam" onClick={() => updateUser(detailUser._id, { adminNotes: detailUser.adminNotes })}
+                  style={{ ...pillBtn('quiet'), padding: '12px 8px' }}>
+                  Save Notes
+                </button>
+                <button className="adm-slam" onClick={async () => { try { await apiFetch(`/users/${detailUser._id}/disconnect`, { method: 'POST' }); alert('Disconnect signal sent'); } catch (e) { alert('Failed: ' + e.message); } }}
+                  style={{ ...pillBtn('quiet'), padding: '12px 8px', color: T.red }}>
+                  Kick
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/* ─── ANALYTICS TAB ─── */
+function AnalyticsTab() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    apiFetch('/analytics').then(d => { setData(d); setLoading(false); }).catch(e => { console.error('Failed to load analytics:', e.message); setLoading(false); });
+  }, []);
+
+  const Chart = ({ title, items, color }) => {
+    const max = Math.max(...items.map(i => i.count), 1);
+    return (
+      <Card style={{ padding: 20 }}>
+        <h4 style={{ ...label, marginBottom: 16 }}>{title}</h4>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 120 }}>
+          {items.slice(-14).map((item, i) => (
+            <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
+              <div style={{ width: '100%', backgroundColor: color, borderRadius: '3px 3px 0 0', height: `${(item.count / max) * 100}%`, minHeight: 2, transition: 'height 0.4s cubic-bezier(0.22, 1, 0.36, 1)' }} />
+              <span style={{ fontFamily: T.fontMono, fontSize: 8, fontWeight: 700, color: T.ink3, transform: 'rotate(-45deg)', whiteSpace: 'nowrap' }}>{item.date?.slice(5)}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+    );
+  };
+
+  if (loading) return <div style={{ display: 'grid', gap: 16 }}>{Array.from({ length: 4 }).map((_, i) => <Card key={i} style={{ padding: 20, height: 180 }}><Skeleton style={{ height: '100%', width: '100%' }} /></Card>)}</div>;
+  if (!data) return <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ fontFamily: T.fontBody, fontSize: 13.5, fontWeight: 500, color: T.ink2, margin: 0 }}>Failed to load analytics</p></Card>;
+
+  return (
+    <div>
+      <PageHeader title="Analytics" subtitle="Last 30 days" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
+        <Chart title="Daily Signups" items={data.dailySignups} color={T.green} />
+        <Chart title="Active Users" items={data.dailyActive} color={T.coral} />
+        <Chart title="Reports" items={data.dailyReports} color={T.red} />
+        <Chart title="Matches" items={data.dailyMatches} color={T.yellow} />
+        <Chart title="Messages" items={data.dailyMessages} color={T.ink} />
+      </div>
+    </div>
+  );
+}
+
+/* ─── SETTINGS TAB ─── */
+function SettingsTab() {
+  const [settings, setSettings] = useState({});
+  const [original, setOriginal] = useState({});
+  const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    apiFetch('/settings').then(d => { setSettings(d); setOriginal(d); setLoading(false); }).catch(e => { console.error('Failed to load settings:', e.message); setLoading(false); });
+  }, []);
+
+  const save = async () => {
+    try {
+      await apiFetch('/settings', { method: 'PUT', body: JSON.stringify(settings) });
+      setOriginal({ ...settings });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      alert('Failed to save settings: ' + e.message);
+    }
+  };
+
+  const set = (key, val) => { setSettings(s => ({ ...s, [key]: val })); setSaved(false); };
+
+  const fields = [
+    { group: 'General', items: [
+      { key: 'supportEmail', label: 'Support Email', type: 'text' },
+      { key: 'maintenanceMode', label: 'Maintenance Mode', type: 'bool' },
+    ]},
+    { group: 'Moderation', items: [
+      { key: 'shadowbanThreshold', label: 'Shadowban Score Threshold', type: 'number' },
+      { key: 'autoShadowban', label: 'Auto-Shadowban', type: 'bool' },
+    ]},
+  ];
+
+  const hasChanges = JSON.stringify(settings) !== JSON.stringify(original);
+
+  if (loading) return <div>{Array.from({ length: 3 }).map((_, i) => <Card key={i} style={{ padding: 20, marginBottom: 12 }}><Skeleton style={{ height: 12, width: 200, marginBottom: 14 }} /><Skeleton style={{ height: 40 }} /></Card>)}</div>;
+
+  return (
+    <div>
+      <PageHeader title="Settings" subtitle="Platform configuration" />
+      {fields.map(group => (
+        <Card key={group.group} style={{ padding: 20, marginBottom: 16 }}>
+          <h4 style={{ fontFamily: T.fontHeavy, fontSize: 14, fontWeight: 400, color: T.ink, margin: '0 0 16px', letterSpacing: '.02em', textTransform: 'uppercase' }}>{group.group}</h4>
+          {group.items.map(f => (
+            <div key={f.key} style={{ marginBottom: 14 }}>
+              <label style={label}>{f.label}</label>
+              {f.type === 'bool'
+                ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+                    <button onClick={() => set(f.key, !settings[f.key])} style={{ width: 46, height: 26, borderRadius: 999, border: `2px solid ${T.ink}`, backgroundColor: settings[f.key] ? T.yellow : T.hair, cursor: 'pointer', position: 'relative', transition: 'background 0.2s' }}>
+                      <div style={{ width: 18, height: 18, borderRadius: '50%', backgroundColor: settings[f.key] ? T.ink : T.card, border: `2px solid ${T.ink}`, boxSizing: 'border-box', position: 'absolute', top: 2, left: settings[f.key] ? 22 : 2, transition: 'left 0.2s cubic-bezier(0.22, 1, 0.36, 1)' }} />
+                    </button>
+                    <span style={{ fontFamily: T.fontMono, fontSize: 10.5, fontWeight: 700, color: T.ink2, textTransform: 'uppercase', letterSpacing: '.08em' }}>{settings[f.key] ? 'Enabled' : 'Disabled'}</span>
+                  </div>
+                : <input
+                    type={f.type === 'number' ? 'number' : 'text'}
+                    value={settings[f.key] ?? ''}
+                    onChange={e => set(f.key, f.type === 'number' ? Number(e.target.value) : e.target.value)}
+                    style={{ width: '100%', maxWidth: 300, padding: '10px 13px', borderRadius: 11, border: `2px solid ${T.ink}`, backgroundColor: T.card, fontSize: 13.5, fontWeight: 500, color: T.ink, fontFamily: T.fontBody, outline: 'none', marginTop: 8 }}
+                  />
+              }
+            </div>
+          ))}
+        </Card>
+      ))}
+      <button className="adm-slam" onClick={save} disabled={!hasChanges}
+        style={{ ...pillBtn('danger'), padding: '13px 28px', fontSize: 11, opacity: hasChanges ? 1 : 0.4, cursor: hasChanges ? 'pointer' : 'not-allowed', backgroundColor: hasChanges ? T.red : T.card, color: hasChanges ? '#fff' : T.ink3 }}>
+        {saved ? 'Saved' : 'Save Settings'}
+      </button>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   COLLEGES TAB — add a campus without touching code, and work the queue of
+   students who asked for one.
+
+   Two ideas drive the layout:
+   1. Student counts sit next to every college, because editing a domain with
+      400 people behind it is very different from editing one with zero.
+   2. Requests are sorted by count descending. For a solo operator that ordering
+      IS the priority list — it answers "which campus should I add next?"
+   ═══════════════════════════════════════════════════════════════════════ */
+const EMPTY_COLLEGE = { code: '', name: '', domains: [''], city: '', state: '', country: '', lat: '', lng: '' };
+
+function CollegesTab() {
+  const [colleges, setColleges] = useState([]);
+  const [requests, setRequests] = useState([]);
+  const [form, setForm] = useState(EMPTY_COLLEGE);
+  const [editing, setEditing] = useState(null);
+  const [showOld, setShowOld] = useState(false);
+  const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState(null);
+
+  const load = async () => {
+    try {
+      const [c, r] = await Promise.all([apiFetch('/colleges'), apiFetch('/college-requests')]);
+      setColleges(c.colleges || []);
+      setRequests(r.groups || []);
+    } catch (e) { setMsg({ tone: 'bad', text: e.message }); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const flash = (tone, text) => { setMsg({ tone, text }); setTimeout(() => setMsg(null), 4000); };
+
+  const setDomainAt = (i, v) => setForm((f) => {
+    const d = [...f.domains];
+    d[i] = v;
+    return { ...f, domains: d };
+  });
+
+  const submitCollege = async (e) => {
+    e.preventDefault();
+    setBusy('save');
+    try {
+      const domains = form.domains.map((d) => d.trim()).filter(Boolean);
+      const body = { code: form.code.trim().toLowerCase(), name: form.name.trim(), domains, city: form.city.trim(), state: form.state.trim(), country: form.country.trim() };
+      /* 📍 Send latLng ONLY when both boxes are filled. Sending one alone, or
+         sending `""`, would make the server's "present but malformed" branch
+         fire and reject an otherwise-valid save — an operator adding a city
+         should not have to think about coordinates at all. Both blank means
+         "no position", which is a legitimate state. */
+      const lat = String(form.lat || '').trim();
+      const lng = String(form.lng || '').trim();
+      if (lat && lng) body.latLng = [Number(lat), Number(lng)];
+      if (editing) await apiFetch(`/colleges/${editing}`, { method: 'PUT', body: JSON.stringify(body) });
+      else await apiFetch('/colleges', { method: 'POST', body: JSON.stringify(body) });
+      flash('good', editing ? 'College updated.' : `${body.name} is live in the picker.`);
+      setForm(EMPTY_COLLEGE);
+      setEditing(null);
+      load();
+    } catch (e) { flash('bad', e.message); }
+    finally { setBusy(''); }
+  };
+
+  const toggleActive = async (c) => {
+    setBusy(`act-${c.code}`);
+    try {
+      await apiFetch(`/colleges/${c.code}`, { method: 'PUT', body: JSON.stringify({ active: !c.active }) });
+      flash('good', c.active ? `${c.name} hidden from signups.` : `${c.name} is live again.`);
+      load();
+    } catch (e) { flash('bad', e.message); }
+    finally { setBusy(''); }
+  };
+
+  const removeCollege = async (c) => {
+    if (!window.confirm(`Delete ${c.name}? Only possible if nobody has signed up through it.`)) return;
+    setBusy(`del-${c.code}`);
+    try {
+      await apiFetch(`/colleges/${c.code}`, { method: 'DELETE' });
+      flash('good', 'College deleted.');
+      load();
+    } catch (e) { flash('bad', e.message); }
+    finally { setBusy(''); }
+  };
+
+  const approve = async (g, reqId) => {
+    setBusy(`ap-${g.collegeName}`);
+    try {
+      // The domain comes from what the requester submitted. VERIFY IT against
+      // the college's official website before pressing this — a request is not
+      // evidence, and adding a wrong domain locks out a whole campus.
+      const hint = g.domains[0] || '';
+      const suggestedCode = g.collegeName.replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 20);
+      const code = window.prompt(
+        `Add "${g.collegeName}".\n\nVerify the domain on the college's OFFICIAL website first.\n\nCode (edit if needed):`,
+        suggestedCode,
+      );
+      if (!code) return;
+      if (!window.confirm(`Use @${hint} for ${g.collegeName}?`)) return;
+      await apiFetch(`/college-requests/${reqId}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ code: code.trim().toLowerCase(), domains: [hint] }),
+      });
+      flash('good', `${g.collegeName} added. Press Notify to tell the ${g.count} who asked.`);
+      load();
+    } catch (e) { flash('bad', e.message); }
+    finally { setBusy(''); }
+  };
+
+  const notify = async (g, reqId) => {
+    if (!window.confirm(`Email all ${g.count} people who requested ${g.collegeName}? Check the spelling is right — this is the only email they get.`)) return;
+    setBusy(`no-${g.collegeName}`);
+    try {
+      const res = await apiFetch(`/college-requests/${reqId}/notify`, { method: 'POST' });
+      flash('good', `Notified ${res.sent} of ${res.total}.`);
+      load();
+    } catch (e) { flash('bad', e.message); }
+    finally { setBusy(''); }
+  };
+
+  const reject = async (g, reqId) => {
+    if (!window.confirm(`Reject the request from ${g.collegeName}? They won't be emailed.`)) return;
+    setBusy(`rj-${g.collegeName}`);
+    try {
+      await apiFetch(`/college-requests/${reqId}/reject`, { method: 'POST' });
+      flash('good', 'Rejected.');
+      load();
+    } catch (e) { flash('bad', e.message); }
+    finally { setBusy(''); }
+  };
+
+  const visible = showOld ? requests : requests.filter((g) => g.ageDays < 30);
+  const pending = requests.filter((g) => g.status === 'pending').length;
+  const oldCount = requests.filter((g) => g.status === 'pending' && g.ageDays >= 30).length;
+
+  // ⚠️ This used to read `{ ...input, marginBottom: 12 }`, spreading an `input`
+  // that is never declared in this scope. Every one of the six text fields
+  // below was styled from it, so the whole Colleges tab threw
+  // "ReferenceError: Can't find variable: input" on its first render and the
+  // error boundary took the page down with it.
+  //
+  // The base style is written out rather than derived, so there is nothing left
+  // to be undefined. `inputStyle` is just that base plus the spacing this form
+  // wants — it was always only ever those two things.
+  const inputStyle = {
+    display: 'block',
+    width: '100%',
+    boxSizing: 'border-box',
+    fontFamily: T.fontBody,
+    fontSize: 14,
+    fontWeight: 500,
+    color: T.ink,
+    backgroundColor: T.hair,
+    border: `2px solid ${T.ink}`,
+    borderRadius: 10,
+    padding: '10px 12px',
+    outline: 'none',
+    marginBottom: 12,
+  };
+
+  // Fields laid out inside a flex row manage their own width and must not also
+  // carry the block-level margin, or they sit visually misaligned with the
+  // stacked fields above them.
+  const inputStyleInline = { ...inputStyle, flex: 1, marginBottom: 0 };
+
+  return (
+    <div>
+      <PageHeader title="Colleges" subtitle={`${colleges.length} listed · ${pending} campus${pending === 1 ? '' : 'es'} requested`} />
+
+      {msg && (
+        <div style={{ ...pillBtn(msg.tone === 'good' ? 'primary' : 'danger'), marginBottom: 14, display: 'inline-block' }}>
+          {msg.text}
+        </div>
+      )}
+
+      {/* ── ADD / EDIT ── */}
+      <Card style={{ padding: 20, marginBottom: 16 }}>
+        <h4 style={{ fontFamily: T.fontHeavy, fontSize: 14, fontWeight: 400, color: T.ink, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '.02em' }}>
+          {editing ? `Edit ${editing}` : 'Add a college'}
+        </h4>
+        <p style={{ ...label, margin: '0 0 16px', textTransform: 'none', letterSpacing: '.04em' }}>
+          Verify the domain on the college's official website. A college with no domain would let anyone in.
+        </p>
+
+        <form onSubmit={submitCollege}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 200px' }}>
+              <label style={label}>Code</label>
+              <input style={inputStyle} value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
+                placeholder="iitd" disabled={Boolean(editing)} required />
+              {editing && <p style={{ ...label, margin: '-8px 0 12px', textTransform: 'none' }}>Permanent once students exist</p>}
+            </div>
+            <div style={{ flex: '3 1 260px' }}>
+              <label style={label}>Full official name</label>
+              <input style={inputStyle} value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="Indian Institute of Technology Delhi" required />
+            </div>
+          </div>
+
+          <label style={label}>Email domains (at least one)</label>
+          {form.domains.map((d, i) => (
+            <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+              <input style={inputStyleInline} value={d} onChange={(e) => setDomainAt(i, e.target.value)}
+                placeholder="iitd.ac.in" />
+              {form.domains.length > 1 && (
+                <button type="button" className="adm-slam" onClick={() => setForm((f) => ({ ...f, domains: f.domains.filter((_, x) => x !== i) }))}
+                  style={{ ...pillBtn('danger'), padding: '0 12px' }} aria-label="Remove domain"><X size={14} /></button>
+              )}
+            </div>
+          ))}
+          <button type="button" className="adm-slam" onClick={() => setForm((f) => ({ ...f, domains: [...f.domains, ''] }))}
+            style={{ ...pillBtn(), marginBottom: 16, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <Plus size={13} /> Add domain
+          </button>
+
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <input style={inputStyleInline} value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} placeholder="City" />
+            <input style={inputStyleInline} value={form.state} onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))} placeholder="State" />
+            <input style={inputStyleInline} value={form.country} onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))} placeholder="Country" />
+          </div>
+
+          {/* 📍 Campus map position. Optional — a college without one is fully
+              functional, its students simply have no distance band and rank by
+              intent and quality instead. Two boxes rather than one "lat,lng"
+              string because an operator transcribing coordinates will catch a
+              transposed pair far more easily in separate fields. */}
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input
+              style={{ ...inputStyle, flex: '0 1 150px', marginBottom: 0 }}
+              value={form.lat}
+              onChange={(e) => setForm((f) => ({ ...f, lat: e.target.value }))}
+              placeholder="Latitude (19.076)"
+              inputMode="decimal"
+            />
+            <input
+              style={{ ...inputStyle, flex: '0 1 150px', marginBottom: 0 }}
+              value={form.lng}
+              onChange={(e) => setForm((f) => ({ ...f, lng: e.target.value }))}
+              placeholder="Longitude (72.878)"
+              inputMode="decimal"
+            />
+            <span style={{ fontSize: 11, opacity: 0.6, flex: '1 1 100%', lineHeight: 1.5 }}>
+              Used only to rank people nearby. Leave both blank to skip — students
+              of this college will still appear, just without a distance label.
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            <button type="submit" className="adm-slam" disabled={busy === 'save'}
+              style={{ ...pillBtn('primary'), padding: '13px 28px', fontSize: 11 }}>
+              {busy === 'save' ? 'Saving…' : editing ? 'Save changes' : 'Add college'}
+            </button>
+            {editing && (
+              <button type="button" className="adm-slam" onClick={() => { setEditing(null); setForm(EMPTY_COLLEGE); }}
+                style={{ ...pillBtn(), padding: '13px 20px', fontSize: 11 }}>Cancel</button>
+            )}
+          </div>
+        </form>
+      </Card>
+
+      {/* ── REQUESTED CAMPUSES ── */}
+      <Card style={{ padding: 20, marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <h4 style={{ fontFamily: T.fontHeavy, fontSize: 14, fontWeight: 400, color: T.ink, margin: 0, textTransform: 'uppercase', letterSpacing: '.02em' }}>
+            Requested campuses
+          </h4>
+          {oldCount > 0 && (
+            <button className="adm-slam" onClick={() => setShowOld((s) => !s)}
+              style={{ ...pillBtn(showOld ? 'primary' : 'warn'), padding: '6px 12px', fontSize: 10 }}>
+              {showOld ? 'Hide old' : `${oldCount} waiting 30d+`}
+            </button>
+          )}
+        </div>
+        <p style={{ ...label, margin: '0 0 16px', textTransform: 'none', letterSpacing: '.04em' }}>
+          Most requests first — that order is your priority list.
+        </p>
+
+        {visible.length === 0 ? (
+          <p style={{ ...label, textTransform: 'none', letterSpacing: '.04em' }}>Nothing waiting.</p>
+        ) : visible.map((g) => {
+          const reqId = g.requesters[0]?._id;
+          return (
+            <div key={g.collegeName} style={{ border: `2px solid ${T.ink}`, borderRadius: 14, padding: 14, marginBottom: 10, backgroundColor: T.card }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: T.fontHeavy, fontSize: 14, color: T.ink }}>{g.collegeName}</span>
+                    <span style={{ ...pillBtn('primary'), padding: '3px 9px', fontSize: 10 }}>{g.count}</span>
+                    {g.ageDays >= 30 && <span style={{ ...pillBtn('warn'), padding: '3px 9px', fontSize: 9.5 }}>{g.ageDays}d old</span>}
+                    {g.status === 'approved' && <span style={{ ...pillBtn('primary'), padding: '3px 9px', fontSize: 9.5 }}>added</span>}
+                  </div>
+                  <p style={{ ...label, margin: '6px 0 0', textTransform: 'none', letterSpacing: '.04em' }}>
+                    {[g.city, g.state, g.country].filter(Boolean).join(', ') || 'No location given'}
+                  </p>
+                  {g.domains.length > 0 && (
+                    <p style={{ ...label, margin: '4px 0 0', textTransform: 'none', letterSpacing: '.04em', color: T.ink2 }}>
+                      Submitted as @{g.domains.join(' / @')}
+                    </p>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+                  {g.status !== 'approved' && (
+                    <button className="adm-slam" onClick={() => approve(g, reqId)} disabled={busy === `ap-${g.collegeName}`}
+                      style={{ ...pillBtn('primary'), padding: '9px 14px', fontSize: 10.5, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <Plus size={13} /> Add
+                    </button>
+                  )}
+                  {g.status === 'approved' && (
+                    <button className="adm-slam" onClick={() => notify(g, reqId)} disabled={busy === `no-${g.collegeName}`}
+                      style={{ ...pillBtn('primary'), padding: '9px 14px', fontSize: 10.5, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <Send size={13} /> Notify
+                    </button>
+                  )}
+                  {g.status === 'pending' && (
+                    <button className="adm-slam" onClick={() => reject(g, reqId)} disabled={busy === `rj-${g.collegeName}`}
+                      style={{ ...pillBtn(), padding: '9px 14px', fontSize: 10.5 }}>Reject</button>
+                  )}
+                </div>
+              </div>
+
+              {g.requesters.length > 0 && (
+                <p style={{ ...label, margin: '10px 0 0', textTransform: 'none', letterSpacing: '.04em' }}>
+                  {g.requesters.map((r) => r.email).join(', ')}
+                </p>
+              )}
+            </div>
+          );
+        })}
+      </Card>
+
+      {/* ── LISTED COLLEGES ── */}
+      <Card style={{ padding: 20 }}>
+        <h4 style={{ fontFamily: T.fontHeavy, fontSize: 14, fontWeight: 400, color: T.ink, margin: '0 0 16px', textTransform: 'uppercase', letterSpacing: '.02em' }}>
+          Listed colleges
+        </h4>
+        {colleges.map((c) => (
+          <div key={c.code} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '12px 0', borderBottom: `1px solid ${T.hair}`, flexWrap: 'wrap' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontFamily: T.fontBody, fontSize: 13.5, fontWeight: 700, color: T.ink }}>{c.name}</span>
+                {!c.active && <span style={{ ...pillBtn('warn'), padding: '3px 8px', fontSize: 9.5 }}>hidden</span>}
+              </div>
+              <p style={{ ...label, margin: '4px 0 0', textTransform: 'none', letterSpacing: '.04em' }}>
+                {c.code} · @{c.domains.join(' / @')} ·{' '}
+                <span style={{ color: c.studentCount > 0 ? T.coral : T.ink3 }}>
+                  {c.studentCount} student{c.studentCount === 1 ? '' : 's'}
+                </span>
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 7 }}>
+              <button className="adm-slam" onClick={() => { setEditing(c.code); setForm({ code: c.code, name: c.name, domains: [...c.domains], city: c.city, state: c.state, country: c.country, lat: Array.isArray(c.latLng) ? String(c.latLng[0]) : '', lng: Array.isArray(c.latLng) ? String(c.latLng[1]) : '' }); window.scrollTo(0, 0); }}
+                style={{ ...pillBtn(), padding: '8px 13px', fontSize: 10.5 }}>Edit</button>
+              <button className="adm-slam" onClick={() => toggleActive(c)} disabled={busy === `act-${c.code}`}
+                style={{ ...pillBtn(), padding: '8px 13px', fontSize: 10.5 }}>{c.active ? 'Hide' : 'Show'}</button>
+              <button className="adm-slam" onClick={() => removeCollege(c)} disabled={c.studentCount > 0} title={c.studentCount > 0 ? 'Students exist — hide it instead' : 'Delete'}
+                style={{ ...pillBtn('danger'), padding: '8px 13px', fontSize: 10.5, opacity: c.studentCount > 0 ? 0.3 : 1, cursor: c.studentCount > 0 ? 'not-allowed' : 'pointer' }}>
+                <Trash2 size={13} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </Card>
+    </div>
+  );
+}
+
+/* ─── MAIN ADMIN PAGE ─── */
+export default function Admin() {
+  const [tab, setTab] = useState('overview');
+  const [authed, setAuthed] = useState(null);
+
+  useEffect(() => {
+    apiFetch('/stats').then(() => setAuthed(true)).catch(() => setAuthed(false));
+  }, []);
+
+  if (authed === null) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', backgroundColor: T.desk }}><p style={{ fontFamily: T.fontMono, color: T.ink3, fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase' }}>Checking admin access…</p></div>;
+  if (authed === false) return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', backgroundColor: T.desk, gap: 12, padding: 20, textAlign: 'center' }}>
+      <div style={{ width: 56, height: 56, borderRadius: 16, backgroundColor: T.red, border: `2px solid ${T.ink}`, boxShadow: `4px 4px 0 ${T.ink}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <AlertTriangle size={24} strokeWidth={2.4} color="#fff" />
+      </div>
+      <p style={{ fontFamily: T.fontHeavy, color: T.paper, fontSize: 20, fontWeight: 400, margin: 0, letterSpacing: '-.01em', textTransform: 'uppercase' }}>Access Denied</p>
+      <p style={{ fontFamily: T.fontBody, color: T.ink3, fontSize: 13.5, fontWeight: 500, margin: 0 }}>Only the admin can access this page.</p>
+    </div>
+  );
+
+  const tabConfig = {
+    overview: { label: 'Overview', Icon: LayoutDashboard },
+    reports: { label: 'Reports', Icon: AlertTriangle },
+    users: { label: 'Users', Icon: Users },
+    colleges: { label: 'Colleges', Icon: GraduationCap },
+    analytics: { label: 'Analytics', Icon: BarChart3 },
+    settings: { label: 'Settings', Icon: Settings },
+  };
+
+  return (
+    <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: T.desk }}>
+      <aside style={{ width: 240, backgroundColor: T.paper, border: `2px solid ${T.ink}`, borderRadius: 20, margin: 16, boxShadow: `6px 6px 0 ${T.ink}`, display: 'flex', flexDirection: 'column', position: 'sticky', top: 16, height: 'calc(100vh - 32px)', flexShrink: 0, overflow: 'hidden', boxSizing: 'border-box' }}>
+        <div style={{ padding: '22px 18px 18px', borderBottom: `2px solid ${T.ink}` }}>
+          <h1 style={{ fontFamily: T.fontHeavy, fontSize: 19, fontWeight: 400, color: T.ink, margin: 0, letterSpacing: '-.01em', lineHeight: 1, textTransform: 'uppercase' }}>matchalize</h1>
+          <p style={{ ...label, marginTop: 8, color: T.ink2 }}>Admin Panel</p>
+        </div>
+        <nav style={{ flex: 1, padding: '14px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {TABS.map(tb => {
+            const active = tab === tb;
+            const { Icon } = tabConfig[tb];
+            return (
+              <button key={tb} onClick={() => setTab(tb)}
+                className="adm-slam"
+                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 12, border: `2px solid ${active ? T.ink : 'transparent'}`, cursor: 'pointer', fontSize: 12.5, fontWeight: active ? 700 : 600, textAlign: 'left', backgroundColor: active ? T.yellow : 'transparent', boxShadow: active ? `3px 3px 0 ${T.ink}` : 'none', color: T.ink, fontFamily: T.fontBody, width: '100%' }}>
+                <Icon size={17} strokeWidth={active ? 2.6 : 2.2} color={active ? T.ink : T.ink3} />
+                {tabConfig[tb].label}
+              </button>
+            );
+          })}
+        </nav>
+        <div style={{ padding: 16, borderTop: `2px solid ${T.ink}`, textAlign: 'center' }}>
+          <p style={{ fontFamily: T.fontMono, fontSize: 9.5, fontWeight: 700, color: T.ink3, margin: 0, letterSpacing: '.1em' }}>v1.0.0</p>
+        </div>
+      </aside>
+
+      <main style={{ flex: 1, padding: '24px 32px', maxWidth: 1200, overflowY: 'auto', position: 'relative' }}>
+        <AnimatePresence mode="wait">
+          <motion.div key={tab} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}>
+            {tab === 'overview' && <OverviewTab />}
+            {tab === 'reports' && <ReportsTab />}
+            {tab === 'users' && <UsersTab />}
+            {tab === 'colleges' && <CollegesTab />}
+            {tab === 'analytics' && <AnalyticsTab />}
+            {tab === 'settings' && <SettingsTab />}
+          </motion.div>
+        </AnimatePresence>
+      </main>
+
+      <style>{`
+        .adm-input:focus, textarea:focus, select:focus { box-shadow: 3px 3px 0 #191919; }
+        ::selection { background: #FFD43D; color: #191919; }
+        .adm-slam { font-family: ${T.fontMono}; }
+        button[class*="adm-slam"] { font-family: ${T.fontMono}; font-size: 10.5px; font-weight: 700;
+          letter-spacing: .08em; text-transform: uppercase; }
+      `}</style>
+    </div>
+  );
+}
 ```
 

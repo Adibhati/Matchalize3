@@ -109,16 +109,35 @@ const HEADER_RELEASE = 8;
 /* Used only if [data-deck-header] cannot be found: DECK_TOP (12) + DECK_BTN (42). */
 const HEADER_FALLBACK_BOTTOM = 54;
 
-/* The shared neo-brutalist canon (src/styles/neu.js).
-   Keyed by the legacy short names so every ${F.*} usage site keeps working. */
+/* Type voices — MUST stay identical to ProfileCard.jsx. This sheet and the
+   deck card are the same object seen from two screens, so any drift between
+   these three lines and that file's is visible as the profile looking like a
+   different app from the deck it was just swiped out of. */
 const F = {
-  heavy: neu.fontHeavy,
-  body: neu.fontBody,
-  mono: neu.fontMono,
+  heavy: "'Barlow Condensed', sans-serif",
+  body: "'Space Grotesk', sans-serif",
+  mono: "'IBM Plex Mono', monospace",
 };
 
-/* The shared neo-brutalist canon (src/styles/neu.js) */
-const C = neu;
+/* Palette — same overrides as ProfileCard.jsx, which re-tints the shared neu
+   canon rather than replacing it (the spread keeps shadow/radius/z/grain, which
+   this file no longer uses but other callers of neu still do). */
+const C = {
+  ...neu,
+  ink: '#111211',
+  ink2: '#383832',
+  ink3: '#77766F',
+  paper: '#F1EDE2',
+  card: '#F8F5EC',
+  desk: '#111211',
+  yellow: '#E0A15E',
+  coral: '#C96F68',
+  green: '#779477',
+  pink: '#A3A3A1',
+  red: '#A84F4A',
+  hair: 'rgba(17,18,17,.22)',
+  line: 'rgba(241,237,226,.2)',
+};
 
 const TILE = ['coral', 'yellow', 'green', 'pink'];
 
@@ -127,6 +146,8 @@ const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
 /* ───────────────────────── styles ───────────────────────── */
 
 const PROFILE_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
   .pc-root {
     --paper: ${C.paper};
     --card: ${C.card};
@@ -139,71 +160,76 @@ const PROFILE_CSS = `
     --green: ${C.green};
     --pink: ${C.pink};
     --red: ${C.red};
-    --bw: 2px;
-    --r: 14px;
+    --bw: 1px;
+    --r: 8px;
     --ease: cubic-bezier(.2,0,0,1);
 
     position: relative; width: 100%; height: 100%; overflow: hidden;
-    background: #131313;
+    background: #111211;
     font-family: ${F.body}; color: var(--ink);
     -webkit-font-smoothing: antialiased;
   }
-  .pc-root ::selection { background: var(--yellow); color: var(--ink); }
+  .pc-root ::selection { background: var(--coral); color: var(--ink); }
 
   .pc-heroWrap { position: absolute; inset: 0; z-index: 0; transform-origin: 50% 30%; will-change: transform, opacity; }
   .pc-hero { width: 100%; height: 100%; object-fit: cover; display: block;
     opacity: 0; transition: opacity .4s ease-out; -webkit-user-drag: none; }
   .pc-hero.is-loaded { opacity: 1; }
   .pc-shade { position: absolute; inset: 0; pointer-events: none;
-    background: linear-gradient(to top, rgba(15,13,10,.4) 0%, rgba(15,13,10,.08) 42%, rgba(15,13,10,.18) 100%); }
+    background: linear-gradient(to top, rgba(17,18,17,.65) 0%, rgba(17,18,17,.08) 44%, rgba(17,18,17,.20) 100%); }
 
-  /* SMOOTHNESS: own compositor layer + paint containment, so the 8px shadow
+  /* SMOOTHNESS: own compositor layer + paint containment, so the shadow
      and all children never force full-page repaints while dragging */
   .pc-sheet { position: absolute; left: ${SIDE_MARGIN}px; right: ${SIDE_MARGIN}px; top: 0; z-index: 30;
-    background: var(--paper); border: var(--bw) solid var(--ink); border-radius: 22px;
-    box-shadow: 8px 8px 0 var(--ink);
+    background: var(--paper); border: var(--bw) solid var(--ink); border-radius: 15px 15px 4px 4px;
+    box-shadow: 0 14px 32px rgba(0,0,0,.22);
     transform: translateZ(0); backface-visibility: hidden;
     contain: layout paint style;
     touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
-    padding: 14px 20px calc(28px + env(safe-area-inset-bottom));
-    display: flex; flex-direction: column; gap: 22px; will-change: transform; }
+    padding: 12px 18px calc(26px + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; gap: 19px; will-change: transform; }
   .pc-sheet:active { cursor: grabbing; }
   .pc-sheet img { -webkit-user-drag: none; }
 
-  .pc-grabber { width: 48px; height: 6px; border-radius: 999px; margin: 0 auto 0; flex-shrink: 0;
-    background: var(--ink); transition: none; }
-  .pc-sheet:active .pc-grabber { background: var(--yellow); }
+  .pc-grabber { width: 42px; height: 4px; border-radius: 0; margin: 0 auto 0; flex-shrink: 0;
+    background: var(--ink-3); transition: none; }
+  .pc-sheet:active .pc-grabber { background: var(--coral); }
 
-  .pc-notetext { display: block; text-align: center; margin-bottom: 6px;
+  .pc-notetext { display: block; text-align: center; margin-bottom: 4px;
     font-family: ${F.mono}; font-size: 9px; font-weight: 700; letter-spacing: .2em;
     text-transform: uppercase; color: var(--ink-3); pointer-events: none; }
 
   .pc-id { position: relative; }
   .pc-idrow { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-  .pc-name { font-family: ${F.heavy}; font-size: 34px; font-weight: 400; letter-spacing: -.01em;
-    line-height: 1.08; color: var(--ink); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    background-image: linear-gradient(180deg, transparent 58%, var(--yellow) 58%);
-    padding: 0 6px 3px 0; }
-  .pc-meta { font-family: ${F.mono}; font-size: 11px; font-weight: 700; letter-spacing: .1em;
+  .pc-name { font-family: ${F.heavy}; font-size: 39px; font-weight: 800; letter-spacing: -.025em;
+    line-height: .92; color: var(--ink); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    background-image: linear-gradient(180deg, transparent 77%, rgba(224,161,94,.78) 77%);
+    padding: 0 6px 5px 0; }
+  .pc-age { font-family: ${F.body}; font-weight: 600; font-size: .65em;
+    letter-spacing: 0; color: var(--ink-2); }
+  /* The deck carries college/distance here; this sheet has neither (the campus
+     is privacy-gated and distance is meaningless for your own card), so the year
+     takes the same mono line. */
+  .pc-meta { font-family: ${F.mono}; font-size: 9px; font-weight: 700; letter-spacing: .075em;
     text-transform: uppercase; color: var(--ink-2); font-variant-numeric: tabular-nums;
-    margin: 12px 0 0; display: flex; align-items: center; flex-wrap: wrap; row-gap: 4px; }
-  .pc-slash { color: var(--ink-3); font-weight: 400; margin: 0 8px; }
+    margin: 10px 0 0; display: flex; align-items: center; flex-wrap: wrap; row-gap: 4px; }
 
-  .pc-sec { display: flex; flex-direction: column; flex-shrink: 0; }
-  .pc-shead { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
-  .pc-mark { width: 11px; height: 11px; flex-shrink: 0; border: var(--bw) solid var(--ink); border-radius: 3px; }
+  .pc-sec { display: flex; flex-direction: column; flex-shrink: 0; position: relative; }
+  .pc-shead { display: flex; align-items: center; gap: 9px; margin: 0 0 12px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--hair); }
+  .pc-mark { width: 9px; height: 9px; flex-shrink: 0; border: 1px solid var(--ink); border-radius: 0; }
   .pc-mark.yellow { background: var(--yellow); }
   .pc-mark.coral { background: var(--coral); }
   .pc-mark.green { background: var(--green); }
   .pc-mark.pink { background: var(--pink); }
-  .pc-stitle { font-family: ${F.mono}; font-size: 12px; font-weight: 700; letter-spacing: .18em;
+  .pc-stitle { font-family: ${F.mono}; font-size: 10px; font-weight: 700; letter-spacing: .14em;
     text-transform: uppercase; color: var(--ink); }
-  .pc-scount { font-family: ${F.mono}; font-size: 10px; font-weight: 400; color: var(--ink-3);
+  .pc-scount { margin-left: auto; font-family: ${F.mono}; font-size: 9px; font-weight: 400; color: var(--ink-3);
     font-variant-numeric: tabular-nums; }
 
-  .pc-card { background: var(--card); border: var(--bw) solid var(--ink); border-radius: var(--r);
-    box-shadow: 5px 5px 0 var(--ink); position: relative; }
-  .pc-card.padded { padding: 16px; }
+  .pc-card { background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px;
+    box-shadow: none; position: relative; }
+  .pc-card.padded { padding: 15px; }
 
   /* '.pc-compat' was the compatibility score block's positioning hook.
      Renamed to say what it now wraps: the profile-strength readout.
@@ -215,88 +241,105 @@ const PROFILE_CSS = `
   .pc-strengthhead { position: relative; }
   .pc-scorehead { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
   .pc-scorenum { display: flex; align-items: flex-start; }
-  .pc-num { font-family: ${F.heavy}; font-size: 54px; font-weight: 400; letter-spacing: -.02em;
+  .pc-num { font-family: ${F.heavy}; font-size: 54px; font-weight: 800; letter-spacing: -.02em;
     line-height: .9; color: var(--ink); font-variant-numeric: tabular-nums; }
   .pc-pct { font-family: ${F.mono}; font-size: 13px; font-weight: 700; color: var(--ink-3); margin: 4px 0 0 4px; }
-  .pc-statust { font-family: ${F.mono}; font-size: 10.5px; font-weight: 700; letter-spacing: .12em;
+  .pc-statust { font-family: ${F.mono}; font-size: 10px; font-weight: 700; letter-spacing: .12em;
     text-transform: uppercase; color: var(--ink-2); text-align: right; line-height: 1.7; }
   .pc-star { color: var(--coral); font-size: 12px; }
-  .pc-bar { height: 16px; border: var(--bw) solid var(--ink); border-radius: 6px; background: var(--paper);
+  .pc-bar { height: 12px; border: var(--bw) solid var(--ink); border-radius: 3px; background: var(--paper);
     overflow: hidden; margin-top: 14px; }
   .pc-barfill { width: 100%; height: 100%; background: var(--yellow); transform-origin: left center; }
 
-  .pc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; }
-  .pc-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .pc-tile { width: 34px; height: 34px; flex-shrink: 0; border: var(--bw) solid var(--ink); border-radius: 10px;
+  .pc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px 12px; }
+  .pc-cell { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .pc-tile { width: 31px; height: 31px; flex-shrink: 0; border: var(--bw) solid var(--ink); border-radius: 3px;
     display: flex; align-items: center; justify-content: center; color: var(--ink); }
   .pc-tile.yellow { background: var(--yellow); }
   .pc-tile.coral { background: var(--coral); }
   .pc-tile.green { background: var(--green); }
   .pc-tile.pink { background: var(--pink); }
   .pc-cellinfo { min-width: 0; }
-  .pc-clabel { font-family: ${F.mono}; font-size: 9px; font-weight: 700; letter-spacing: .16em;
+  .pc-clabel { font-family: ${F.mono}; font-size: 8px; font-weight: 700; letter-spacing: .12em;
     text-transform: uppercase; color: var(--ink-3); }
-  .pc-cval { font-size: 14px; font-weight: 700; color: var(--ink); margin-top: 2px;
+  .pc-cval { font-size: 13px; font-weight: 700; color: var(--ink); margin-top: 3px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 
-  .pc-bio { font-size: 15px; font-weight: 500; line-height: 1.65; color: var(--ink-2);
+  /* The deck has no edit tiles; this sheet does, and they are absolutely
+     positioned in the top-right of their card. The right-hand clears below keep
+     long text and chip rows from running underneath one. */
+  .pc-bio { font-size: 14px; font-weight: 500; line-height: 1.7; color: var(--ink-2);
     margin: 0; word-break: break-word; text-wrap: pretty; padding-right: 38px; }
 
-  .pc-pills { display: flex; flex-wrap: wrap; gap: 9px; padding-right: 38px; }
-  .pc-chip { display: inline-block; padding: 8px 15px; border: var(--bw) solid var(--ink); border-radius: 999px;
-    font-family: ${F.mono}; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
-    background: var(--card); color: var(--ink); transition: none; }
+  .pc-pills { display: flex; flex-wrap: wrap; gap: 8px; padding-right: 38px; }
+  .pc-chip { display: inline-block; padding: 7px 11px; border: var(--bw) solid var(--ink); border-radius: 999px;
+    font-family: ${F.mono}; font-size: 9px; font-weight: 700; letter-spacing: .075em; text-transform: uppercase;
+    background: var(--card); color: var(--ink); transition: background .12s ease, color .12s ease; }
   .pc-chip.acc { background: var(--yellow); }
+  .pc-chip:active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 
   /* prompt card: question is the SETUP, answer is the PAYOFF — so the answer
-     carries the type weight. padding-right keeps both clear of the edit tile. */
-  .pc-prompt { padding: 14px 16px; transition: none; }
-  .pc-promptq { font-family: ${F.mono}; font-size: 11.5px; font-weight: 700; line-height: 1.55;
-    color: var(--ink-3); margin: 0 0 8px; word-break: break-word; padding-right: 38px; }
-  .pc-prompta { font-size: 17px; font-weight: 700; line-height: 1.5; color: var(--ink);
+     carries the type weight. */
+  .pc-prompt { padding: 15px; transition: background .12s ease, color .12s ease; }
+  .pc-promptq { font-family: ${F.mono}; font-size: 10px; font-weight: 700; line-height: 1.6;
+    letter-spacing: .025em; color: var(--ink-3); margin: 0 0 8px; word-break: break-word;
+    padding-right: 38px; transition: none; }
+  .pc-prompta { font-size: 16px; font-weight: 700; line-height: 1.5; color: var(--ink);
     margin: 0; word-break: break-word; overflow-wrap: anywhere; text-wrap: pretty;
-    padding-right: 38px; }
+    padding-right: 38px; transition: none; }
+  .pc-prompt:active .pc-prompta { color: var(--paper); }
+  .pc-prompt:active .pc-promptq { color: rgba(241,237,226,.6); }
 
-  .pc-ph { background: var(--card); border: var(--bw) solid var(--ink); border-radius: var(--r);
-    box-shadow: 4px 4px 0 var(--ink); padding: 6px; position: relative;
-    transition: transform .08s steps(2), box-shadow .08s steps(2); }
-  .pc-ph-in { border-radius: 9px; overflow: hidden; aspect-ratio: 1 / 1; background: var(--hair); }
+  .pc-ph { background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px;
+    box-shadow: none; padding: 5px; position: relative;
+    transition: border-color .12s ease; }
+  .pc-ph:active { border-color: var(--coral); }
+  .pc-ph-in { border-radius: 2px; overflow: hidden; aspect-ratio: 1 / 1; background: var(--hair); }
   .pc-ph-in.wide { aspect-ratio: 16 / 10; }
   .pc-ph-in img { width: 100%; height: 100%; object-fit: cover; display: block;
     opacity: 0; transition: opacity .3s ease-out; -webkit-user-drag: none; }
   .pc-ph-in img.is-loaded { opacity: 1; }
 
-  /* ── THE one constant edit button: same 30px yellow corner tile everywhere ── */
+  /* ── THE one constant edit button: same corner tile on every slot ── */
   .pr-slotbtn { position: absolute; top: 8px; right: 8px; z-index: 5;
     display: flex; align-items: center; justify-content: center; cursor: pointer;
-    width: 30px; height: 30px; background: var(--yellow); border: 1.5px solid var(--ink);
-    border-radius: 9px; color: var(--ink); box-shadow: 2.5px 2.5px 0 var(--ink);
-    transition: transform .08s steps(2), box-shadow .08s steps(2);
+    width: 30px; height: 30px; background: var(--yellow); border: var(--bw) solid var(--ink);
+    border-radius: 4px; color: var(--ink);
+    transition: background .12s ease, color .12s ease;
     -webkit-tap-highlight-color: transparent; }
-  .pr-slotbtn:active { transform: translate(2.5px, 2.5px); box-shadow: 0 0 0 var(--ink); }
+  .pr-slotbtn:active { background: var(--ink); color: var(--paper); }
+  /* inline variant: a flex item at the end of a section head, not a corner
+     tile. Styled as the deck's .pc-iconbtn — flat ink outline, no fill — because
+     there is one of these on most section heads and the filled tan tile at that
+     density turned the column into a ladder of orange blocks. The filled tile
+     stays on cards and photos, where it has a surface to sit on and a single
+     job to advertise. */
+  .pr-slotbtn.inline { position: static; width: 28px; height: 28px; flex-shrink: 0;
+    background: transparent; border-radius: 4px; }
+  .pr-slotbtn.inline:hover { background: var(--yellow); }
+  .pr-slotbtn.inline:active { background: var(--ink); color: var(--paper); }
 
   /* hero variant — same tile, anchored to the hero's top-right */
   .pr-herobtn { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 68px); right: 20px; z-index: 5;
     display: flex; align-items: center; justify-content: center; cursor: pointer;
-    width: 30px; height: 30px; background: var(--yellow); border: 1.5px solid var(--ink);
-    border-radius: 9px; color: var(--ink); box-shadow: 2.5px 2.5px 0 var(--ink);
-    transition: transform .08s steps(2), box-shadow .08s steps(2);
+    width: 30px; height: 30px; background: var(--yellow); border: var(--bw) solid var(--ink);
+    border-radius: 4px; color: var(--ink);
+    transition: background .12s ease, color .12s ease;
     -webkit-tap-highlight-color: transparent; }
-  .pr-herobtn:active { transform: translate(2.5px, 2.5px); box-shadow: 0 0 0 var(--ink); }
+  .pr-herobtn:active { background: var(--ink); color: var(--paper); }
 
-  .pr-empty { width: 100%; height: 100%; border-radius: 9px; border: 2px dashed var(--ink-3);
-    background: var(--hair); display: flex; flex-direction: column; align-items: center;
+  .pr-empty { width: 100%; height: 100%; border-radius: 2px; border: 1px dashed var(--ink-3);
+    background: transparent; display: flex; flex-direction: column; align-items: center;
     justify-content: center; gap: 8px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 
   /* ── upload progress: indeterminate sweep, pinned to the tile's inner edge ──
      fetch() + FormData cannot report upload bytes, so this deliberately does NOT
      show a fake percentage. It signals "in flight" and sweeps until resolve. */
-  .pr-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 5px; z-index: 7;
+  .pr-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; z-index: 7;
     background: var(--hair); overflow: hidden; pointer-events: none;
-    border-radius: 0 0 8px 8px; }
+    border-radius: 0 0 2px 2px; }
   .pr-bar::after { content: ''; position: absolute; inset: 0; width: 45%;
-    background: var(--yellow); border-top: 1px solid var(--ink);
-    border-bottom: 1px solid var(--ink);
+    background: var(--yellow);
     animation: prSweep 1.05s cubic-bezier(.5,0,.5,1) infinite; }
   @keyframes prSweep {
     0%   { transform: translateX(-110%); }
@@ -308,15 +351,15 @@ const PROFILE_CSS = `
      button permanently on every tile. */
   .pr-tray { position: absolute; inset: 0; z-index: 6;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 7px; border-radius: 9px; background: rgba(25,25,25,.62); padding: 6px; }
+    gap: 7px; border-radius: 5px; background: rgba(17,18,17,.72); padding: 6px; }
   .pr-traybtn { display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-    width: 100%; padding: 7px 4px; border-radius: 8px;
-    border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink);
-    box-shadow: 2px 2px 0 var(--ink);
+    width: 100%; padding: 7px 4px; border-radius: 4px;
+    border: var(--bw) solid var(--ink); background: var(--paper); color: var(--ink);
     font-family: ${F.mono}; font-size: 9px; font-weight: 700;
     letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
+    transition: background .12s ease, color .12s ease;
     -webkit-tap-highlight-color: transparent; }
-  .pr-traybtn:active { transform: translate(2px, 2px); box-shadow: 0 0 0 var(--ink); }
+  .pr-traybtn:active { background: var(--ink); color: var(--paper); }
   .pr-traybtn.danger { background: var(--red); color: #fff; }
 
   /* hero tray — anchored to the photo strip, never covered by the sheet */
@@ -329,10 +372,7 @@ const PROFILE_CSS = `
      background with room to spare, so these are scaled up to roughly a 44px
      touch target — the same as the app's other primary controls — which is what
      they were missing on the main photo. */
-  .pr-traybtn.big { padding: 12px 8px; gap: 7px; border-radius: 10px;
-    border-width: 2px; box-shadow: 3px 3px 0 var(--ink);
-    font-size: 11.5px; letter-spacing: .1em; }
-  .pr-traybtn.big:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink); }
+  .pr-traybtn.big { padding: 13px 8px; gap: 7px; border-radius: 5px; font-size: 11px; letter-spacing: .1em; }
   .pr-traybtn.big svg { width: 15px; height: 15px; flex: none; }
 
   /* Wrapper that gives the hero pencil + tray one element to hang the
@@ -354,56 +394,54 @@ const PROFILE_CSS = `
     top: calc(env(safe-area-inset-top, 0px) + 118px); left: 50%;
     z-index: 60; overflow: hidden;
     display: inline-flex; align-items: center; gap: 9px;
-    padding: 9px 14px; background: var(--paper);
-    border: 2px solid var(--ink); border-radius: 999px;
-    box-shadow: 3px 3px 0 var(--ink);
+    padding: 8px 14px; background: var(--paper);
+    border: var(--bw) solid var(--ink); border-radius: 999px;
     font-family: ${F.mono}; font-size: 10px; font-weight: 700;
     letter-spacing: .14em; text-transform: uppercase; color: var(--ink);
     pointer-events: none; }
   .pr-uploadpill::after { content: ''; position: absolute; left: 0; bottom: 0;
-    height: 4px; width: 45%; background: var(--yellow);
-    border-top: 1.5px solid var(--ink);
+    height: 3px; width: 45%; background: var(--yellow);
     animation: prSweep 1.05s cubic-bezier(.5,0,.5,1) infinite; }
 
   .pr-input, .pr-select, .pr-textarea { width: 100%; box-sizing: border-box;
-    padding: 13px 14px; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 11px;
+    padding: 13px 14px; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px;
     font-family: ${F.body}; font-size: 14px; font-weight: 500; color: var(--ink); outline: none; }
   .pr-textarea { resize: none; line-height: 1.55; }
-  .pr-input:focus, .pr-select:focus, .pr-textarea:focus { box-shadow: 3px 3px 0 var(--ink); }
+  .pr-input:focus, .pr-select:focus, .pr-textarea:focus { border-color: var(--coral); }
 
   .pr-chipbtn { padding: 9px 15px; border: var(--bw) solid var(--ink); border-radius: 999px;
     font-family: ${F.mono}; font-size: 11px; font-weight: 700; letter-spacing: .08em;
     text-transform: uppercase; background: var(--card); color: var(--ink); cursor: pointer;
-    transition: none; -webkit-tap-highlight-color: transparent; }
+    transition: background .12s ease, color .12s ease; -webkit-tap-highlight-color: transparent; }
   .pr-chipbtn.on { background: var(--coral); color: #fff; }
   .pr-chipbtn:disabled { opacity: .35; cursor: not-allowed; }
   .pr-chipbtn:active:not(:disabled) { background: var(--ink); color: var(--paper); }
 
   .pr-slam { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
     width: 100%; padding: 14px; background: var(--card); color: var(--ink);
-    border: var(--bw) solid var(--ink); border-radius: 12px; box-shadow: 4px 4px 0 var(--ink);
+    border: var(--bw) solid var(--ink); border-radius: 5px;
     font-family: ${F.mono}; font-size: 12px; font-weight: 700; letter-spacing: .12em;
     text-transform: uppercase; cursor: pointer;
-    transition: transform .08s steps(2), box-shadow .08s steps(2), background .08s steps(2);
+    transition: background .12s ease, color .12s ease;
     -webkit-tap-highlight-color: transparent; }
-  .pr-slam:active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--ink); }
+  .pr-slam:active:not(:disabled) { background: var(--ink); color: var(--paper); }
   .pr-slam.yellow { background: var(--yellow); }
+  .pr-slam.yellow:active:not(:disabled) { background: var(--ink); color: var(--paper); }
   .pr-slam.danger { color: var(--red); }
   /* Save stays visible but inert until something actually changes — that is the
      feedback that tells you the drawer has nothing to commit. */
   .pr-slam:disabled { opacity: .34; cursor: not-allowed; }
-  .pr-slam:disabled:active { transform: none; box-shadow: 4px 4px 0 var(--ink); }
 
   /* ── always-visible "addable" slot ──
      A prompt / bio / interests slot keeps its place on the card whether or not it
      has content, so clearing one never makes the layout jump. Filled slots use the
      real card chrome; empty ones use this dashed frame around the shared .pr-empty,
      so every empty slot in the sheet looks the same however it was reached. */
-  .pc-slot { background: var(--card); border: var(--bw) dashed var(--ink-3);
-    border-radius: var(--r); padding: 6px; position: relative; box-shadow: none; }
+  .pc-slot { background: transparent; border: 1px dashed var(--hair);
+    border-radius: 5px; padding: 5px; position: relative; box-shadow: none; }
   .pc-slot .pr-empty { min-height: 68px; }
 
-  .pc-slotlabel { font-family: ${F.mono}; font-size: 10px; font-weight: 700;
+  .pc-slotlabel { font-family: ${F.mono}; font-size: 9px; font-weight: 700;
     letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); }
 
   /* ── drawer commit bar: sticky, always reachable above the keyboard ── */
@@ -419,15 +457,28 @@ const PROFILE_CSS = `
     transform: translateY(-140%); opacity: 0; pointer-events: none; }
 
   @media (hover: hover) and (pointer: fine) {
-    .pr-slotbtn:hover, .pr-herobtn:hover { filter: brightness(1.05); }
-    .pc-prompt:hover { background: #FFFDF6; }
+    .pr-slotbtn:hover, .pr-herobtn:hover { background: var(--yellow); color: var(--ink); }
+    .pc-prompt:hover { background: #E9E4D8; }
+    .pc-chip:hover { background: rgba(224,161,94,.2); }
+    .pc-chip.acc:hover { background: var(--yellow); }
+    .pc-ph:hover { border-color: var(--coral); }
   }
 
   .pc-sheet:focus-visible, .pr-slotbtn:focus-visible, .pr-herobtn:focus-visible,
-  .pr-prompt:focus-visible { outline: 3px solid var(--yellow); outline-offset: 2px; }
+  .pc-prompt:focus-visible { outline: 2px solid var(--coral); outline-offset: 3px; }
+
+  @media (max-width: 390px) {
+    .pc-sheet { padding-left: 14px; padding-right: 14px; gap: 17px; }
+    .pc-name { font-size: 34px; }
+    .pc-grid { gap: 12px 8px; }
+    .pc-cell { gap: 7px; }
+    .pc-tile { width: 28px; height: 28px; }
+    .pc-cval { font-size: 12px; }
+  }
 
   @media (prefers-reduced-motion: reduce) {
-    .pc-hero, .pc-ph-in img, .pr-slotbtn, .pr-herobtn { transition: none; }
+    .pc-hero, .pc-ph-in img, .pr-slotbtn, .pr-herobtn, .pc-ph,
+    .pc-chip, .pc-prompt, .pr-traybtn, .pr-chipbtn, .pr-slam { transition: none; }
     .pr-bar::after { animation: none; width: 100%; }
     .pr-uploadpill::after { animation: none; width: 100%; }
     [data-deck-header] { transition: none; }
@@ -452,12 +503,20 @@ const FieldCell = ({ icon: Icon, color, label, value }) => (
   </div>
 );
 
-/* plain head — NO edit button here; the button lives on the component itself */
-const SectionHead = ({ mark = 'yellow', count, children }) => (
+/* plain head — the edit button rides inline as a flex item (same slot the deck
+   gives its kebab) rather than floating over the row as an absolute corner
+   tile, which would sit on top of the right-aligned count. Sections whose body
+   is a real .pc-card keep the absolute corner tile instead. */
+const SectionHead = ({ mark = 'yellow', count, onEdit, editLabel, children }) => (
   <div className="pc-shead">
     <span className={`pc-mark ${mark}`} aria-hidden="true" />
     <span className="pc-stitle">{children}</span>
     {count > 0 && <span className="pc-scount">/ {count}</span>}
+    {onEdit && (
+      <button className="pr-slotbtn inline" aria-label={editLabel} title={editLabel} onClick={onEdit}>
+        <Pencil size={12} strokeWidth={2.8} />
+      </button>
+    )}
   </div>
 );
 
@@ -1444,7 +1503,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
 
   if (loading || (!userData && !fetchError)) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#131313' }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#111211' }}>
         <p style={{ fontFamily: F.mono, fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: C.ink3 }}>
           Loading your card…
         </p>
@@ -1467,7 +1526,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
       <div style={{
         flex: 1, display: 'flex', flexDirection: 'column', gap: 16,
         alignItems: 'center', justifyContent: 'center',
-        backgroundColor: '#131313', padding: 24, textAlign: 'center',
+        backgroundColor: '#111211', padding: 24, textAlign: 'center',
       }}>
         <p style={{ fontFamily: F.mono, fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: C.red }}>
           Card unavailable
@@ -1479,8 +1538,8 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
           onClick={fetchProfile}
           className="tactile-btn"
           style={{
-            padding: '10px 20px', borderRadius: 6, cursor: 'pointer',
-            border: `2px solid ${C.ink}`, backgroundColor: C.yellow,
+            padding: '10px 20px', borderRadius: 4, cursor: 'pointer',
+            border: `1px solid ${C.ink}`, backgroundColor: C.yellow,
             color: C.ink, fontFamily: F.mono, fontSize: 11, fontWeight: 700,
             letterSpacing: '.12em', textTransform: 'uppercase',
           }}
@@ -1608,20 +1667,21 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
         <span className="pc-notetext">As others see you</span>
         <div className="pc-grabber" aria-hidden="true" />
 
-        {/* IDENTITY — one edit button */}
+        {/* IDENTITY — one edit button. Age is inline in the name, matching the
+            deck card exactly; the year stays on its own mono line below. */}
         <div ref={idRef} className="pc-id">
           <div className="pc-idrow">
             <div style={{ minWidth: 0 }}>
-              <h2 className="pc-name">{userData.name || 'Anonymous'}</h2>
-              <p className="pc-meta">
-                {userData.age || '—'}<span className="pc-slash">/</span>
-                {userData.year || '—'}
-              </p>
+              <h2 className="pc-name">
+                {userData.name || 'Anonymous'}
+                {userData.age ? <span className="pc-age">, {userData.age}</span> : null}
+              </h2>
             </div>
             <button className="pr-slotbtn" aria-label="Edit basics" title="Edit basics" onClick={() => openEditDrawer({ type: 'identity' })}>
               <Pencil size={13} strokeWidth={2.8} />
             </button>
           </div>
+          <p className="pc-meta">{userData.year || '—'}</p>
         </div>
 
         {/* PROFILE STRENGTH — score lives HERE and nowhere else; not editable */}
@@ -1638,7 +1698,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
                   {isAspirational && <span className="pc-star">✦ </span>}
                   {completion}
                   {isAspirational && (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 6, padding: '3px 8px', background: C.green, border: '1.5px solid var(--ink)', borderRadius: 6, color: C.ink, fontSize: 8.5 }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 6, padding: '3px 8px', background: C.green, border: '1px solid var(--ink)', borderRadius: 4, color: C.ink, fontSize: 8.5 }}>
                       <CheckCircle2 size={10} strokeWidth={3} /> Complete
                     </span>
                   )}
@@ -1670,50 +1730,36 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
         </div>
 
         {/* ABOUT — always present; clearing the bio shows an add-target instead of
-            removing the section and its edit button */}
+            removing the section and its edit button. Bare text, not a card, so it
+            matches the deck. */}
         <div className="pc-sec">
-          <SectionHead mark="green">About</SectionHead>
+          <SectionHead mark="green" onEdit={() => openEditDrawer({ type: 'bio' })} editLabel="Edit about">About</SectionHead>
           {userData.bio ? (
-            <div className="pc-card padded">
-              <p className="pc-bio">{userData.bio}</p>
-              <button className="pr-slotbtn" aria-label="Edit about" title="Edit about" onClick={() => openEditDrawer({ type: 'bio' })}>
-                <Pencil size={13} strokeWidth={2.8} />
-              </button>
-            </div>
+            <p className="pc-bio">{userData.bio}</p>
           ) : (
             <EmptySlot onClick={() => openEditDrawer({ type: 'bio' })} label="Add about you" />
           )}
         </div>
 
-        {/* SEEKING — now a card so it carries its button like everything else */}
+        {/* SEEKING — bare chips, matching the deck */}
         <div className="pc-sec">
-          <SectionHead mark="pink">Seeking</SectionHead>
-          <div className="pc-card padded">
-            <div className="pc-pills">
-              {(userData.intent?.length ? userData.intent : ['Connection']).map((it, i) => (
-                <span key={`${it}-${i}`} className="pc-chip acc">{it}</span>
-              ))}
-            </div>
-            <button className="pr-slotbtn" aria-label="Edit seeking" title="Edit seeking" onClick={() => openEditDrawer({ type: 'intent' })}>
-              <Pencil size={13} strokeWidth={2.8} />
-            </button>
+          <SectionHead mark="pink" onEdit={() => openEditDrawer({ type: 'intent' })} editLabel="Edit seeking">Seeking</SectionHead>
+          <div className="pc-pills">
+            {(userData.intent?.length ? userData.intent : ['Connection']).map((it, i) => (
+              <span key={`${it}-${i}`} className="pc-chip acc">{it}</span>
+            ))}
           </div>
         </div>
 
         {/* INTERESTS — always present; an empty list shows an add-target rather
             than deleting the section (same rule as the prompt slots) */}
         <div className="pc-sec">
-          <SectionHead mark="yellow" count={interests.length}>Interests</SectionHead>
+          <SectionHead mark="yellow" count={interests.length} onEdit={() => openEditDrawer({ type: 'interests' })} editLabel="Edit interests">Interests</SectionHead>
           {interests.length > 0 ? (
-            <div className="pc-card padded">
-              <div className="pc-pills">
-                {interests.map((it, i) => (
-                  <span key={`${it}-${i}`} className="pc-chip">{it}</span>
-                ))}
-              </div>
-              <button className="pr-slotbtn" aria-label="Edit interests" title="Edit interests" onClick={() => openEditDrawer({ type: 'interests' })}>
-                <Pencil size={13} strokeWidth={2.8} />
-              </button>
+            <div className="pc-pills">
+              {interests.map((it, i) => (
+                <span key={`${it}-${i}`} className="pc-chip">{it}</span>
+              ))}
             </div>
           ) : (
             <EmptySlot onClick={() => openEditDrawer({ type: 'interests' })} label="Add interests" />
@@ -1753,13 +1799,13 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
             <motion.div
               initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-              style={{ position: 'fixed', bottom: 0, left: 0, right: 0, height: '80dvh', backgroundColor: C.paper, borderTop: `2px solid ${C.ink}`, borderRadius: '22px 22px 0 0', zIndex: 101, display: 'flex', flexDirection: 'column', boxShadow: '0 -10px 40px rgba(0,0,0,.4)' }}
+              style={{ position: 'fixed', bottom: 0, left: 0, right: 0, height: '80dvh', backgroundColor: C.paper, borderTop: `1px solid ${C.ink}`, borderRadius: '15px 15px 0 0', zIndex: 101, display: 'flex', flexDirection: 'column', boxShadow: '0 -14px 32px rgba(0,0,0,.22)' }}
             >
-              <div style={{ padding: '16px 20px', borderBottom: `2px solid ${C.ink}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontFamily: F.heavy, fontSize: 18, fontWeight: 400, color: C.ink, letterSpacing: '-.01em', textTransform: 'uppercase' }}>
+              <div style={{ padding: '16px 20px', borderBottom: `1px solid ${C.ink}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontFamily: F.heavy, fontSize: 18, fontWeight: 800, color: C.ink, letterSpacing: '-.02em', textTransform: 'uppercase' }}>
                   {drawerConfig.type === 'interests' ? 'Edit interests' : drawerConfig.type === 'intent' ? 'Edit seeking' : drawerConfig.type === 'prompt' ? 'Edit question' : drawerConfig.type === 'vitals' ? 'Edit vitals' : drawerConfig.type === 'identity' ? 'Edit basics' : 'Edit about'}
                 </span>
-                <button onClick={requestCloseDrawer} aria-label="Close editor" style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.card, border: `2px solid ${C.ink}`, borderRadius: 11, boxShadow: `3px 3px 0 ${C.ink}`, cursor: 'pointer', color: C.ink }}>
+                <button onClick={requestCloseDrawer} aria-label="Close editor" style={{ width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: `1px solid ${C.ink}`, borderRadius: 4, cursor: 'pointer', color: C.ink }}>
                   <X size={16} strokeWidth={3} />
                 </button>
               </div>
@@ -1789,7 +1835,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
                       role="switch"
                       aria-checked={!!draft.gapYear}
                       onClick={() => { triggerHaptic('light'); setDraft((d) => ({ ...d, gapYear: !d.gapYear })); }}
-                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '13px 14px', borderRadius: 12, border: '2px solid #191919', background: draft.gapYear ? '#FFD43D' : '#FFFFFF', cursor: 'pointer', fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 600, color: '#191919', boxShadow: '3px 3px 0 #191919' }}
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '13px 14px', borderRadius: 5, border: `1px solid ${C.ink}`, background: draft.gapYear ? C.yellow : C.card, cursor: 'pointer', fontFamily: F.body, fontSize: 14, fontWeight: 600, color: C.ink }}
                     >
                       <span>I'm on a gap year</span>
                       <span aria-hidden="true">{draft.gapYear ? 'ON' : 'OFF'}</span>
@@ -1830,13 +1876,13 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
                   </span>
                   <span style={{
                     width: 46, height: 26, flexShrink: 0, borderRadius: 999,
-                    border: `2px solid ${C.ink}`, position: 'relative',
+                    border: `1px solid ${C.ink}`, position: 'relative',
                     background: userData.showCollege !== false ? C.yellow : C.hair,
                   }}>
                     <span style={{
-                      position: 'absolute', top: 2, left: userData.showCollege !== false ? 22 : 2,
+                      position: 'absolute', top: 3, left: userData.showCollege !== false ? 23 : 3,
                       width: 18, height: 18, borderRadius: '50%', background: C.card,
-                      border: `2px solid ${C.ink}`, boxSizing: 'border-box',
+                      border: `1px solid ${C.ink}`, boxSizing: 'border-box',
                       transition: 'left 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
                     }} />
                   </span>
@@ -1859,7 +1905,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
                         <button
                           key={i}
                           className={`pr-chipbtn${draft.question === promptText ? ' on' : ''}`}
-                          style={{ borderRadius: 11, textAlign: 'left', textTransform: 'none', fontFamily: F.body, fontSize: 13.5, fontWeight: 600, letterSpacing: 0 }}
+                          style={{ borderRadius: 4, textAlign: 'left', textTransform: 'none', fontFamily: F.body, fontSize: 13.5, fontWeight: 600, letterSpacing: 0 }}
                           onClick={() => {
                             setDraft((d) => {
                               if (d.question === promptText) return d;

@@ -1,7 +1,7 @@
 # Matchalize — Full Codebase Dump
 
 > Verbatim contents of all project source and configuration files.
-> Generated 2026-10-09 14:03.
+> Generated 2026-10-17 20:14.
 > Identical content to dumps/ -- kept as one file for grep and for tools without an attachment limit.
 > Matchalize is an INTRA + INTER college network for all the colleges of India: users connect within their own campus (intra) AND across campuses (inter). Every user signs in via their own college academic email system (`.ac.in`), making each campus a private, verified community.
 
@@ -208,15 +208,22 @@ dist-ssr
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <meta name="theme-color" content="#fdfbf7" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <!-- Initial chrome colour, replaced per-screen at runtime by utils/chrome.js.
+         Defaults to the Deck's night desk so there is no white flash on first paint. -->
+    <meta name="theme-color" content="#131313" />
+    <!-- black-translucent (not "default"): this is what lets the page's own
+         background paint UNDER the iOS status bar. With "default" iOS draws an
+         opaque bar and the top edge can never match the screen below it, which
+         is the seam this whole mechanism exists to hide. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="apple-touch-icon" href="/icons/icon-192.png" />
     <link rel="manifest" href="/manifest.json" />
     
-    <!-- Vintage Story Fonts -->
+    <!-- Neo-Brutalist Type System: Archivo Black (display) · Inter (body) · Space Mono (labels) · Caveat (hand).
+         Playfair/Special Elite/Dancing Script remain only until the last sunlit screens are converted. -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Special+Elite&family=Inter:wght@400;500;600;700&family=Archivo+Black&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Caveat:wght@700&family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Special+Elite&family=Dancing+Script:wght@700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=block" />
     
     <title>Matchalize — Your Campus. Your Story.</title>
@@ -713,6 +720,7 @@ import {
   PRONOUNS_OPTIONS, INTEREST_ICONS, INTEREST_ICON_FALLBACKS, APP_CONSTANTS,
 } from '../config/appData.js';
 import { LADDER } from '../utils/ladder.js';
+import { collegeGateFilter } from '../utils/campusGate.js';
 import College from '../models/College.js';
 
 const router = express.Router();
@@ -735,7 +743,12 @@ router.get('/', async (req, res) => {
     //
     // Only ACTIVE colleges: deactivating one removes it from signup immediately,
     // while students who already verified through it are untouched.
-    const colleges = await College.find({ active: true }).sort({ name: 1 }).lean();
+    //
+    // AND only gated-in ones. A campus outside ALLOWED_COLLEGES cannot sign up
+    // (routes/auth.js resolveCollege refuses it), so listing it here would show
+    // a student a selectable option that is guaranteed to fail at the email
+    // step — the worst place to discover a closed door.
+    const colleges = await College.find({ active: true, ...collegeGateFilter() }).sort({ name: 1 }).lean();
     const collegeList = colleges.map((c) => ({
       code: c.code,
       name: c.name,
@@ -1357,25 +1370,12 @@ import NotificationDrawer from './NotificationDrawer';
 import { Bell, Settings } from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
 import { DECK_BTN, deckRowStyle } from '../utils/deckChrome';
+import neu from '../styles/neu';
 
-/* Locked tokens — neubrutalism, same family as ProfileCard / NavBar */
-const t = {
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  red: '#E5484D',
-  fontHand: "'Caveat', 'Segoe Script', cursive",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-};
+/* Locked tokens — the shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
 
 const HEADER_CSS = `
-  @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Space+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap');
-
   .hd-btn { position: relative; width: ${DECK_BTN}px; height: ${DECK_BTN}px; flex-shrink: 0;
     display: flex; align-items: center; justify-content: center; cursor: pointer;
     border: 2px solid ${t.ink}; border-radius: 13px;
@@ -1612,23 +1612,47 @@ export default Header;
 ### ./client/src/components/ProfileCard.jsx
 
 ```
+
 import React, {
   useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef,
 } from 'react';
 import {
-  AnimatePresence, motion, useMotionValue, useTransform, animate, useReducedMotion, useMotionValueEvent,
+  AnimatePresence, motion, useMotionValue, useTransform, animate,
+  useReducedMotion, useMotionValueEvent,
 } from 'framer-motion';
 import PopoutItem from './PopoutItem';
 import ReportModal from './chat/ReportModal';
 import { triggerHaptic } from '../utils/haptics';
 import { toast } from '../utils/toast';
-import {
-  Sparkle, MoreVertical, Calendar, Flag,
-} from 'lucide-react';
+import { Sparkle, MoreVertical, Calendar, Flag } from 'lucide-react';
+import neu from '../styles/neu';
 
-/* ───────────────────────── constants ───────────────────────── */
+/* Neubrutalist palette inspired by the supplied reference; existing neu tokens keep their names. */
+const F = {
+  heavy: "'Barlow Condensed', sans-serif",
+  body: "'Space Grotesk', sans-serif",
+  mono: "'IBM Plex Mono', monospace",
+};
 
-const FALLBACK_IMG = 'https://placehold.co/600x800/fff3dc/191919?text=%C2%B7';
+const C = {
+  ...neu,
+  ink: '#171414',
+  ink2: '#393130',
+  ink3: '#6E6160',
+  paper: '#FFF9F4',
+  card: '#FFFCF8',
+  desk: '#FFF9F4',
+  yellow: '#FFE76A',
+  coral: '#FF7399',
+  green: '#B8F0C7',
+  pink: '#C8A7FF',
+  red: '#D9485D',
+  hair: '#171414',
+  line: 'rgba(23, 20, 20, .22)',
+};
+
+const FALLBACK_IMG =
+  'https://placehold.co/600x800/fff3dc/191919?text=%C2%B7';
 
 const RUBBER = 0.3;
 const MOMENTUM_MS = 240;
@@ -1637,50 +1661,21 @@ const TOP_GAP = 16;
 const BOTTOM_GAP = 16;
 const PEEK_PAD = 10;
 const PEEK_FALLBACK = 148;
-
-/* Header duck: see the note on the trigger measurement below. */
 const HEADER_LEAD = 12;
 const HEADER_RELEASE = 8;
-
-/* Used only if [data-deck-header] cannot be found: DECK_TOP (12) + DECK_BTN (42). */
 const HEADER_FALLBACK_BOTTOM = 54;
-
-/* How far the sheet lifts when the ⋮ opens the report row — enough to clear
-   the 48px row plus its margin, never the full travel to the top. */
 const MENU_RAISE = 84;
 
-
-const F = {
-  heavy: "'Archivo Black', 'Arial Black', sans-serif",
-  body: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  mono: "'Space Mono', 'Courier New', monospace",
-};
-
-/* the candy box — warm, harmonized, from the references */
-const C = {
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  pink: '#FFA3C6',
-  red: '#E5484D',
-};
-
-/* vitals icon tiles cycle through these */
 const TILE = ['coral', 'yellow', 'green', 'pink'];
-
 const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
 
-/* ───────────────────────── styles ─────────────────────────
-   Fonts (Archivo Black / Space Mono / Inter) are loaded once in index.html,
-   so there is no @import here — a late swap would reflow the whole card. */
-
+/* Design-only stylesheet. Gesture geometry and React behavior remain intact. */
 const PROFILE_CARD_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+  /* Match the device safe area to the cream header/canvas; keep blush as an accent only. */
+  html, body, #root { background-color: #FFF9F4 !important; }
+
   .pc-root {
     --paper: ${C.paper};
     --card: ${C.card};
@@ -1694,171 +1689,450 @@ const PROFILE_CARD_CSS = `
     --pink: ${C.pink};
     --red: ${C.red};
     --bw: 2px;
-    --r: 14px;
+    --r: 16px;
     --ease: cubic-bezier(.2,0,0,1);
 
-    position: relative; width: 100%; height: 100%; overflow: hidden;
-    background: #131313;
-    font-family: ${F.body}; color: var(--ink);
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #FFF9F4;
+    font-family: ${F.body};
+    color: var(--ink);
     -webkit-font-smoothing: antialiased;
   }
+
+  .pc-root::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    opacity: 0;
+    background: none;
+  }
+
   .pc-root ::selection { background: var(--yellow); color: var(--ink); }
 
-  /* ════ PHOTO — natural, full-bleed. Functional scrim only. ════ */
-  .pc-heroWrap { position: absolute; inset: 0; z-index: 0; transform-origin: 50% 30%; will-change: transform; }
-  .pc-hero { width: 100%; height: 100%; object-fit: cover; display: block;
-    opacity: 0; transition: opacity .4s ease-out; -webkit-user-drag: none; }
-  .pc-hero.is-loaded { opacity: 1; }
-  .pc-shade { position: absolute; inset: 0; pointer-events: none;
-    background: linear-gradient(to top, rgba(15,13,10,.4) 0%, rgba(15,13,10,.08) 42%, rgba(15,13,10,.18) 100%); }
+  /* Keep the user's photography full-bleed; the structured sheet supplies the graphic frame. */
+  .pc-heroWrap {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    transform-origin: 50% 30%;
+    will-change: transform;
+  }
 
-  /* ════ THE SHEET — cream, chunky border, ONE big shadow, rounded ════ */
-  .pc-sheet { position: absolute; left: ${SIDE_MARGIN}px; right: ${SIDE_MARGIN}px; top: 0; z-index: 30;
-    background: var(--paper); border: var(--bw) solid var(--ink); border-radius: 22px;
-    box-shadow: 8px 8px 0 var(--ink);
-    touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
-    padding: 14px 20px calc(28px + env(safe-area-inset-bottom));
-    display: flex; flex-direction: column; gap: 22px; will-change: transform; }
+  .pc-hero {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    opacity: 0;
+    transition: opacity .35s ease-out;
+    -webkit-user-drag: none;
+  }
+
+  .pc-hero.is-loaded { opacity: 1; }
+
+  .pc-shade {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(to top, rgba(23,20,20,.54) 0%, rgba(23,20,20,.07) 45%, rgba(23,20,20,.13) 100%);
+  }
+
+  /* Cream paper panel, ink outline and crisp offset shadow. */
+  .pc-sheet {
+    position: absolute;
+    left: ${SIDE_MARGIN}px;
+    right: ${SIDE_MARGIN}px;
+    top: 0;
+    z-index: 30;
+    background: var(--paper);
+    border: 2px solid var(--ink);
+    border-radius: 24px 24px 14px 14px;
+    box-shadow: 6px 6px 0 var(--ink);
+    touch-action: none;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    padding: 12px 18px calc(26px + env(safe-area-inset-bottom));
+    display: flex;
+    flex-direction: column;
+    gap: 19px;
+    will-change: transform;
+  }
+
   .pc-sheet:active { cursor: grabbing; }
   .pc-sheet img { -webkit-user-drag: none; }
 
-  /* grabber — ink at rest, yellow while you hold the sheet */
-  .pc-grabber { width: 48px; height: 6px; border-radius: 999px; margin: 0 auto; flex-shrink: 0;
-    background: var(--ink); transition: none; }
-  .pc-sheet:active .pc-grabber { background: var(--yellow); }
+  .pc-grabber {
+    width: 42px;
+    height: 5px;
+    border-radius: 999px;
+    margin: 0 auto;
+    flex-shrink: 0;
+    background: var(--ink);
+    transition: none;
+  }
 
-  /* ════ IDENTITY — the peek poster: name with age beside it ════ */
+  .pc-sheet:active .pc-grabber { background: var(--coral); }
+
   .pc-id { position: relative; }
-  .pc-idrow { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-  .pc-name { font-family: ${F.heavy}; font-size: 34px; font-weight: 400; letter-spacing: -.01em;
-    line-height: 1.08; color: var(--ink); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    background-image: linear-gradient(180deg, transparent 58%, var(--yellow) 58%);
-    padding: 0 6px 3px 0; }
-  /* the ", 21" — same line as the name, quieter type so the name leads */
-  .pc-age { font-family: ${F.body}; font-weight: 600; font-size: .72em;
-    letter-spacing: 0; color: var(--ink-2); }
 
-  /* Campus — its own full-width line BELOW the ⋮ row. Inside the row it shared
-     space with the 42px button and every long college name was ellipsised
-     down; as a block under the row it gets the whole sheet width. */
-  .pc-college { font-family: ${F.mono}; font-size: 10.5px; font-weight: 700;
-    letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2);
-    margin: 8px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* Distance band sits under the campus name, de-emphasised so it reads as
-     context rather than a headline. Not uppercase — the labels are sentences
-     ("In your area") and shouting them looks wrong. */
-  .pc-distance { color: var(--ink-3); text-transform: none; letter-spacing: .01em;
-    font-weight: 600; margin-top: 3px; }
+  .pc-idrow {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+  }
 
-  /* ⋮ — clean white utility button (yellow is reserved for the undo timer) */
-  .pc-iconbtn { width: 42px; height: 42px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
-    cursor: pointer; border: var(--bw) solid var(--ink); border-radius: 12px;
-    background: var(--card); color: var(--ink);
-    box-shadow: 4px 4px 0 var(--ink);
-    transition: transform .08s steps(2), box-shadow .08s steps(2), background .08s steps(2); }
-  .pc-iconbtn:active, .pc-iconbtn.pressed {
-    transform: translate(4px, 4px); box-shadow: 0 0 0 var(--ink);
-    background: var(--ink); color: var(--paper); }
+  .pc-name {
+    font-family: ${F.heavy};
+    font-size: 39px;
+    font-weight: 800;
+    letter-spacing: -.035em;
+    line-height: .94;
+    color: var(--ink);
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    background-image: linear-gradient(180deg, transparent 78%, var(--yellow) 78%);
+    padding: 0 6px 5px 0;
+  }
 
-  /* report — inline row, hairlines, red */
-  .pc-menurow { border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair); overflow: hidden; }
-  .pc-menubtn { display: flex; align-items: center; gap: 10px; width: 100%; height: 48px; padding: 0 4px;
-    background: none; border: none; cursor: pointer; border-radius: 8px;
-    font-family: ${F.mono}; font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
-    color: var(--red); transition: none; }
-  .pc-menubtn:active { background: var(--red); color: #fff; }
+  .pc-age {
+    font-family: ${F.body};
+    font-weight: 700;
+    font-size: .65em;
+    letter-spacing: 0;
+    color: var(--ink-2);
+  }
 
-  /* ════ SECTION HEADS — colored marker square + bold mono label ════ */
+  .pc-college {
+    font-family: ${F.mono};
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .075em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    margin: 10px 0 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.6;
+  }
+
+  .pc-distance {
+    color: var(--ink-3);
+    text-transform: none;
+    letter-spacing: .01em;
+    font-weight: 600;
+    margin-top: 3px;
+  }
+
+  .pc-iconbtn {
+    width: 39px;
+    height: 39px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    border: 2px solid var(--ink);
+    border-radius: 12px;
+    background: var(--card);
+    color: var(--ink);
+    box-shadow: 3px 3px 0 var(--ink);
+    transition: background .14s ease, color .14s ease, box-shadow .14s ease, transform .14s ease;
+  }
+
+  .pc-iconbtn:active,
+  .pc-iconbtn.pressed {
+    background: var(--yellow);
+    color: var(--ink);
+    box-shadow: 1px 1px 0 var(--ink);
+    transform: translate(2px, 2px);
+  }
+
+  .pc-menurow {
+    border-top: 2px solid var(--ink);
+    border-bottom: 2px solid var(--ink);
+    overflow: hidden;
+    background: var(--card);
+  }
+
+  .pc-menubtn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    height: 47px;
+    padding: 0 8px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    border-radius: 8px;
+    font-family: ${F.mono};
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--red);
+    transition: background .14s ease, color .14s ease, padding-left .14s ease;
+  }
+
+  .pc-menubtn:active { background: #FFE4E5; color: var(--red); }
+
   .pc-sec { display: flex; flex-direction: column; flex-shrink: 0; }
-  .pc-shead { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
-  .pc-mark { width: 11px; height: 11px; flex-shrink: 0; border: var(--bw) solid var(--ink); border-radius: 3px; }
+
+  .pc-shead {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0 0 12px;
+    padding-bottom: 8px;
+    border-bottom: 1.5px solid var(--ink);
+  }
+
+  .pc-mark {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+    border: 2px solid var(--ink);
+    border-radius: 3px;
+  }
+
   .pc-mark.yellow { background: var(--yellow); }
   .pc-mark.coral { background: var(--coral); }
   .pc-mark.green { background: var(--green); }
   .pc-mark.pink { background: var(--pink); }
-  .pc-stitle { font-family: ${F.mono}; font-size: 12px; font-weight: 700; letter-spacing: .18em;
-    text-transform: uppercase; color: var(--ink); }
-  .pc-scount { font-family: ${F.mono}; font-size: 10px; font-weight: 400; color: var(--ink-3);
-    font-variant-numeric: tabular-nums; }
 
-  /* ════ CARDS — white on cream, 2px border, 5px shadow ════ */
-  .pc-card { background: var(--card); border: var(--bw) solid var(--ink); border-radius: var(--r);
-    box-shadow: 5px 5px 0 var(--ink); position: relative; }
-  .pc-card.padded { padding: 16px; }
+  .pc-stitle {
+    font-family: ${F.mono};
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink);
+  }
 
-  /* ════ VITALS ════ */
-  .pc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; }
-  .pc-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .pc-tile { width: 34px; height: 34px; flex-shrink: 0; border: var(--bw) solid var(--ink); border-radius: 10px;
-    display: flex; align-items: center; justify-content: center; color: var(--ink); }
+  .pc-scount {
+    margin-left: auto;
+    font-family: ${F.mono};
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pc-card {
+    background: var(--card);
+    border: 2px solid var(--ink);
+    border-radius: 16px;
+    box-shadow: 4px 4px 0 var(--ink);
+    position: relative;
+  }
+
+  .pc-card.padded { padding: 15px; }
+
+  .pc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px 12px; }
+
+  .pc-cell { display: flex; align-items: center; gap: 9px; min-width: 0; }
+
+  .pc-tile {
+    width: 31px;
+    height: 31px;
+    flex-shrink: 0;
+    border: 2px solid var(--ink);
+    border-radius: 9px;
+    box-shadow: 2px 2px 0 var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink);
+  }
+
   .pc-tile.yellow { background: var(--yellow); }
   .pc-tile.coral { background: var(--coral); }
   .pc-tile.green { background: var(--green); }
   .pc-tile.pink { background: var(--pink); }
+
   .pc-cellinfo { min-width: 0; }
-  .pc-clabel { font-family: ${F.mono}; font-size: 9px; font-weight: 700; letter-spacing: .16em;
-    text-transform: uppercase; color: var(--ink-3); }
-  .pc-cval { font-size: 14px; font-weight: 700; color: var(--ink); margin-top: 2px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 
-  /* ════ ABOUT ════ */
-  .pc-bio { font-size: 15px; font-weight: 500; line-height: 1.65; color: var(--ink-2);
-    margin: 0; word-break: break-word; text-wrap: pretty; }
+  .pc-clabel {
+    font-family: ${F.mono};
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
 
-  /* ════ CHIPS ════ */
+  .pc-cval {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ink);
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pc-bio {
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.7;
+    color: var(--ink-2);
+    margin: 0;
+    word-break: break-word;
+    text-wrap: pretty;
+  }
+
   .pc-pills { display: flex; flex-wrap: wrap; gap: 9px; }
-  .pc-chip { display: inline-block; padding: 8px 15px; border: var(--bw) solid var(--ink); border-radius: 999px;
-    font-family: ${F.mono}; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
-    background: var(--card); color: var(--ink); transition: none; }
+
+  .pc-chip {
+    display: inline-block;
+    padding: 7px 11px;
+    border: 2px solid var(--ink);
+    border-radius: 10px;
+    font-family: ${F.mono};
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .055em;
+    text-transform: uppercase;
+    background: var(--card);
+    color: var(--ink);
+    box-shadow: 3px 3px 0 var(--ink);
+    transition: background .14s ease, color .14s ease, box-shadow .14s ease, transform .14s ease;
+  }
+
   .pc-chip.acc { background: var(--yellow); }
-  .pc-chip:active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 
-  /* ════ PROMPTS ════
-     Question is the setup, answer is the payoff — so the ANSWER carries the type
-     weight (17px/700 ink) and the question recedes to a small mono caption. */
-  .pc-prompt { padding: 14px 16px; cursor: pointer; transition: none; }
-  .pc-promptq { font-family: ${F.mono}; font-size: 11.5px; font-weight: 700; line-height: 1.55;
-    color: var(--ink-3); margin: 0 0 8px; word-break: break-word; transition: none; }
-  .pc-prompta { font-size: 17px; font-weight: 700; line-height: 1.5; color: var(--ink);
-    margin: 0; word-break: break-word; overflow-wrap: anywhere; text-wrap: pretty;
-    transition: none; }
-  .pc-prompt:active { background: var(--ink); border-color: var(--ink); }
-  .pc-prompt:active .pc-prompta { color: var(--paper); }
-  .pc-prompt:active .pc-promptq { color: rgba(255,249,236,.55); }
+  .pc-chip:active {
+    background: var(--pink);
+    color: var(--ink);
+    border-color: var(--ink);
+    box-shadow: 1px 1px 0 var(--ink);
+    transform: translate(2px, 2px);
+  }
 
-  /* ════ PHOTOS ════ */
-  .pc-ph { background: var(--card); border: var(--bw) solid var(--ink); border-radius: var(--r);
-    box-shadow: 4px 4px 0 var(--ink); padding: 6px;
-    transition: transform .08s steps(2), box-shadow .08s steps(2); }
-  .pc-ph:active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--ink); }
-  .pc-ph-in { border-radius: 9px; overflow: hidden; aspect-ratio: 1 / 1; background: var(--hair); }
+  .pc-prompt {
+    padding: 15px;
+    cursor: pointer;
+    background: var(--card);
+    transition: background .14s ease, box-shadow .14s ease, transform .14s ease;
+  }
+
+  .pc-promptq {
+    font-family: ${F.mono};
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.6;
+    letter-spacing: .025em;
+    color: var(--ink-3);
+    margin: 0 0 8px;
+    word-break: break-word;
+  }
+
+  .pc-prompta {
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.5;
+    color: var(--ink);
+    margin: 0;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    text-wrap: pretty;
+  }
+
+  .pc-prompt:active {
+    background: #FFF0C0;
+    border-color: var(--ink);
+    box-shadow: 1px 1px 0 var(--ink);
+    transform: translate(2px, 2px);
+  }
+
+  .pc-ph {
+    background: var(--card);
+    border: 2px solid var(--ink);
+    border-radius: 15px;
+    box-shadow: 4px 4px 0 var(--ink);
+    padding: 5px;
+    transition: border-color .14s ease, box-shadow .14s ease, transform .14s ease;
+  }
+
+  .pc-ph:active { box-shadow: 1px 1px 0 var(--ink); transform: translate(2px, 2px); }
+
+  .pc-ph-in {
+    border-radius: 10px;
+    overflow: hidden;
+    aspect-ratio: 1 / 1;
+    background: #FFE4E5;
+  }
+
   .pc-ph-in.wide { aspect-ratio: 16 / 10; }
-  .pc-ph-in img { width: 100%; height: 100%; object-fit: cover; display: block;
-    opacity: 0; transition: opacity .3s ease-out; -webkit-user-drag: none; }
+
+  .pc-ph-in img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    opacity: 0;
+    transition: opacity .3s ease-out;
+    -webkit-user-drag: none;
+  }
+
   .pc-ph-in img.is-loaded { opacity: 1; }
 
   @media (hover: hover) and (pointer: fine) {
-    .pc-iconbtn:hover { filter: brightness(1.04); }
-    .pc-iconbtn.pressed:hover { filter: none; }
-    .pc-menubtn:hover { background: rgba(229,72,77,.08); }
-    .pc-chip:hover { background: #FFF3D6; }
-    .pc-chip.acc:hover { background: #FFCE1F; }
-    .pc-prompt:hover { background: #FFFDF6; }
+    .pc-iconbtn:hover {
+      background: var(--pink);
+      box-shadow: 5px 5px 0 var(--ink);
+      transform: translate(-2px, -2px);
+    }
+
+    .pc-iconbtn.pressed:hover { background: var(--yellow); }
+    .pc-menubtn:hover { background: #FFE4E5; padding-left: 12px; }
+    .pc-chip:hover { background: var(--pink); }
+    .pc-chip.acc:hover { background: var(--yellow); }
+    .pc-prompt:hover { background: #FFF0C0; box-shadow: 6px 6px 0 var(--ink); transform: translate(-2px, -2px); }
+    .pc-ph:hover { box-shadow: 6px 6px 0 var(--ink); transform: translate(-2px, -2px); }
   }
 
-  .pc-sheet:focus-visible, .pc-iconbtn:focus-visible, .pc-menubtn:focus-visible {
-    outline: 3px solid var(--yellow); outline-offset: 2px; }
+  .pc-sheet:focus-visible,
+  .pc-iconbtn:focus-visible,
+  .pc-menubtn:focus-visible,
+  .pc-chip:focus-visible,
+  .pc-prompt:focus-visible,
+  .pc-ph:focus-visible {
+    outline: 3px solid var(--yellow);
+    outline-offset: 3px;
+  }
+
+  @media (max-width: 390px) {
+    .pc-sheet { padding-left: 14px; padding-right: 14px; gap: 17px; }
+    .pc-name { font-size: 34px; }
+    .pc-grid { gap: 12px 8px; }
+    .pc-cell { gap: 7px; }
+    .pc-tile { width: 28px; height: 28px; }
+    .pc-cval { font-size: 12px; }
+  }
 
   @media (prefers-reduced-motion: reduce) {
-    .pc-hero, .pc-ph-in img, .pc-iconbtn, .pc-ph { transition: none; }
+    .pc-hero, .pc-ph-in img, .pc-iconbtn, .pc-chip, .pc-prompt, .pc-ph { transition: none !important; }
   }
 `;
 
-/* ───────────────────────── small pieces ───────────────────────── */
-
 const FieldCell = ({ icon: Icon, color, label, value }) => (
   <div className="pc-cell">
-    <span className={`pc-tile ${color}`}><Icon size={16} strokeWidth={2.4} /></span>
+    <span className={`pc-tile ${color}`}>
+      <Icon size={15} strokeWidth={2.1} />
+    </span>
     <span className="pc-cellinfo">
       <span className="pc-clabel" style={{ display: 'block' }}>{label}</span>
       <span className="pc-cval" style={{ display: 'block' }}>{value}</span>
@@ -1874,7 +2148,6 @@ const SectionHead = ({ mark = 'yellow', children, count }) => (
   </div>
 );
 
-
 const PhotoTile = ({ src, wide = false }) => (
   <div className="pc-ph">
     <div className={`pc-ph-in${wide ? ' wide' : ''}`}>
@@ -1887,7 +2160,10 @@ const PhotoTile = ({ src, wide = false }) => (
         onLoad={(e) => e.currentTarget.classList.add('is-loaded')}
         onError={(e) => {
           const img = e.currentTarget;
-          if (img.dataset.err) { img.classList.add('is-loaded'); return; }
+          if (img.dataset.err) {
+            img.classList.add('is-loaded');
+            return;
+          }
           img.dataset.err = '1';
           img.src = FALLBACK_IMG;
         }}
@@ -1896,9 +2172,12 @@ const PhotoTile = ({ src, wide = false }) => (
   </div>
 );
 
-/* ───────────────────────── main card ───────────────────────── */
-
-const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = false }) => {
+const ProfileCard = ({
+  profile = {},
+  onAction,
+  onSheetNearHeader,
+  isGated = false,
+}) => {
   const rootRef = useRef(null);
   const sheetRef = useRef(null);
   const menuBtnRef = useRef(null);
@@ -1910,81 +2189,42 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
     sheetRef.current = node;
   }, []);
 
-  /* ── derived data ── */
-  /* The target's own intent chips, for the SEEKING section — the last thing
-     this memo was for.
+  const profileIntent = useMemo(
+    () => (Array.isArray(profile.intent) ? profile.intent : [profile.intent].filter(Boolean)),
+    [profile],
+  );
 
-     It also used to derive the compatibility percentage and the shared-interest
-     / shared-intent overlap that rendered as an "In common" list. All gone. Worth
-     recording why the overlap was itself a latent bug: it intersected the
-     target's interests with YOUR OWN profile read from
-     `localStorage.matchalize_user`, which is written once at login. So it
-     silently disagreed with server data from the moment you edited anything —
-     the same stale-localStorage class of defect as the score it sat beneath.
-     Nothing on this card compares your profile against the viewer's now. */
-  const profileIntent = useMemo(() => (
-    Array.isArray(profile.intent) ? profile.intent : [profile.intent].filter(Boolean)
-  ), [profile]);
-
-  /* ── geometry ── */
   const [rootH, setRootH] = useState(0);
   const [sheetH, setSheetH] = useState(0);
   const rootHRef = useRef(0);
   const sheetHRef = useRef(0);
   const entranceTimer = useRef(null);
-  const entranceUntil = useRef(0);        // timestamp: re-clamp stays off until here
-  const entranceDoneFor = useRef(null);    // profile id whose entrance has run
-
-  /* Declared up here on purpose: the reset-per-profile effect below lists it in
-     a dependency array, and dep arrays are evaluated during render — declaring
-     it after that effect throws "Cannot access before initialization". */
-  const cancelEntrance = useCallback(() => {
-    if (entranceTimer.current) { clearTimeout(entranceTimer.current); entranceTimer.current = null; }
-    entranceUntil.current = 0;
-  }, []);
+  const entranceUntil = useRef(0);
+  const entranceDoneFor = useRef(null);
   const peekHRef = useRef(0);
 
-  /* The sheet is content-sized, so it is taller than the screen and its own
-     translation is the scroll: `lo` is the fully-raised position (whole card
-     readable). `hi` is the rest position: the identity block — grabber, name
-     and age, and the campus line — pokes above the bottom edge, measured live
-     off the identity element. Only a sheet SHORTER THAN THAT PEEK rests fully
-     visible. The sheet never auto-returns here; it only goes down when the
-     user swipes it down. */
+  const cancelEntrance = useCallback(() => {
+    if (entranceTimer.current) {
+      clearTimeout(entranceTimer.current);
+      entranceTimer.current = null;
+    }
+    entranceUntil.current = 0;
+  }, []);
+
   const computeBounds = (h, w) => {
     if (!h || !w) return { lo: 0, hi: 0, ready: false, short: true };
+
     const lo = Math.min(TOP_GAP, h - BOTTOM_GAP - w);
     const peek = peekHRef.current || PEEK_FALLBACK;
-
-    /* `short` means "the whole sheet is shorter than the peek we'd otherwise
-       show", i.e. peeking would reveal nothing beyond it — so show all of it.
-
-       This used to be `w <= h - BOTTOM_GAP - TOP_GAP`, which asks a completely
-       different question: "is the sheet smaller than the SCREEN". That is true
-       of nearly every card (720px of available height on a 752px stage), so
-       almost every card took the show-everything branch and rested at
-       `h - BOTTOM_GAP - w` instead of at the peek.
-
-       The visible damage was largest on exactly the profiles with the least
-       content. Measured on a 420×820 viewport: a 473px sheet (a 45-score
-       profile) rested at 263px, leaving the profile photo 35% of the card —
-       the sheet parked across the middle of the screen with the face behind it.
-       The same card under the corrected test rests at 618px and shows 82%, and
-       a 1392px sheet (a 95-score profile) was never affected because it exceeds
-       the old 720px threshold anyway.
-
-       The threshold has to be `peek`, because `peek` is the height the rest
-       position is trying to reveal. Any other comparison makes "rest" mean
-       something different from what the comment above describes. */
     const short = w <= peek;
     const hi = Math.max(lo, h - BOTTOM_GAP - (short ? w : peek));
+
     return { lo, hi, ready: true, short };
   };
 
   const boundsRef = useRef({ lo: 0, hi: 0, ready: false });
   boundsRef.current = computeBounds(rootH, sheetH);
 
-  /* ── motion values ── */
   const yMV = useMotionValue(0);
 
   const photoScale = useTransform(yMV, (y) => {
@@ -1993,6 +2233,7 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
     const p = clamp((hi - y) / (hi - lo), 0, 1);
     return 1 + 0.06 * p;
   });
+
   const photoOpacity = useTransform(yMV, (y) => {
     const { lo, hi, ready } = boundsRef.current;
     if (!ready || hi <= lo) return 1;
@@ -2000,57 +2241,74 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
     return 1 - 0.4 * p;
   });
 
-  /* ── entrance ──
-     Opacity + scale only. This animated `filter: blur(12px) → 0` across a
-     full-bleed photo on every card swipe, re-rasterising a screen-sized layer
-     per frame — the heaviest thing in the whole deck. Removing the blur leaves
-     both properties compositor-only, so the swipe stays on the GPU. */
   const entranceOpacity = useMotionValue(0);
   const entranceScale = useTransform(entranceOpacity, [0, 1], [0.92, 1]);
+
   const combinedPhotoOpacity = useTransform(
     [entranceOpacity, photoOpacity],
-    ([entrance, drag]) => entrance * drag
-  );
-  const combinedPhotoScale = useTransform(
-    [entranceScale, photoScale],
-    ([entrance, drag]) => entrance * drag
+    ([entrance, drag]) => entrance * drag,
   );
 
-  /* ── glide helpers ── */
+  const combinedPhotoScale = useTransform(
+    [entranceScale, photoScale],
+    ([entrance, drag]) => entrance * drag,
+  );
+
   const reduceMotion = useReducedMotion();
   const SPRING = useRef(null);
+
   SPRING.current = reduceMotion
-    ? { glide: { duration: 0 }, bounce: { duration: 0 }, wheel: { duration: 0 } }
+    ? {
+        glide: { duration: 0 },
+        bounce: { duration: 0 },
+        wheel: { duration: 0 },
+      }
     : {
         glide: { type: 'spring', stiffness: 170, damping: 30 },
         bounce: { type: 'spring', stiffness: 380, damping: 32 },
         wheel: { duration: 0.25, ease: 'easeOut' },
       };
+
   const glideControls = useRef(null);
+
   const stopGlide = () => {
-    if (glideControls.current) { glideControls.current.stop(); glideControls.current = null; }
-  };
-  const glideTo = (target, kind) => {
-    stopGlide();
-    glideControls.current = animate(yMV, target, SPRING.current[kind] || SPRING.current.glide);
+    if (glideControls.current) {
+      glideControls.current.stop();
+      glideControls.current = null;
+    }
   };
 
-  /* ── state ── */
+  const glideTo = (target, kind) => {
+    stopGlide();
+    glideControls.current = animate(
+      yMV,
+      target,
+      SPRING.current[kind] || SPRING.current.glide,
+    );
+  };
+
   const [showMenu, setShowMenu] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [heroLoaded, setHeroLoaded] = useState(false);
 
   const showReportRef = useRef(false);
-  useEffect(() => { showReportRef.current = showReport; }, [showReport]);
+  useEffect(() => {
+    showReportRef.current = showReport;
+  }, [showReport]);
 
-  /* ── measure root + sheet ── */
   useLayoutEffect(() => {
     const el = rootRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => { rootHRef.current = el.clientHeight; setRootH(el.clientHeight); });
+
+    const ro = new ResizeObserver(() => {
+      rootHRef.current = el.clientHeight;
+      setRootH(el.clientHeight);
+    });
+
     ro.observe(el);
     rootHRef.current = el.clientHeight;
     setRootH(el.clientHeight);
+
     return () => ro.disconnect();
   }, []);
 
@@ -2062,60 +2320,59 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
       const w = el.offsetHeight;
       sheetHRef.current = w;
       setSheetH(w);
+
       const idEl = idRef.current;
-      if (idEl) peekHRef.current = idEl.offsetTop + idEl.offsetHeight + PEEK_PAD;
+      if (idEl) {
+        peekHRef.current = idEl.offsetTop + idEl.offsetHeight + PEEK_PAD;
+      }
+
       const h = rootHRef.current;
       if (!h || !w) return;
 
-      /* ── ENTRANCE, here in the measure pass ──
-         The sheet is positioned in the SAME layout effect that measures it, so
-         it cannot be missed or reordered against the measurement. Run from a
-         separate effect it raced this one, and the sheet painted at y=0 —
-         covering the whole photo — for ~300ms before the park landed, which
-         looked like the sheet arriving before the photo. */
       if (entranceDoneFor.current !== profile._id) {
         entranceDoneFor.current = profile._id;
         const rest = computeBounds(h, w).hi;
         cancelEntrance();
-        entranceUntil.current = performance.now() + 900;   // self-expiring guard
-        yMV.set(h);                                        // park below the fold
+        entranceUntil.current = performance.now() + 900;
+        yMV.set(h);
+
         entranceTimer.current = setTimeout(() => {
           entranceTimer.current = null;
-          /* Re-read geometry at glide time: fonts/images may have settled
-             since, and a stale peek lands the sheet at the wrong rest. */
-          const hh = rootHRef.current, ww = sheetHRef.current;
+          const hh = rootHRef.current;
+          const ww = sheetHRef.current;
           const restNow = (hh && ww) ? computeBounds(hh, ww).hi : rest;
           entranceUntil.current = 0;
           glideTo(restNow, 'glide');
         }, 300);
+
         return;
       }
 
-      /* Stay out of the way while the entrance glide is in flight. A TIMESTAMP,
-         not a boolean: if a timer is dropped the guard lapses on its own, so
-         the re-clamp can never be wedged off permanently. */
       if (performance.now() < entranceUntil.current) return;
+
       const { lo, hi } = computeBounds(h, w);
-      /* Only intervene when genuinely out of bounds. A blanket stopGlide() here
-         was killing legit glides (entrance, the menu raise) mid-flight whenever
-         the sheet resized, freezing the sheet — and the photo derived from its
-         position. */
       const cur = yMV.get();
       const target = clamp(cur, lo, hi);
-      if (Math.abs(target - cur) > 0.5) { stopGlide(); yMV.set(target); }
+
+      if (Math.abs(target - cur) > 0.5) {
+        stopGlide();
+        yMV.set(target);
+      }
     };
+
     measure();
+
     const ro = new ResizeObserver(measure);
     ro.observe(el);
-    /* Cancel the entrance wholesale and forget that it ran, so a remount
-       (StrictMode's double-invoke, or a new profile) re-does it from scratch. */
-    return () => { ro.disconnect(); cancelEntrance(); entranceDoneFor.current = null; };
+
+    return () => {
+      ro.disconnect();
+      cancelEntrance();
+      entranceDoneFor.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ── reset per profile ──
-     Deliberately does NOT cancel the entrance. The card is keyed per profile
-     upstream, so a real profile change remounts this component anyway. */
   useEffect(() => {
     setShowMenu(false);
     setShowReport(false);
@@ -2124,13 +2381,17 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile._id]);
 
-  /* ── entrance animation: photo fade-in + slight scale-up ── */
   useEffect(() => {
     if (reduceMotion) {
       entranceOpacity.set(1);
       return;
     }
-    const controls = animate(entranceOpacity, 1, { duration: 0.5, ease: 'easeOut' });
+
+    const controls = animate(entranceOpacity, 1, {
+      duration: 0.5,
+      ease: 'easeOut',
+    });
+
     return () => controls.stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reduceMotion]);
@@ -2139,60 +2400,42 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
     if (heroImgRef.current?.complete) setHeroLoaded(true);
   }, [profile.photos]);
 
-  /* ── report row: outside-click close ── */
   useEffect(() => {
     if (!showMenu) return;
+
     const onDown = (e) => {
       if (menuRef.current?.contains(e.target)) return;
       if (menuBtnRef.current?.contains(e.target)) return;
       setShowMenu(false);
     };
+
     document.addEventListener('pointerdown', onDown);
+
     return () => document.removeEventListener('pointerdown', onDown);
   }, [showMenu]);
 
-  /* ── ⋮ menu open → lift the sheet JUST enough to reveal the row ──
-     The report row expands BELOW the identity block; at the rest position it
-     would unfurl under the bottom edge. So the sheet lifts by roughly the
-     row's height — a small, deliberate rise, never the full travel to the
-     top. If the sheet already sits higher than that, nothing moves. Closing
-     the menu never repositions the sheet. */
   useEffect(() => {
     if (!showMenu) return;
+
     const { lo, hi, ready, short } = boundsRef.current;
-    if (!ready) return;
-
-    /* Only raise when the raise is actually needed.
-       A SHORT sheet — which is what a low-score profile produces, since less
-       filled-in content means a shorter sheet — already rests with its ENTIRE
-       height on screen (`computeBounds` switches `hi` from `peek` to the full
-       `w` when `short`). The report row is therefore already visible and the
-       lift is pure harm: it shoved the sheet up over the profile photo, parked
-       it mid-screen, and because closing the menu never repositions the sheet
-       it stayed there. Taller cards were unaffected precisely because their
-       sheet already sits mostly below the fold, so the same 84px is invisible.
-
-       Keyed off the same `short` flag the bounds maths already uses, rather than
-       a hardcoded score — the trigger is geometry, not the ladder. */
-    if (short) return;
+    if (!ready || short) return;
 
     const target = Math.max(lo, hi - MENU_RAISE);
-    if (yMV.get() > target + 1) { stopGlide(); glideTo(target, 'glide'); }
+
+    if (yMV.get() > target + 1) {
+      stopGlide();
+      glideTo(target, 'glide');
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showMenu]);
 
-  /* ════ HEADER DUCK ════
-     The header is a position:fixed row. The sheet's top edge sits at
-     `rootTop + y`, so the header must duck once
-        y  <  (headerBottom - rootTop - HEADER_LEAD)
-     Both edges are measured ONCE, with the header at rest, and cached.
-     The callback MUST be held in a ref, never in an effect dep. AppShell
-     passes a fresh arrow on every render, so a dep on it re-runs the unmount
-     cleanup each time — an infinite self-cancelling loop. */
   const headerTriggerRef = useRef(null);
   const headerNearRef = useRef(false);
   const onSheetNearRef = useRef(onSheetNearHeader);
-  useEffect(() => { onSheetNearRef.current = onSheetNearHeader; });
+
+  useEffect(() => {
+    onSheetNearRef.current = onSheetNearHeader;
+  });
 
   const setHeaderNear = useCallback((near) => {
     if (headerNearRef.current === near) return;
@@ -2201,17 +2444,23 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
   }, []);
 
   const measureHeaderTrigger = useCallback(() => {
-    if (headerNearRef.current) return;            // never measure mid-animation
+    if (headerNearRef.current) return;
+
     const root = rootRef.current;
     if (!root) return;
+
     const bar = document.querySelector('[data-deck-header]');
     let headerBottom;
+
     if (bar) {
       headerBottom = bar.getBoundingClientRect().bottom;
     } else {
-      console.warn('[header-duck] [data-deck-header] not found — assuming 54px (DECK_TOP 12 + DECK_BTN 42)');
+      console.warn(
+        '[header-duck] [data-deck-header] not found — assuming 54px (DECK_TOP 12 + DECK_BTN 42)',
+      );
       headerBottom = HEADER_FALLBACK_BOTTOM;
     }
+
     const rootTop = root.getBoundingClientRect().top;
     headerTriggerRef.current = headerBottom - rootTop - HEADER_LEAD;
   }, []);
@@ -2219,7 +2468,7 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
   useMotionValueEvent(yMV, 'change', (y) => {
     const trigger = headerTriggerRef.current;
     if (trigger == null) return;
-    /* Two fixed numbers — the two directions cannot disagree. */
+
     if (headerNearRef.current) {
       if (y > trigger + HEADER_RELEASE) setHeaderNear(false);
     } else if (y < trigger) {
@@ -2228,8 +2477,13 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
   });
 
   useLayoutEffect(() => {
-    const raf = requestAnimationFrame(() => { measureHeaderTrigger(); setHeaderNear(false); });
+    const raf = requestAnimationFrame(() => {
+      measureHeaderTrigger();
+      setHeaderNear(false);
+    });
+
     window.addEventListener('resize', measureHeaderTrigger);
+
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', measureHeaderTrigger);
@@ -2237,15 +2491,11 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* Unmount ONLY (empty deps). See the note above. */
   useEffect(() => () => {
     headerNearRef.current = false;
     onSheetNearRef.current?.(false);
   }, []);
 
-  /* ════ THE DRAG — rigid panel with momentum. No return-to-rest: the sheet
-     goes down only when the user swipes it down. Momentum flicks glide
-     naturally; releases outside the bounds bounce back into range. ════ */
   const drag = useRef(null);
   const yBaseRef = useRef(0);
   const dragged = useRef(false);
@@ -2258,8 +2508,18 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
       if (showReportRef.current) return;
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       if (drag.current) return;
+
       stopGlide();
-      drag.current = { id: e.pointerId, startY: e.clientY, lastY: e.clientY, lastT: performance.now(), vel: 0, moved: 0 };
+
+      drag.current = {
+        id: e.pointerId,
+        startY: e.clientY,
+        lastY: e.clientY,
+        lastT: performance.now(),
+        vel: 0,
+        moved: 0,
+      };
+
       yBaseRef.current = yMV.get();
       dragged.current = false;
     };
@@ -2267,18 +2527,26 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
     const onMove = (e) => {
       const d = drag.current;
       if (!d || e.pointerId !== d.id) return;
-      if (e.pointerType === 'mouse' && e.buttons === 0) { finish(e, false); return; }
+
+      if (e.pointerType === 'mouse' && e.buttons === 0) {
+        finish(e, false);
+        return;
+      }
+
       const { lo, hi, ready } = boundsRef.current;
       if (!ready) return;
+
       const dy = e.clientY - d.lastY;
       d.lastY = e.clientY;
       d.moved += Math.abs(dy);
       if (d.moved > 5) dragged.current = true;
+
       const now = performance.now();
       d.vel = d.vel * 0.7 + (dy / Math.max(1, now - d.lastT)) * 0.3;
       d.lastT = now;
 
       const raw = yBaseRef.current + (e.clientY - d.startY);
+
       if (raw < lo) {
         const over = lo - raw;
         yMV.set(lo - over * RUBBER);
@@ -2294,15 +2562,20 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
       const d = drag.current;
       if (!d) return;
       if (e && e.pointerId !== undefined && e.pointerId !== d.id) return;
+
       const vel = withMomentum ? d.vel : 0;
-      drag.current = null;                    // ← dropped AFTER reading velocity
+      drag.current = null;
+
       const { lo, hi, ready } = boundsRef.current;
       if (!ready) return;
+
       const y = yMV.get();
-      /* No snap-back to rest: a release inside the bounds either glides with
-         momentum or stops dead where the finger lifted. Only an out-of-bounds
-         release bounces back into range. */
-      if (y < lo || y > hi) { glideTo(clamp(y, lo, hi), 'bounce'); return; }
+
+      if (y < lo || y > hi) {
+        glideTo(clamp(y, lo, hi), 'bounce');
+        return;
+      }
+
       const projected = clamp(y + vel * MOMENTUM_MS, lo, hi);
       if (Math.abs(projected - y) > 1) glideTo(projected, 'glide');
     };
@@ -2314,6 +2587,7 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
     window.addEventListener('pointermove', onMove, { passive: true });
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onCancel);
+
     return () => {
       sheet.removeEventListener('pointerdown', onDown, true);
       window.removeEventListener('pointermove', onMove);
@@ -2323,22 +2597,28 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ── self-healing watchdog — no stray position survives a render ──
-     Armed shortly after mount (so it never fights the entrance glide).
-     If the sheet ever ends up outside its bounds for ANY reason, the
-     next render bounces it back. */
   const watchdogArmedRef = useRef(false);
+
   useEffect(() => {
-    const t = setTimeout(() => { watchdogArmedRef.current = true; }, 1500);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => {
+      watchdogArmedRef.current = true;
+    }, 1500);
+
+    return () => clearTimeout(timer);
   }, []);
+
   useEffect(() => {
     if (!watchdogArmedRef.current || drag.current) return;
+
     const { lo, hi, ready } = boundsRef.current;
     if (!ready) return;
+
     const cur = yMV.get();
-    if (cur > hi + 1 || cur < lo - 1) glideTo(clamp(cur, lo, hi), 'bounce');
-  }); /* runs after every render — deliberately */
+
+    if (cur > hi + 1 || cur < lo - 1) {
+      glideTo(clamp(cur, lo, hi), 'bounce');
+    }
+  });
 
   const onClickCapture = (e) => {
     if (dragged.current) {
@@ -2351,13 +2631,16 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
   useEffect(() => {
     const sheet = sheetRef.current;
     if (!sheet) return;
+
     const onWheel = (e) => {
       const { lo, hi, ready } = boundsRef.current;
       if (!ready) return;
       e.preventDefault();
       glideTo(clamp(yMV.get() - e.deltaY, lo, hi), 'wheel');
     };
+
     sheet.addEventListener('wheel', onWheel, { passive: false });
+
     return () => sheet.removeEventListener('wheel', onWheel);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -2365,9 +2648,18 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
   const onSheetKeyDown = (e) => {
     const { lo, hi, ready } = boundsRef.current;
     if (!ready) return;
+
     const step = 90;
-    if (e.key === 'ArrowUp') { e.preventDefault(); glideTo(clamp(yMV.get() - step, lo, hi), 'glide'); }
-    if (e.key === 'ArrowDown') { e.preventDefault(); glideTo(clamp(yMV.get() + step, lo, hi), 'glide'); }
+
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      glideTo(clamp(yMV.get() - step, lo, hi), 'glide');
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      glideTo(clamp(yMV.get() + step, lo, hi), 'glide');
+    }
   };
 
   const sheetReady = rootH > 0 && sheetH > 0;
@@ -2380,8 +2672,13 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
     <div ref={rootRef} className="pc-root">
       <style>{PROFILE_CARD_CSS}</style>
 
-      {/* ════ PHOTO — natural, full-bleed, recedes as the sheet covers it ════ */}
-      <motion.div className="pc-heroWrap" style={{ scale: combinedPhotoScale, opacity: combinedPhotoOpacity }}>
+      <motion.div
+        className="pc-heroWrap"
+        style={{
+          scale: combinedPhotoScale,
+          opacity: combinedPhotoOpacity,
+        }}
+      >
         <img
           ref={heroImgRef}
           src={profile.photos?.[0] || FALLBACK_IMG}
@@ -2390,7 +2687,10 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
           onLoad={() => setHeroLoaded(true)}
           onError={(e) => {
             const img = e.currentTarget;
-            if (!img.dataset.err) { img.dataset.err = '1'; img.src = FALLBACK_IMG; }
+            if (!img.dataset.err) {
+              img.dataset.err = '1';
+              img.src = FALLBACK_IMG;
+            }
           }}
           decoding="async"
           className={`pc-hero${heroLoaded ? ' is-loaded' : ''}`}
@@ -2398,7 +2698,6 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
         <div className="pc-shade" aria-hidden="true" />
       </motion.div>
 
-      {/* ════ THE SHEET ════ */}
       <motion.div
         ref={setSheetRefs}
         className="pc-sheet"
@@ -2411,7 +2710,6 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
       >
         <div className="pc-grabber" aria-hidden="true" />
 
-        {/* IDENTITY — name with age beside it; ⋮ in the row; campus below */}
         <div ref={idRef} className="pc-id">
           <div className="pc-idrow">
             <div style={{ minWidth: 0 }}>
@@ -2420,49 +2718,42 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
                 {profile.age ? <span className="pc-age">, {profile.age}</span> : null}
               </h2>
             </div>
+
             <button
               ref={menuBtnRef}
               type="button"
               className={`pc-iconbtn${showMenu ? ' pressed' : ''}`}
               aria-label="More options"
               aria-expanded={showMenu}
-              onClick={(e) => { e.stopPropagation(); setShowMenu((v) => !v); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowMenu((v) => !v);
+              }}
             >
-              <MoreVertical size={18} strokeWidth={3} />
+              <MoreVertical size={18} strokeWidth={2.5} />
             </button>
           </div>
 
-          {/* Campus badge — DISPLAY ONLY, BELOW the ⋮ row so it gets the full
-              sheet width. The server strips `college` entirely when that person
-              opted out (User.showCollege), so this renders nothing and no
-              location data reaches the client at all. It never filters the
-              deck. */}
-          {profile.college && (
-            <p className="pc-college">{profile.college}</p>
-          )}
+          {profile.college && <p className="pc-college">{profile.college}</p>}
 
-          {/* 📍 Coarse distance label — a BAND, never a distance.
-              `distanceBand` is derived server-side from the two campuses'
-              positions and arrives as one of "Near you" / "In your area" /
-              "Further away". It is absent when the viewer's location is off or
-              stale, or when the campus has no map position — and it is absent for
-              the 300km+ band by design, since labelling every distant stranger
-              "Elsewhere in India" is noise.
-
-              No exact kilometres are rendered anywhere, by decision: publishing
-              a precise distance on a card is a stronger privacy disclosure than
-              a band, and the extra precision changes no decision a user makes. */}
           {profile.distanceBand && (
             <p className="pc-college pc-distance">{profile.distanceBand}</p>
           )}
 
-          {/* Gap year — self-described; the card just says it. No ranking
-              effect: hiding people for pausing a degree punishes honesty. */}
           {profile.gapYear && (
-            <p className="pc-college" style={{ fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', fontSize: 11 }}>Gap year</p>
+            <p
+              className="pc-college"
+              style={{
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                fontSize: 11,
+              }}
+            >
+              Gap year
+            </p>
           )}
 
-          {/* report — inline row */}
           <AnimatePresence>
             {showMenu && (
               <motion.div
@@ -2478,16 +2769,19 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
                 <button
                   type="button"
                   className="pc-menubtn"
-                  onClick={() => { triggerHaptic('light'); setShowMenu(false); setShowReport(true); }}
+                  onClick={() => {
+                    triggerHaptic('light');
+                    setShowMenu(false);
+                    setShowReport(true);
+                  }}
                 >
-                  <Flag size={14} strokeWidth={2.6} /> Report profile
+                  <Flag size={14} strokeWidth={2.4} /> Report profile
                 </button>
               </motion.div>
             )}
           </AnimatePresence>
         </div>
 
-        {/* ABOUT — right after the identity block */}
         {profile.bio && (
           <div className="pc-sec">
             <SectionHead mark="green">About</SectionHead>
@@ -2495,18 +2789,26 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
           </div>
         )}
 
-        {/* VITALS */}
         <div className="pc-sec">
           <SectionHead mark="coral">Vitals</SectionHead>
-          <div className="pc-card" style={{ padding: 16 }}>
+          <div className="pc-card" style={{ padding: 15 }}>
             <div className="pc-grid">
-              <FieldCell icon={Calendar} color={TILE[1]} label="Year" value={profile.year || '—'} />
-              <FieldCell icon={Sparkle} color={TILE[3]} label="Pronouns" value={profile.pronouns || '—'} />
+              <FieldCell
+                icon={Calendar}
+                color={TILE[1]}
+                label="Year"
+                value={profile.year || '—'}
+              />
+              <FieldCell
+                icon={Sparkle}
+                color={TILE[3]}
+                label="Pronouns"
+                value={profile.pronouns || '—'}
+              />
             </div>
           </div>
         </div>
 
-        {/* SEEKING */}
         <div className="pc-sec">
           <SectionHead mark="pink">Seeking</SectionHead>
           <div className="pc-pills">
@@ -2516,7 +2818,6 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
           </div>
         </div>
 
-        {/* INTERESTS */}
         {interests.length > 0 && (
           <div className="pc-sec">
             <SectionHead mark="yellow" count={interests.length}>Interests</SectionHead>
@@ -2528,13 +2829,31 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
           </div>
         )}
 
-        {/* EXHIBITS */}
-        {(prompts[0]?.question || prompts[1]?.question || prompts[2]?.question || photoB || photoC || profile.photos?.[3]) && (
+        {(prompts[0]?.question
+          || prompts[1]?.question
+          || prompts[2]?.question
+          || photoB
+          || photoC
+          || profile.photos?.[3]) && (
           <div className="pc-sec">
-            <SectionHead mark="coral" count={[prompts[0], prompts[1], prompts[2], photoB, photoC, profile.photos?.[3]].filter(Boolean).length}>Exhibits</SectionHead>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <SectionHead
+              mark="coral"
+              count={[
+                prompts[0], prompts[1], prompts[2],
+                photoB, photoC, profile.photos?.[3],
+              ].filter(Boolean).length}
+            >
+              Exhibits
+            </SectionHead>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               {prompts[0]?.question && (
-                <PopoutItem isGated={isGated} targetId="prompt_0" onAction={onAction} style={{ display: 'block' }}>
+                <PopoutItem
+                  isGated={isGated}
+                  targetId="prompt_0"
+                  onAction={onAction}
+                  style={{ display: 'block' }}
+                >
                   <div className="pc-card pc-prompt">
                     <p className="pc-promptq">{prompts[0].question}</p>
                     {prompts[0].answer && (
@@ -2543,25 +2862,45 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
                   </div>
                 </PopoutItem>
               )}
-              {/* Photo pair — a LONE photo never sits in a half grid: with no
-                  second tile the right square would sit empty. One photo alone
-                  renders full-width on the wide 16/10 tile. */}
+
               {(photoB || photoC) && (photoB && photoC ? (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                  <PopoutItem isGated={isGated} targetId="photo_1" onAction={onAction} style={{ display: 'block' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <PopoutItem
+                    isGated={isGated}
+                    targetId="photo_1"
+                    onAction={onAction}
+                    style={{ display: 'block' }}
+                  >
                     <PhotoTile src={photoB} />
                   </PopoutItem>
-                  <PopoutItem isGated={isGated} targetId="photo_2" onAction={onAction} style={{ display: 'block' }}>
+
+                  <PopoutItem
+                    isGated={isGated}
+                    targetId="photo_2"
+                    onAction={onAction}
+                    style={{ display: 'block' }}
+                  >
                     <PhotoTile src={photoC} />
                   </PopoutItem>
                 </div>
               ) : (
-                <PopoutItem isGated={isGated} targetId={photoB ? 'photo_1' : 'photo_2'} onAction={onAction} style={{ display: 'block' }}>
+                <PopoutItem
+                  isGated={isGated}
+                  targetId={photoB ? 'photo_1' : 'photo_2'}
+                  onAction={onAction}
+                  style={{ display: 'block' }}
+                >
                   <PhotoTile src={photoB || photoC} wide />
                 </PopoutItem>
               ))}
+
               {prompts[1]?.question && (
-                <PopoutItem isGated={isGated} targetId="prompt_1" onAction={onAction} style={{ display: 'block' }}>
+                <PopoutItem
+                  isGated={isGated}
+                  targetId="prompt_1"
+                  onAction={onAction}
+                  style={{ display: 'block' }}
+                >
                   <div className="pc-card pc-prompt">
                     <p className="pc-promptq">{prompts[1].question}</p>
                     {prompts[1].answer && (
@@ -2570,13 +2909,25 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
                   </div>
                 </PopoutItem>
               )}
+
               {profile.photos?.[3] && (
-                <PopoutItem isGated={isGated} targetId="photo_3" onAction={onAction} style={{ display: 'block' }}>
+                <PopoutItem
+                  isGated={isGated}
+                  targetId="photo_3"
+                  onAction={onAction}
+                  style={{ display: 'block' }}
+                >
                   <PhotoTile src={profile.photos[3]} wide />
                 </PopoutItem>
               )}
+
               {prompts[2]?.question && (
-                <PopoutItem isGated={isGated} targetId="prompt_2" onAction={onAction} style={{ display: 'block' }}>
+                <PopoutItem
+                  isGated={isGated}
+                  targetId="prompt_2"
+                  onAction={onAction}
+                  style={{ display: 'block' }}
+                >
                   <div className="pc-card pc-prompt">
                     <p className="pc-promptq">{prompts[2].question}</p>
                     {prompts[2].answer && (
@@ -2595,7 +2946,10 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
           <ReportModal
             reportedUserId={profile._id}
             onClose={() => setShowReport(false)}
-            onReported={() => { setShowReport(false); toast.success('Report submitted. Thank you for keeping the community safe.'); }}
+            onReported={() => {
+              setShowReport(false);
+              toast.success('Report submitted. Thank you for keeping the community safe.');
+            }}
           />
         )}
       </AnimatePresence>
@@ -2604,354 +2958,2526 @@ const ProfileCard = ({ profile = {}, onAction, onSheetNearHeader, isGated = fals
 };
 
 export default ProfileCard;
+
 ```
 
 ### ./client/src/pages/Splash.jsx
 
 ```
-import React, { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Compass, Hourglass, Feather, BookOpen } from 'lucide-react';
 
-const T = {
-  paper: '#FFF9EC',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  void: '#0c0a14',        // night slides — ink-dark with a violet whisper
-  nightText: '#FFF9EC',
-  nightMuted: 'rgba(255,249,236,0.55)',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-  fontHand: "'Caveat', 'Segoe Script', cursive",
+import React, { useEffect, useRef } from 'react';
+import { useChromeColor } from '../utils/chrome';
+
+const C = {
+  black: '#111211',
+  paper: '#F1EDE2',
+  amber: '#E0A15E',
+  coral: '#C96F68',
+  sage: '#779477',
+  concrete: '#A3A3A1',
+  muted: '#77766F',
+  rule: 'rgba(241,237,226,.2)',
 };
 
-const SLIDES = [
-  { id: 'prologue', tag: 'The Manifesto', title: 'Matchalize', subtitle: 'A deliberate network', type: 'title', align: 'center', isNight: false },
-  { id: 'problem', Icon: Hourglass, tag: 'The Illusion', title: 'Starting from zero.', body: 'Mainstream platforms manufacture connection from thin air. They optimize for surface signals while remaining structurally blind to the rhythm of your actual, lived existence.', align: 'right', isNight: true },
-  { id: 'reality', Icon: Compass, tag: 'The Context', title: 'You are not in a vacuum.', body: 'A campus is extraordinarily dense with shared life. Hostels, societies, fests, and late-night rehearsals. The raw material for connection is already being generated all around you.', align: 'left', isNight: true },
-  { id: 'solution', Icon: Feather, tag: 'The Engine', title: 'The campus is the catalyst.', body: "We don't use algorithms to guess your type. We use your lived world. Shared context collapses the distance between strangers before a single word is ever spoken.", align: 'center', isNight: false },
-  { id: 'cta', tag: 'Initiation', title: 'Reclaim your world.', body: 'Built for the dense, temporary, and irreplaceable reality of college life.', type: 'cta', align: 'center', isNight: false },
-];
+const CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
-export default function CinematicWebsite({ onEnter }) {
-  const [step, setStep] = useState(0);
-  const [isMobile, setIsMobile] = useState(false);
-  const [unlocking, setUnlocking] = useState(false);
+  .huh-page {
+    --black: ${C.black};
+    --paper: ${C.paper};
+    --amber: ${C.amber};
+    --coral: ${C.coral};
+    --sage: ${C.sage};
+    --concrete: ${C.concrete};
+    --muted: ${C.muted};
+    --rule: ${C.rule};
 
-  const lastScrollTime = useRef(Date.now());
-  const touchStartY = useRef(0);
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+    background: var(--black);
+    color: var(--paper);
+    font-family: 'Space Grotesk', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .huh-page *,
+  .huh-page *::before,
+  .huh-page *::after {
+    box-sizing: border-box;
+  }
+
+  .huh-page button,
+  .huh-page a {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .huh-page ::selection {
+    background: var(--coral);
+    color: var(--black);
+  }
+
+  .huh-scroll {
+    position: absolute;
+    inset: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+    scroll-padding-top: 76px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--amber) var(--black);
+  }
+
+  .huh-scroll::-webkit-scrollbar { width: 4px; }
+  .huh-scroll::-webkit-scrollbar-thumb { background: var(--amber); }
+
+  .huh-wrap {
+    width: min(1240px, 100%);
+    margin-inline: auto;
+    padding-inline: clamp(22px, 5vw, 68px);
+  }
+
+  /* Navigation */
+
+  .huh-top {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    background: rgba(17,18,17,.9);
+    border-bottom: 1px solid var(--rule);
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
+    transition: transform .32s cubic-bezier(.22,1,.36,1);
+    will-change: transform;
+  }
+
+  /* Scrolling down hides the header; any scroll up brings it back. */
+
+  .huh-top.huh-top-hidden {
+    transform: translateY(-102%);
+  }
+
+  .huh-top::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0;
+    width: var(--scroll-progress, 0%);
+    height: 2px;
+    background: var(--coral);
+  }
+
+  .huh-top-inner {
+    min-height: 70px;
+    display: flex;
+    align-items: center;
+    gap: 22px;
+  }
+
+  .huh-logo {
+    flex-shrink: 0;
+    color: var(--paper);
+    text-decoration: none;
+    font: 900 39px/.8 'Barlow Condensed', sans-serif;
+    letter-spacing: -.07em;
+    text-transform: uppercase;
+  }
+
+  .huh-logo b,
+  .huh-footer-logo b {
+    color: var(--amber);
+  }
+
+  .huh-spacer { flex: 1; }
+
+  .huh-login {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 42px;
+    padding: 8px 0;
+    border: 0;
+    border-bottom: 1px solid var(--amber);
+    background: transparent;
+    color: var(--paper);
+    font: 600 12px 'Space Grotesk', sans-serif;
+    cursor: pointer;
+  }
+
+  .huh-login span {
+    color: var(--amber);
+    font-size: 17px;
+    transition: transform .2s ease;
+  }
+
+  .huh-login:focus-visible,
+  .huh-cta:focus-visible,
+  .huh-text-link:focus-visible {
+    outline: 2px solid var(--coral);
+    outline-offset: 5px;
+  }
+
+  /* Shared editorial details */
+
+  .huh-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0 0 17px;
+    color: var(--muted);
+    font: 700 9px/1.7 'IBM Plex Mono', monospace;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+  }
+
+  .huh-eyebrow::before {
+    content: '';
+    flex: 0 0 7px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--coral);
+  }
+
+  .huh-h2 {
+    max-width: 760px;
+    margin: 0;
+    font: 900 clamp(47px,6vw,78px)/.86 'Barlow Condensed', sans-serif;
+    letter-spacing: -.025em;
+    text-transform: uppercase;
+    text-wrap: balance;
+  }
+
+  .huh-h2 em {
+    color: var(--coral);
+    font-style: normal;
+  }
+
+  .huh-copy {
+    max-width: 465px;
+    margin: 19px 0 0;
+    color: #5C5A53;
+    font-size: 13px;
+    line-height: 1.85;
+  }
+
+  .huh-dark-copy {
+    color: rgba(241,237,226,.69);
+  }
+
+  .huh-section {
+    position: relative;
+    padding-block: clamp(67px,8vw,108px);
+  }
+
+  .huh-section-head {
+    display: grid;
+    grid-template-columns: minmax(0,1fr) minmax(220px,.66fr);
+    align-items: end;
+    gap: clamp(25px,6vw,78px);
+  }
+
+  /* HERO */
+
+  .huh-hero {
+    position: relative;
+    overflow: hidden;
+    background: var(--black);
+  }
+
+  .huh-hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: .11;
+    background-image:
+      linear-gradient(rgba(241,237,226,.13) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(241,237,226,.13) 1px, transparent 1px);
+    background-size: 48px 48px;
+    -webkit-mask-image: linear-gradient(90deg, #000, transparent 88%);
+    mask-image: linear-gradient(90deg, #000, transparent 88%);
+  }
+
+  .huh-hero::after {
+    content: '?';
+    position: absolute;
+    z-index: 0;
+    top: 0;
+    right: -.02em;
+    color: rgba(224,161,94,.045);
+    font: 900 clamp(330px,51vw,680px)/.8 'Barlow Condensed', sans-serif;
+    pointer-events: none;
+  }
+
+  .huh-hero-inner {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: minmax(0,.94fr) minmax(0,1.06fr);
+    align-items: center;
+    gap: clamp(25px,4vw,57px);
+    padding-block: clamp(52px,7vw,83px) 48px;
+  }
+
+  .huh-hero-copy { min-width: 0; }
+
+  .huh-kicker {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0 0 23px;
+    color: var(--amber);
+    font: 700 9px/1.7 'IBM Plex Mono', monospace;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+
+  .huh-kicker::before {
+    content: '';
+    flex: 0 0 8px;
+    width: 8px;
+    height: 8px;
+    background: var(--coral);
+    transform: rotate(45deg);
+  }
+
+  .huh-title {
+    margin: 0;
+    color: var(--paper);
+    font: 900 clamp(65px,8.1vw,108px)/.8 'Barlow Condensed', sans-serif;
+    letter-spacing: -.037em;
+    text-transform: uppercase;
+    text-wrap: balance;
+  }
+
+  .huh-title .line { display: block; }
+
+  .huh-title .outline {
+    color: transparent;
+    -webkit-text-stroke: 1.5px var(--paper);
+  }
+
+  .huh-title .accent { color: var(--amber); }
+
+  .huh-hero-desc {
+    max-width: 440px;
+    margin: 24px 0 0;
+    color: rgba(241,237,226,.73);
+    font-size: 14px;
+    line-height: 1.8;
+  }
+
+  .huh-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 20px;
+    margin-top: 25px;
+  }
+
+  .huh-cta {
+    min-height: 51px;
+    max-width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 23px;
+    padding: 0 19px;
+    border: 0;
+    border-radius: 4px 18px 4px 18px;
+    background: var(--coral);
+    color: var(--black);
+    font: 700 11px 'Space Grotesk', sans-serif;
+    cursor: pointer;
+    transition: transform .22s ease, background .22s ease;
+  }
+
+  .huh-cta .arrow {
+    font-size: 19px;
+    transition: transform .22s ease;
+  }
+
+  .huh-text-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 0;
+    color: var(--paper);
+    text-decoration: none;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .huh-text-link span {
+    color: var(--amber);
+    font-size: 15px;
+  }
+
+  .huh-hero-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    max-width: 430px;
+    margin: 19px 0 0;
+    color: rgba(241,237,226,.43);
+    font: 8px/1.8 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+  }
+
+  .huh-hero-note span {
+    color: var(--sage);
+    font-size: 12px;
+  }
+
+  /* APP PREVIEWS — real interface structure, no invented member details */
+
+  .huh-showcase {
+    position: relative;
+    min-width: 0;
+    padding: 25px 0 34px;
+  }
+
+  .huh-showcase-label {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 14px;
+    color: rgba(241,237,226,.42);
+    font: 8px 'IBM Plex Mono', monospace;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+
+  .huh-showcase-label span:last-child { color: var(--sage); }
+
+  .huh-device-stage {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    min-width: 0;
+    padding: 10px 0 17px;
+  }
+
+  .huh-phone {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 205px;
+    height: 390px;
+    padding: 6px;
+    border: 1px solid #62635E;
+    border-radius: 27px;
+    background: #080908;
+    box-shadow: 0 21px 43px rgba(0,0,0,.28);
+    transition: transform .3s ease, border-color .3s ease;
+  }
+
+  .huh-phone:nth-child(1) {
+    transform: translateY(13px) rotate(-2deg) scale(.94);
+    animation: huh-float-left 6.4s ease-in-out infinite;
+  }
+
+  .huh-phone:nth-child(2) {
+    z-index: 2;
+    border-color: var(--paper);
+    animation: huh-float-mid 7.6s ease-in-out -2.5s infinite;
+  }
+
+  .huh-phone:nth-child(3) {
+    transform: translateY(15px) rotate(2deg) scale(.94);
+    animation: huh-float-right 7s ease-in-out -4s infinite;
+  }
+
+  /* Idle float. The keyframes repeat each phone's base transform so the
+     static fallback above still holds when motion is reduced away. */
+
+  @keyframes huh-float-left {
+    0%, 100% { transform: translateY(13px) rotate(-2deg) scale(.94); }
+    50% { transform: translateY(4px) rotate(-1.2deg) scale(.945); }
+  }
+
+  @keyframes huh-float-mid {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
+  }
+
+  @keyframes huh-float-right {
+    0%, 100% { transform: translateY(15px) rotate(2deg) scale(.94); }
+    50% { transform: translateY(6px) rotate(1.2deg) scale(.945); }
+  }
+
+  .huh-phone-screen {
+    position: relative;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    padding: 10px 8px 11px;
+    border-radius: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--paper);
+    color: var(--black);
+  }
+
+  .huh-phone-screen.dark {
+    background: #191A18;
+    color: var(--paper);
+  }
+
+  .huh-phone-status {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+    padding: 0 3px 6px;
+    font: 600 7px 'IBM Plex Mono', monospace;
+  }
+
+  .huh-status-icons { letter-spacing: .08em; }
+
+  .huh-app-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 7px;
+    min-height: 23px;
+  }
+
+  .huh-app-wordmark {
+    font: 900 19px/.8 'Barlow Condensed', sans-serif;
+    text-transform: uppercase;
+  }
+
+  .huh-app-wordmark b { color: var(--coral); }
+
+  .huh-app-icon {
+    width: 22px;
+    height: 22px;
+    flex: 0 0 22px;
+    display: grid;
+    place-items: center;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    font-size: 10px;
+  }
+
+  .huh-screen-label {
+    color: var(--muted);
+    font: 700 7px 'IBM Plex Mono', monospace;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+  }
+
+  .huh-mock-photo {
+    position: relative;
+    min-height: 134px;
+    overflow: hidden;
+    border-radius: 13px 13px 4px 13px;
+    background:
+      radial-gradient(ellipse at 50% 107%, rgba(17,18,17,.8), transparent 52%),
+      radial-gradient(ellipse at 50% 57%, #E4B07D 0 10%, transparent 10.5%),
+      radial-gradient(ellipse at 50% 96%, #C96F68 0 28%, transparent 28.5%),
+      linear-gradient(148deg, #D8BBA4, #779477 85%);
+  }
+
+  .huh-mock-photo::before {
+    content: '';
+    position: absolute;
+    top: 19%;
+    left: 50%;
+    width: 37px;
+    height: 48px;
+    border-radius: 48% 48% 42% 42%;
+    background: #3A332D;
+    transform: translateX(-50%);
+  }
+
+  .huh-mock-photo::after {
+    content: '';
+    position: absolute;
+    top: 35%;
+    left: 50%;
+    width: 55px;
+    height: 64px;
+    border-radius: 45% 45% 12px 12px;
+    background: #E4B58E;
+    transform: translateX(-50%);
+    box-shadow: inset 0 -9px 0 rgba(17,18,17,.12);
+  }
+
+  .huh-photo-tag {
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    z-index: 2;
+    padding: 5px 7px;
+    border-radius: 999px;
+    background: rgba(17,18,17,.66);
+    color: var(--paper);
+    font: 6px 'IBM Plex Mono', monospace;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+
+  .huh-card-id {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 7px;
+  }
+
+  .huh-card-name {
+    font: 800 21px/.9 'Barlow Condensed', sans-serif;
+    letter-spacing: -.01em;
+    text-transform: uppercase;
+  }
+
+  .huh-card-pronouns {
+    flex-shrink: 0;
+    color: var(--muted);
+    font: 700 6.5px 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+  }
+
+  .huh-card-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: auto;
+  }
+
+  .huh-card-tags span {
+    padding: 4px 7px;
+    border: 1px solid rgba(17,18,17,.22);
+    border-radius: 999px;
+    font: 700 6px 'IBM Plex Mono', monospace;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .huh-mock-facts {
+    display: grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: 5px;
+    margin-top: 1px;
+  }
+
+  .huh-mock-fact {
+    min-width: 0;
+    padding: 5px 6px;
+    border-radius: 7px;
+    background: rgba(17,18,17,.055);
+  }
+
+  .huh-mock-fact small {
+    display: block;
+    color: var(--muted);
+    font: 6px 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+  }
+
+  .huh-mock-fact b {
+    display: block;
+    margin-top: 4px;
+    font: 700 9px/1.15 'Space Grotesk', sans-serif;
+    letter-spacing: -.01em;
+  }
+
+  .huh-mock-fact:nth-child(2) b,
+  .huh-mock-fact:nth-child(4) b { color: var(--coral); }
+
+  .huh-preview-note {
+    margin: auto 0 0;
+    color: var(--muted);
+    font: 6px/1.6 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+  }
+
+  .huh-sheet-preview {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    overflow: hidden;
+    padding: 10px 9px;
+    border-radius: 15px 15px 5px 5px;
+    background: var(--paper);
+    color: var(--black);
+  }
+
+  .huh-sheet-grabber {
+    width: 31px;
+    height: 3px;
+    flex: 0 0 3px;
+    margin: 0 auto 3px;
+    border-radius: 9px;
+    background: rgba(17,18,17,.32);
+  }
+
+  .huh-preview-heading {
+    margin: 0;
+    font: 900 24px/.88 'Barlow Condensed', sans-serif;
+    letter-spacing: -.01em;
+    text-transform: uppercase;
+  }
+
+  .huh-preview-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 9px;
+    border-top: 1px solid rgba(17,18,17,.14);
+  }
+
+  .huh-preview-section strong {
+    font: 700 7px 'IBM Plex Mono', monospace;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+
+  .huh-preview-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .huh-pill {
+    padding: 4px 8px;
+    border: 1px solid rgba(17,18,17,.2);
+    border-radius: 999px;
+    background: rgba(255,255,255,.45);
+    font: 700 6.5px 'IBM Plex Mono', monospace;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .huh-pill.accent {
+    background: var(--amber);
+    border-color: transparent;
+  }
+
+  .huh-preview-bio {
+    margin: 0;
+    font: 500 9.5px/1.55 'Space Grotesk', sans-serif;
+  }
+
+  .huh-preview-basics {
+    margin: 0;
+    color: var(--muted);
+    font: 700 7px 'IBM Plex Mono', monospace;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+
+  .huh-preview-prompt {
+    padding: 10px;
+    border-radius: 11px 11px 11px 3px;
+    background: #E7D8C1;
+  }
+
+  .huh-preview-prompt strong {
+    display: block;
+    font: 800 10px/1.3 'Space Grotesk', sans-serif;
+    letter-spacing: -.01em;
+  }
+
+  .huh-preview-prompt p {
+    margin: 5px 0 0;
+    font: 500 9px/1.5 'Space Grotesk', sans-serif;
+  }
+
+  .huh-preview-align {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 5px;
+    margin-top: auto;
+    padding: 10px 9px;
+    border-radius: 999px;
+    background: var(--amber);
+    color: var(--black);
+    font: 700 7px 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+  }
+
+  .huh-aligned-chip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 9px 11px;
+    border-radius: 11px 11px 11px 3px;
+    background: var(--amber);
+    color: var(--black);
+  }
+
+  .huh-aligned-chip span {
+    font: 900 17px/1 'Barlow Condensed', sans-serif;
+    text-transform: uppercase;
+  }
+
+  .huh-aligned-chip small {
+    flex-shrink: 0;
+    font: 700 6px/1.5 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+    text-align: right;
+  }
+
+  .huh-chat-thread {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 6px;
+    padding-top: 10px;
+  }
+
+  .huh-chat-line {
+    max-width: 84%;
+    margin: 0;
+    padding: 8px 10px;
+    font: 500 8.5px/1.45 'Space Grotesk', sans-serif;
+  }
+
+  .huh-chat-line.them {
+    align-self: flex-start;
+    background: #2A2B28;
+    border-radius: 11px 11px 11px 3px;
+  }
+
+  .huh-chat-line.me {
+    align-self: flex-end;
+    background: var(--paper);
+    color: var(--black);
+    border-radius: 11px 11px 3px 11px;
+  }
+
+  .huh-chat-line.huh-typing {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 9px 11px;
+  }
+
+  .huh-typing i {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: rgba(241,237,226,.6);
+    animation: huh-dot 1.1s ease-in-out infinite;
+  }
+
+  .huh-typing i:nth-child(2) { animation-delay: .15s; }
+  .huh-typing i:nth-child(3) { animation-delay: .3s; }
+
+  /* Bubbles settle in once the showcase scrolls into view. */
+
+  .huh-showcase.huh-is-visible .huh-aligned-chip {
+    animation: huh-bubble .55s cubic-bezier(.22,1,.36,1) .25s both;
+  }
+
+  .huh-showcase.huh-is-visible .huh-chat-line {
+    animation: huh-bubble .5s cubic-bezier(.22,1,.36,1) both;
+  }
+
+  .huh-showcase.huh-is-visible .huh-chat-line.them { animation-delay: .55s; }
+  .huh-showcase.huh-is-visible .huh-chat-line.me { animation-delay: .85s; }
+
+  .huh-showcase.huh-is-visible .huh-typing {
+    animation: huh-fade .4s ease 1.25s both;
+  }
+
+  @keyframes huh-dot {
+    0%, 100% { transform: translateY(0); opacity: .5; }
+    50% { transform: translateY(-3px); opacity: 1; }
+  }
+
+  @keyframes huh-bubble {
+    from { opacity: 0; transform: translateY(9px) scale(.96); }
+    to { opacity: 1; transform: none; }
+  }
+
+  @keyframes huh-fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  .huh-showcase-caption {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 12px 0 0;
+    color: rgba(241,237,226,.42);
+    font: 7px/1.8 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+  }
+
+  .huh-showcase-caption::before {
+    content: '';
+    width: 18px;
+    height: 1px;
+    flex: 0 0 18px;
+    margin-top: 6px;
+    background: var(--coral);
+  }
+
+  /* PROFILE STORY */
+
+  .huh-profiles {
+    background: var(--paper);
+    color: var(--black);
+  }
+
+  .huh-profile-layout {
+    display: grid;
+    grid-template-columns: minmax(0,.92fr) minmax(0,1.08fr);
+    gap: clamp(32px,7vw,88px);
+    align-items: center;
+    margin-top: 42px;
+  }
+
+  .huh-profile-art {
+    position: relative;
+    min-width: 0;
+    min-height: 330px;
+    padding: 24px;
+    overflow: hidden;
+    border-radius: 28px 28px 7px 28px;
+    background: var(--coral);
+    color: var(--black);
+  }
+
+  .huh-profile-art::before {
+    content: 'huh?';
+    position: absolute;
+    top: 65px;
+    right: -13px;
+    color: rgba(17,18,17,.075);
+    font: 900 clamp(100px,16vw,195px)/.7 'Barlow Condensed', sans-serif;
+    letter-spacing: -.06em;
+    pointer-events: none;
+  }
+
+  .huh-profile-art-top {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(17,18,17,.28);
+    font: 700 8px 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+  }
+
+  .huh-profile-art-head {
+    position: relative;
+    z-index: 1;
+    margin: 30px 0 24px;
+    font: 900 clamp(47px,6vw,73px)/.81 'Barlow Condensed', sans-serif;
+    letter-spacing: -.025em;
+    text-transform: uppercase;
+  }
+
+  .huh-profile-art-head span { color: var(--paper); }
+
+  .huh-art-tags {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+  }
+
+  .huh-art-tags span {
+    padding: 8px 10px;
+    border: 1px solid rgba(17,18,17,.43);
+    border-radius: 999px;
+    font: 700 8px 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+  }
+
+  .huh-profile-art-foot {
+    position: relative;
+    z-index: 1;
+    margin: 23px 0 0;
+    font: 7px/1.7 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+  }
+
+  .huh-profile-points {
+    border-top: 1px solid rgba(17,18,17,.23);
+  }
+
+  .huh-profile-point {
+    display: grid;
+    grid-template-columns: 37px minmax(0,1fr);
+    gap: 13px;
+    padding: 19px 0;
+    border-bottom: 1px solid rgba(17,18,17,.2);
+  }
+
+  .huh-profile-point-num {
+    color: var(--coral);
+    font: 900 24px/.9 'Barlow Condensed', sans-serif;
+  }
+
+  .huh-profile-point h3 {
+    margin: 0;
+    font: 800 23px/.95 'Barlow Condensed', sans-serif;
+    text-transform: uppercase;
+  }
+
+  .huh-profile-point p {
+    margin: 8px 0 0;
+    color: #55534D;
+    font-size: 11px;
+    line-height: 1.8;
+  }
+
+  /* THE NETWORK */
+
+  .huh-network {
+    overflow: hidden;
+    background: var(--concrete);
+    color: var(--black);
+  }
+
+  .huh-network .huh-eyebrow { color: #474640; }
+  .huh-network .huh-copy { color: #44433D; }
+
+  .huh-network-art {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0,1fr) 30px minmax(0,1fr) 30px minmax(0,1fr);
+    align-items: center;
+    gap: 8px;
+    margin-top: 42px;
+  }
+
+  .huh-network-node {
+    min-width: 0;
+    min-height: 145px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 15px 13px;
+    border: 1px solid var(--black);
+    border-radius: 16px 16px 5px 16px;
+    background: var(--paper);
+  }
+
+  .huh-network-node:nth-of-type(2) { background: var(--sage); }
+  .huh-network-node:nth-of-type(3) { background: var(--amber); }
+
+  .huh-network-node small {
+    font: 700 7px/1.6 'IBM Plex Mono', monospace;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+
+  .huh-network-node strong {
+    font: 900 clamp(23px,3.5vw,42px)/.82 'Barlow Condensed', sans-serif;
+    letter-spacing: -.01em;
+    text-transform: uppercase;
+  }
+
+  .huh-network-link {
+    display: grid;
+    place-items: center;
+    color: var(--black);
+    font-size: 22px;
+    animation: huh-nudge 2.8s ease-in-out infinite;
+  }
+
+  .huh-network-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 19px 0 0;
+    color: rgba(17,18,17,.72);
+    font: 8px/1.8 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+  }
+
+  .huh-network-note::before {
+    content: '';
+    width: 22px;
+    height: 1px;
+    flex: 0 0 22px;
+    margin-top: 7px;
+    background: var(--black);
+  }
+
+  /* VERIFICATION — the only section about college-email eligibility */
+
+  .huh-verification {
+    background: var(--black);
+    color: var(--paper);
+  }
+
+  .huh-verification-layout {
+    display: grid;
+    grid-template-columns: minmax(0,1fr) minmax(260px,.78fr);
+    align-items: center;
+    gap: clamp(35px,8vw,110px);
+  }
+
+  .huh-verification .huh-eyebrow { color: var(--amber); }
+  .huh-verification .huh-h2 em { color: var(--amber); }
+
+  .huh-verification .huh-copy {
+    max-width: 500px;
+    color: rgba(241,237,226,.68);
+  }
+
+  .huh-verify-card {
+    position: relative;
+    min-width: 0;
+    padding: clamp(21px,3.5vw,31px);
+    overflow: hidden;
+    border-radius: 25px 25px 7px 25px;
+    background: var(--paper);
+    color: var(--black);
+  }
+
+  .huh-verify-card::after {
+    content: '✓';
+    position: absolute;
+    top: 32px;
+    right: 20px;
+    color: rgba(119,148,119,.25);
+    font: 900 116px/.8 'Barlow Condensed', sans-serif;
+    pointer-events: none;
+  }
+
+  .huh-verify-meta {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding-bottom: 13px;
+    border-bottom: 1px solid rgba(17,18,17,.2);
+    font: 700 8px 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+  }
+
+  .huh-verify-icon {
+    position: relative;
+    z-index: 1;
+    width: 47px;
+    height: 47px;
+    display: grid;
+    place-items: center;
+    margin-top: 25px;
+    border-radius: 50%;
+    background: var(--sage);
+    font-size: 22px;
+  }
+
+  .huh-verify-card h3 {
+    position: relative;
+    z-index: 1;
+    max-width: 350px;
+    margin: 20px 0 0;
+    font: 900 clamp(33px,4vw,46px)/.87 'Barlow Condensed', sans-serif;
+    text-transform: uppercase;
+  }
+
+  .huh-verify-card > p {
+    position: relative;
+    z-index: 1;
+    margin: 14px 0 0;
+    color: #53524C;
+    font-size: 11px;
+    line-height: 1.8;
+  }
+
+  .huh-verify-fine {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin-top: 19px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(17,18,17,.2);
+    color: #63615A;
+    font: 7px/1.8 'IBM Plex Mono', monospace;
+  }
+
+  .huh-verify-fine span {
+    color: var(--coral);
+    font-size: 12px;
+  }
+
+  /* CONTROL AND REPORTING */
+
+  .huh-control {
+    background: var(--paper);
+    color: var(--black);
+  }
+
+  .huh-control-grid {
+    display: grid;
+    grid-template-columns: repeat(3,minmax(0,1fr));
+    gap: 12px;
+    margin-top: 39px;
+  }
+
+  .huh-control-card {
+    position: relative;
+    min-width: 0;
+    min-height: 191px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 18px;
+    overflow: hidden;
+    border-radius: 19px 19px 5px 19px;
+    background: #E7E0D3;
+  }
+
+  .huh-control-card:nth-child(2) { background: #DCE2D2; }
+  .huh-control-card:nth-child(3) { background: #E9CEC8; }
+
+  .huh-control-top {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    gap: 10px;
+    font: 700 8px 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+  }
+
+  .huh-control-symbol {
+    width: 42px;
+    height: 42px;
+    display: grid;
+    place-items: center;
+    margin: 22px 0 17px;
+    border: 1px solid rgba(17,18,17,.3);
+    border-radius: 50%;
+    font-size: 20px;
+  }
+
+  .huh-control-card h3 {
+    margin: auto 0 0;
+    font: 900 28px/.88 'Barlow Condensed', sans-serif;
+    letter-spacing: -.015em;
+    text-transform: uppercase;
+  }
+
+  .huh-control-card p {
+    margin: 9px 0 0;
+    color: #4E4C46;
+    font-size: 10px;
+    line-height: 1.7;
+  }
+
+  /* Closing */
+
+  .huh-close {
+    position: relative;
+    overflow: hidden;
+    padding-block: clamp(60px,8vw,99px);
+    background: var(--amber);
+    color: var(--black);
+  }
+
+  .huh-close::after {
+    content: 'huh?';
+    position: absolute;
+    right: -15px;
+    bottom: -70px;
+    color: rgba(17,18,17,.055);
+    font: 900 clamp(190px,31vw,390px)/.8 'Barlow Condensed', sans-serif;
+    letter-spacing: -.07em;
+    pointer-events: none;
+  }
+
+  .huh-close-inner {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: minmax(0,1fr) auto;
+    gap: 30px;
+    align-items: end;
+  }
+
+  .huh-close .huh-eyebrow {
+    color: rgba(17,18,17,.7);
+  }
+
+  .huh-close .huh-eyebrow::before { background: var(--black); }
+
+  .huh-close h2 {
+    max-width: 790px;
+    margin: 0;
+    font: 900 clamp(64px,9vw,112px)/.78 'Barlow Condensed', sans-serif;
+    letter-spacing: -.035em;
+    text-transform: uppercase;
+    text-wrap: balance;
+  }
+
+  .huh-close h2 span {
+    color: transparent;
+    -webkit-text-stroke: 1.6px var(--black);
+  }
+
+  .huh-close-note {
+    max-width: 235px;
+    margin: 0 0 4px;
+    font: 9px/1.8 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+  }
+
+  .huh-close-cta {
+    margin-top: 24px;
+    border-radius: 4px 18px 4px 18px;
+    background: var(--black);
+    color: var(--paper);
+  }
+
+  /* Footer */
+
+  .huh-footer {
+    padding-block: 20px;
+    border-top: 1px solid var(--rule);
+    background: var(--black);
+    color: var(--paper);
+  }
+
+  .huh-footer-inner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 18px;
+  }
+
+  .huh-footer-logo {
+    flex-shrink: 0;
+    font: 900 27px 'Barlow Condensed', sans-serif;
+    letter-spacing: -.05em;
+    text-transform: uppercase;
+  }
+
+  .huh-footer-copy {
+    color: rgba(241,237,226,.45);
+    font: 7px/1.8 'IBM Plex Mono', monospace;
+    text-align: right;
+  }
+
+  /* Connected, one-time entrance reveals */
+
+  .huh-reveal,
+  .huh-reveal-left,
+  .huh-reveal-right,
+  .huh-reveal-scale {
+    --reveal-delay: 0ms;
+  }
+
+  .huh-motion-ready .huh-reveal,
+  .huh-motion-ready .huh-reveal-left,
+  .huh-motion-ready .huh-reveal-right,
+  .huh-motion-ready .huh-reveal-scale {
+    opacity: 0;
+    filter: blur(2px);
+    transition:
+      opacity .65s cubic-bezier(.22,1,.36,1) var(--reveal-delay),
+      transform .72s cubic-bezier(.22,1,.36,1) var(--reveal-delay),
+      filter .65s ease var(--reveal-delay);
+  }
+
+  .huh-motion-ready .huh-reveal { transform: translateY(19px); }
+  .huh-motion-ready .huh-reveal-left { transform: translateX(-18px); }
+  .huh-motion-ready .huh-reveal-right { transform: translateX(18px); }
+  .huh-motion-ready .huh-reveal-scale { transform: translateY(13px) scale(.985); }
+
+  .huh-motion-ready .huh-is-visible {
+    opacity: 1 !important;
+    transform: translate(0,0) scale(1) !important;
+    filter: blur(0) !important;
+  }
+
+  .huh-network-node:nth-child(3) { --reveal-delay: 80ms; }
+  .huh-network-node:nth-child(5) { --reveal-delay: 160ms; }
+
+  .huh-control-card:nth-child(2) { --reveal-delay: 80ms; }
+  .huh-control-card:nth-child(3) { --reveal-delay: 160ms; }
+
+  @keyframes huh-nudge {
+    0%, 100% { transform: translateX(0); }
+    50% { transform: translateX(3px); }
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .huh-login:hover span { transform: translate(2px,-2px); }
+
+    .huh-cta:hover {
+      transform: translateY(-2px);
+      background: var(--amber);
+    }
+
+    .huh-cta:hover .arrow { transform: translate(2px,-2px); }
+
+    .huh-text-link:hover { color: var(--amber); }
+
+    .huh-phone:nth-child(1):hover,
+    .huh-phone:nth-child(2):hover,
+    .huh-phone:nth-child(3):hover {
+      animation-play-state: paused;
+      border-color: var(--amber);
+    }
+
+    .huh-network-node:hover { transform: translateY(-3px); }
+  }
+
+  /* Tablet */
+
+  @media (max-width: 980px) {
+    .huh-hero-inner {
+      grid-template-columns: minmax(0,1fr);
+      gap: 23px;
+      padding-top: 55px;
+    }
+
+    .huh-hero-copy { max-width: 750px; }
+
+    .huh-title { font-size: clamp(78px,11vw,110px); }
+
+    .huh-hero-desc { max-width: 560px; }
+
+    .huh-showcase {
+      width: min(100%,700px);
+      margin-inline: auto;
+      padding-top: 9px;
+    }
+
+    .huh-phone {
+      height: 410px;
+      max-width: 220px;
+    }
+
+    .huh-profile-layout { gap: 30px; }
+  }
+
+  /* Mobile */
+
+  @media (max-width: 680px) {
+    .huh-scroll {
+      scroll-padding-top: 64px;
+      scrollbar-width: none;
+    }
+
+    .huh-scroll::-webkit-scrollbar { display: none; }
+
+    .huh-wrap { padding-inline: 21px; }
+
+    .huh-top-inner {
+      min-height: 62px;
+      gap: 13px;
+    }
+
+    .huh-logo { font-size: 35px; }
+
+    .huh-login { min-height: 39px; }
+
+    .huh-hero-inner {
+      padding-block: 41px 36px;
+      gap: 15px;
+    }
+
+    .huh-kicker {
+      max-width: 320px;
+      margin-bottom: 24px;
+      font-size: 8px;
+    }
+
+    .huh-title {
+      font-size: clamp(67px,14.4vw,97px);
+      line-height: .81;
+    }
+
+    .huh-hero-desc {
+      margin-top: 22px;
+      font-size: 13px;
+      line-height: 1.8;
+    }
+
+    .huh-actions { gap: 16px; margin-top: 23px; }
+
+    .huh-cta {
+      min-height: 52px;
+      padding-inline: 17px;
+      gap: 17px;
+      font-size: 11px;
+    }
+
+    .huh-text-link { font-size: 10px; }
+
+    .huh-hero-note {
+      max-width: 380px;
+      margin-top: 17px;
+      font-size: 7px;
+    }
+
+    /*
+      The preview cards can be swiped horizontally.
+      Vertical gestures still scroll the landing page.
+    */
+
+    .huh-showcase {
+      width: calc(100% + 42px);
+      margin: 0 -21px;
+      padding: 13px 21px 25px;
+    }
+
+    .huh-showcase-label {
+      font-size: 7px;
+      line-height: 1.6;
+    }
+
+    .huh-device-stage {
+      width: 100%;
+      justify-content: flex-start;
+      align-items: center;
+      gap: 13px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 10px 1px 17px;
+      scroll-snap-type: x mandatory;
+      scroll-padding-inline: 1px;
+      overscroll-behavior-x: contain;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+
+    .huh-device-stage::-webkit-scrollbar { display: none; }
+
+    .huh-phone,
+    .huh-phone:nth-child(1),
+    .huh-phone:nth-child(2),
+    .huh-phone:nth-child(3) {
+      flex: 0 0 min(68vw,230px);
+      width: min(68vw,230px);
+      height: 375px;
+      max-width: none;
+      transform: none;
+      scroll-snap-align: start;
+    }
+
+    .huh-phone:nth-child(2) { border-color: var(--paper); }
+
+    .huh-showcase-caption { font-size: 7px; }
+
+    .huh-section { padding-block: 59px; }
+
+    .huh-section-head {
+      grid-template-columns: minmax(0,1fr);
+      gap: 14px;
+    }
+
+    .huh-eyebrow { margin-bottom: 16px; font-size: 8px; }
+
+    .huh-h2 {
+      font-size: clamp(47px,11vw,70px);
+      line-height: .87;
+    }
+
+    .huh-copy {
+      margin-top: 15px;
+      font-size: 12px;
+      line-height: 1.85;
+    }
+
+    .huh-profile-layout {
+      grid-template-columns: minmax(0,1fr);
+      gap: 22px;
+      margin-top: 29px;
+    }
+
+    .huh-profile-art {
+      min-height: 255px;
+      padding: 19px;
+      border-radius: 22px 22px 6px 22px;
+    }
+
+    .huh-profile-art-head {
+      margin-block: 24px 20px;
+      font-size: clamp(51px,12vw,68px);
+    }
+
+    .huh-profile-art-foot { margin-top: 18px; }
+
+    .huh-profile-point {
+      grid-template-columns: 32px minmax(0,1fr);
+      gap: 10px;
+      padding: 18px 0;
+    }
+
+    .huh-profile-point h3 { font-size: 22px; }
+    .huh-profile-point p { font-size: 11px; }
+
+    .huh-network-art {
+      grid-template-columns: minmax(0,1fr) 17px minmax(0,1fr) 17px minmax(0,1fr);
+      gap: 4px;
+      margin-top: 29px;
+    }
+
+    .huh-network-node {
+      min-height: 127px;
+      padding: 11px 8px;
+      gap: 15px;
+      border-radius: 12px 12px 4px 12px;
+    }
+
+    .huh-network-node small {
+      font-size: 6px;
+      line-height: 1.6;
+      overflow-wrap: anywhere;
+    }
+
+    .huh-network-node strong { font-size: clamp(19px,5.7vw,31px); }
+    .huh-network-link { font-size: 16px; }
+    .huh-network-note { font-size: 7px; }
+
+    .huh-verification-layout {
+      grid-template-columns: minmax(0,1fr);
+      gap: 27px;
+    }
+
+    .huh-verify-card {
+      padding: 22px;
+      border-radius: 21px 21px 6px 21px;
+    }
+
+    .huh-verify-card h3 { font-size: 40px; }
+
+    .huh-control-grid {
+      grid-template-columns: minmax(0,1fr);
+      gap: 10px;
+      margin-top: 28px;
+    }
+
+    .huh-control-card {
+      min-height: 155px;
+      padding: 17px;
+      border-radius: 17px 17px 5px 17px;
+    }
+
+    .huh-control-symbol { margin-block: 17px 13px; }
+    .huh-control-card h3 { font-size: 30px; }
+    .huh-control-card p { max-width: 340px; font-size: 11px; }
+
+    .huh-close { padding-block: 56px; }
+
+    .huh-close-inner {
+      grid-template-columns: minmax(0,1fr);
+      gap: 22px;
+    }
+
+    .huh-close h2 {
+      font-size: clamp(66px,13.8vw,91px);
+      line-height: .81;
+    }
+
+    .huh-close-note {
+      max-width: 330px;
+      font-size: 8px;
+    }
+
+    .huh-footer { padding-block: 19px; }
+
+    .huh-footer-inner {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .huh-footer-copy {
+      max-width: 450px;
+      font-size: 7px;
+      text-align: left;
+    }
+  }
+
+  @media (max-width: 380px) {
+    .huh-wrap { padding-inline: 17px; }
+
+    .huh-title {
+      font-size: clamp(58px,15vw,68px);
+    }
+
+    .huh-mock-photo { min-height: 118px; }
+
+    .huh-card-tags { display: none; }
+
+    .huh-preview-heading { font-size: 20px; }
+
+    .huh-showcase {
+      width: calc(100% + 34px);
+      margin-inline: -17px;
+      padding-inline: 17px;
+    }
+
+    .huh-phone,
+    .huh-phone:nth-child(1),
+    .huh-phone:nth-child(2),
+    .huh-phone:nth-child(3) {
+      flex-basis: min(76vw,220px);
+      width: min(76vw,220px);
+      height: 360px;
+    }
+
+    .huh-profile-art-head { font-size: 48px; }
+
+    .huh-network-node {
+      min-height: 122px;
+      padding: 9px 6px;
+    }
+
+    .huh-network-node strong { font-size: 19px; }
+
+    .huh-close h2 { font-size: 60px; }
+  }
+
+  @keyframes huh-nudge {
+    0%, 100% { transform: translateX(0); }
+    50% { transform: translateX(3px); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .huh-scroll { scroll-behavior: auto; }
+
+    .huh-top { transition: none !important; }
+
+    .huh-network-link,
+    .huh-phone,
+    .huh-phone:nth-child(1),
+    .huh-phone:nth-child(2),
+    .huh-phone:nth-child(3),
+    .huh-typing i,
+    .huh-showcase.huh-is-visible .huh-aligned-chip,
+    .huh-showcase.huh-is-visible .huh-chat-line {
+      animation: none !important;
+    }
+
+    .huh-login,
+    .huh-cta,
+    .huh-cta .arrow,
+    .huh-phone,
+    .huh-network-node {
+      transition: none !important;
+    }
+
+    .huh-motion-ready .huh-reveal,
+    .huh-motion-ready .huh-reveal-left,
+    .huh-motion-ready .huh-reveal-right,
+    .huh-motion-ready .huh-reveal-scale {
+      opacity: 1 !important;
+      filter: none !important;
+      transform: none !important;
+      transition: none !important;
+    }
+  }
+`;
+
+export default function Splash({ onEnter }) {
+  const pageRef = useRef(null);
+  const scrollRef = useRef(null);
+
+  // The status bar and the overscroll gutter belong to the browser but are
+  // painted from values this page supplies. Without this, the splash would run
+  // with whatever colour the previous screen left behind — which is the visible
+  // seam at the exact moment the app opens.
+  useChromeColor(C.black);
+
+  const enter = () => {
+    if (typeof onEnter === 'function') onEnter();
+  };
 
   useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < 768);
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    const page = pageRef.current;
+    const scroll = scrollRef.current;
+
+    if (!page || !scroll) return undefined;
+
+    const targets = page.querySelectorAll(
+      '.huh-reveal, .huh-reveal-left, .huh-reveal-right, .huh-reveal-scale',
+    );
+
+    const top = page.querySelector('.huh-top');
+    let lastY = scroll.scrollTop;
+
+    const handleScroll = () => {
+      const y = scroll.scrollTop;
+      const maxScroll = scroll.scrollHeight - scroll.clientHeight;
+      const progress = maxScroll > 0 ? y / maxScroll : 0;
+
+      top?.style.setProperty('--scroll-progress', `${progress * 100}%`);
+
+      /* Scrolling down (swiping up) past the hero hides the header;
+         a scroll up of any size brings it straight back. */
+
+      if (top) {
+        if (y > lastY + 4 && y > 90) {
+          top.classList.add('huh-top-hidden');
+        } else if (y < lastY - 4) {
+          top.classList.remove('huh-top-hidden');
+        }
+      }
+
+      lastY = y;
+    };
+
+    scroll.addEventListener('scroll', handleScroll, { passive: true });
+    handleScroll();
+
+    const reducedMotion = window.matchMedia(
+      '(prefers-reduced-motion: reduce)',
+    ).matches;
+
+    if (reducedMotion || !('IntersectionObserver' in window)) {
+      targets.forEach((element) => {
+        element.classList.add('huh-is-visible');
+      });
+
+      return () => {
+        scroll.removeEventListener('scroll', handleScroll);
+      };
+    }
+
+    page.classList.add('huh-motion-ready');
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+
+        entry.target.classList.add('huh-is-visible');
+        observer.unobserve(entry.target);
+      });
+    }, {
+      root: scroll,
+      threshold: 0.12,
+      rootMargin: '0px 0px -28px 0px',
+    });
+
+    targets.forEach((element) => observer.observe(element));
+
+    return () => {
+      observer.disconnect();
+      scroll.removeEventListener('scroll', handleScroll);
+      page.classList.remove('huh-motion-ready');
+    };
   }, []);
 
-  const changeStep = (direction) => {
-    if (unlocking) return;
-    const now = Date.now();
-    if (now - lastScrollTime.current < 1000) return;
-
-    setStep((prev) => {
-      const next = prev + direction;
-      if (next >= 0 && next < SLIDES.length) {
-        lastScrollTime.current = now;
-        return next;
-      }
-      return prev;
-    });
-  };
-
-  useEffect(() => {
-    const handleWheel = (e) => {
-      if (Math.abs(e.deltaY) > 30) changeStep(e.deltaY > 0 ? 1 : -1);
-    };
-    window.addEventListener('wheel', handleWheel, { passive: false });
-    return () => window.removeEventListener('wheel', handleWheel);
-  }, [unlocking]);
-
-  const handleTouchStart = (e) => { touchStartY.current = e.touches[0].clientY; };
-  const handleTouchEnd = (e) => {
-    const delta = touchStartY.current - e.changedTouches[0].clientY;
-    if (delta > 40) changeStep(1);
-    if (delta < -40) changeStep(-1);
-  };
-
-  const handleUnlock = () => {
-    try { navigator.vibrate?.([40, 80, 120]); } catch {}
-    setUnlocking(true);
-    setTimeout(onEnter, 1400);
-  };
-
-  const slide = SLIDES[step];
-  const isNight = slide.isNight;
-
-  // Circle choreography
-  const scales = isMobile ? [1, 1.5, 1.5, 0.8, 1.2] : [1, 1.85, 1.85, 0.7, 1.25];
-  const xPositions = isMobile ? ['0vw', '-45vw', '45vw', '0vw', '0vw'] : ['0vw', '-35vw', '35vw', '0vw', '0vw'];
-  const rotations = [0, 45, 90, 135, 180];
-
-  const containerVariants = {
-    hidden: { opacity: 0 },
-    show: { opacity: 1, transition: { staggerChildren: 0.15 } },
-    exit: { opacity: 0, filter: 'blur(12px)', transition: { duration: 0.5 } },
-  };
-
-  const itemVariants = {
-    hidden: { opacity: 0, y: 10 },
-    show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: 'easeOut' } },
-  };
-
-  /* slide-tag — the marker chip, themed per background */
-  const tagStyle = {
-    fontFamily: T.fontMono,
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: '.14em',
-    textTransform: 'uppercase',
-    padding: '5px 12px',
-    display: 'inline-block',
-    background: T.yellow,
-    color: T.ink,
-    border: `2px solid ${T.ink}`,
-    boxShadow: `3px 3px 0 ${isNight ? 'rgba(255,249,236,0.25)' : T.ink}`,
-    marginBottom: 18,
-  };
-
-  /* slide title — Bungee, the "where am I / what is this" voice */
-  const titleStyle = (size) => ({
-    color: isNight ? T.nightText : T.ink,
-    fontFamily: T.fontHeavy,
-    fontSize: size,
-    fontWeight: 400,
-    letterSpacing: '.01em',
-    lineHeight: 1.1,
-    margin: '0 0 20px 0',
-    textTransform: 'uppercase',
-    textShadow: isNight ? 'none' : `2px 2px 0 ${T.yellow}`,
-  });
-
-  const bodyStyle = {
-    color: isNight ? T.nightMuted : T.ink2,
-    fontFamily: T.fontBody,
-    fontSize: 'clamp(16px, 2.5vw, 18px)',
-    fontWeight: 500,
-    margin: 0,
-    lineHeight: 1.65,
-    textWrap: 'pretty',
-  };
-
   return (
-    <div
-      onTouchStart={handleTouchStart}
-      onTouchEnd={handleTouchEnd}
-      style={{ position: 'relative', width: '100vw', height: '100dvh', overflow: 'hidden', backgroundColor: T.paper }}
-    >
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&family=Archivo+Black&family=Bungee&family=Caveat:wght@700&display=swap');
-        @keyframes spinSlow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        @keyframes spinReverse { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
-      `}</style>
+    <div className="huh-page" ref={pageRef}>
+      <style>{CSS}</style>
 
-      {/* BACKGROUND — cream ↔ ink void */}
-      <motion.div
-        animate={{ backgroundColor: isNight ? T.void : T.paper }}
-        transition={{ duration: 0.9, ease: 'easeInOut' }}
-        style={{ position: 'absolute', inset: 0, zIndex: 0 }}
-      />
-      {/* dot grid — the paper texture, kept but softened */}
-      <div style={{
-        position: 'absolute', inset: 0, mixBlendMode: 'multiply',
-        backgroundImage: `radial-gradient(circle at 20% 30%, rgba(25,25,25,0.12) 1px, transparent 1px), radial-gradient(circle at 70% 60%, rgba(25,25,25,0.08) 1px, transparent 1px)`,
-        backgroundSize: '3px 3px, 5px 5px', pointerEvents: 'none', zIndex: 1, opacity: 0.5,
-      }} />
-
-      {/* THE CIRCLE — rings in ink + yellow */}
-      <motion.div
-        animate={{
-          x: `calc(-50% + ${xPositions[step]})`,
-          y: '-50%',
-          scale: scales[step],
-          rotate: rotations[step],
-        }}
-        transition={{ type: 'spring', mass: 2.5, stiffness: 40, damping: 25 }}
-        style={{ position: 'absolute', top: '50%', left: '50%', width: 600, height: 600, zIndex: 2, pointerEvents: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      <div
+        className="huh-scroll"
+        ref={scrollRef}
+        aria-label="huh? landing page"
       >
-        <motion.div animate={{ opacity: unlocking ? 0 : 0.7 }} transition={{ duration: 0.4 }} style={{ width: '100%', height: '100%', position: 'absolute' }}>
-          <svg viewBox="0 0 800 800" style={{ width: '100%', height: '100%' }}>
-            <g style={{ transformOrigin: 'center', animation: 'spinSlow 100s linear infinite' }}>
-              <circle cx="400" cy="400" r="380" stroke={T.yellow} strokeWidth="3" fill="none" strokeDasharray="40 18" />
-            </g>
-            <g style={{ transformOrigin: 'center', animation: 'spinReverse 140s linear infinite' }}>
-              <circle cx="400" cy="400" r="360" stroke={T.ink} strokeWidth="3.5" fill="none" opacity="0.9" />
-            </g>
-          </svg>
-        </motion.div>
-
-        {/* EXPANDING CORE — ink void on unlock */}
-        <motion.div
-          initial={{ scale: 0, opacity: 0 }}
-          animate={{ scale: unlocking ? 150 : 0, opacity: unlocking ? 1 : 0 }}
-          transition={{ duration: 1.2, ease: [0.7, 0, 0.1, 1] }}
-          style={{ position: 'absolute', width: 40, height: 40, borderRadius: '50%', backgroundColor: T.ink, zIndex: 999 }}
-        />
-      </motion.div>
-
-      {/* TEXT LAYER */}
-      <div style={{ position: 'absolute', inset: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <AnimatePresence mode="wait">
-          {!unlocking && (
-            <motion.div
-              key={step}
-              variants={containerVariants}
-              initial="hidden"
-              animate="show"
-              exit="exit"
-              style={{
-                width: '100%',
-                maxWidth: 1200,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: isMobile ? 'center' : slide.align === 'right' ? 'flex-end' : slide.align === 'left' ? 'flex-start' : 'center',
-                padding: isMobile ? '0 24px' : slide.align === 'right' ? '0 10vw 0 0' : slide.align === 'left' ? '0 0 0 10vw' : '0 40px',
-              }}
+        <header className="huh-top">
+          <div className="huh-wrap huh-top-inner">
+            <a
+              className="huh-logo"
+              href="#huh-home"
+              aria-label="huh? home"
             >
-              {/* SLIDE: TITLE */}
-              {slide.type === 'title' && (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-                  <motion.span variants={itemVariants} style={tagStyle}>
-                    {slide.tag}
-                  </motion.span>
-                  {/* brand moment — the B-wordmark treatment, scaled up */}
-                  <motion.h1
-                    variants={itemVariants}
-                    style={{
-                      fontFamily: T.fontHeavy,
-                      fontSize: 'clamp(44px, 10vw, 72px)',
-                      fontWeight: 400,
-                      color: T.ink,
-                      textTransform: 'uppercase',
-                      letterSpacing: '.01em',
-                      lineHeight: 1.05,
-                      margin: '0 0 14px 0',
-                      textShadow: `4px 4px 0 ${T.yellow}`,
-                    }}
+              huh<b>?</b>
+            </a>
+
+            <span className="huh-spacer" />
+
+            <button
+              className="huh-login"
+              type="button"
+              onClick={enter}
+            >
+              Log in <span aria-hidden="true">↗</span>
+            </button>
+          </div>
+        </header>
+
+        <main id="huh-home">
+          {/* 01 — THE QUESTION */}
+
+          <section className="huh-hero" aria-labelledby="huh-title">
+            <div className="huh-wrap huh-hero-inner">
+              <div className="huh-hero-copy huh-reveal-left">
+                <p className="huh-kicker">
+                  The student-only dating &amp; social app
+                </p>
+
+                <h1 className="huh-title" id="huh-title">
+                  <span className="line">
+                    huh<span className="accent">?</span>
+                  </span>
+                  <span className="line outline">Only verified</span>
+                  <span className="line">students.</span>
+                  <span className="line">
+                    Dating &amp; <span className="accent">friends.</span>
+                  </span>
+                </h1>
+
+                <p className="huh-hero-desc">
+                  Every profile here belongs to a student with a verified
+                  college email — from your campus and campuses across the
+                  country. Flip through real profiles, align with the ones
+                  who stick, and chat the moment it’s mutual.
+                </p>
+
+                <div className="huh-actions">
+                  <button
+                    className="huh-cta"
+                    type="button"
+                    onClick={enter}
                   >
-                    {slide.title}
-                  </motion.h1>
-                  <motion.p variants={itemVariants} style={{ color: T.ink2, fontFamily: T.fontMono, fontSize: 12, fontWeight: 700, letterSpacing: '.18em', textTransform: 'uppercase' }}>
-                    {slide.subtitle}
-                  </motion.p>
+                    Okay, I’m curious
+                    <span className="arrow" aria-hidden="true">↗</span>
+                  </button>
+
+                  <a className="huh-text-link" href="#how-it-works">
+                    Take a look <span aria-hidden="true">↓</span>
+                  </a>
                 </div>
-              )}
 
-              {/* SLIDE: CONTENT */}
-              {!slide.type && (
-                <div style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: isMobile ? 'center' : slide.align === 'right' ? 'flex-end' : 'flex-start',
-                  textAlign: isMobile ? 'center' : slide.align,
-                  maxWidth: 540,
-                }}>
-                  <motion.span variants={itemVariants} style={tagStyle}>
-                    {slide.tag}
-                  </motion.span>
+                <p className="huh-hero-note">
+                  <span aria-hidden="true">✳</span>
+                  College email verification required · Free for students
+                </p>
+              </div>
 
-                  <motion.h2 variants={itemVariants} style={titleStyle('clamp(36px, 6vw, 56px)')}>
-                    {slide.title}
-                  </motion.h2>
-
-                  <motion.div variants={itemVariants} style={{
-                    position: 'relative',
-                    padding: isMobile ? 0 : slide.align === 'right' ? '0 28px 0 0' : '0 0 0 28px',
-                    borderRight: !isMobile && slide.align === 'right' ? `2px solid ${T.yellow}` : 'none',
-                    borderLeft: !isMobile && slide.align === 'left' ? `2px solid ${T.yellow}` : 'none',
-                  }}>
-                    <p style={bodyStyle}>
-                      {slide.body}
-                    </p>
-                  </motion.div>
+              <div
+                className="huh-showcase huh-reveal-scale"
+                aria-label="Illustrations of the actual app interface"
+              >
+                <div className="huh-showcase-label">
+                  <span>The actual interface</span>
+                  <span>Discover · Align · Chat</span>
                 </div>
-              )}
 
-              {/* SLIDE: CTA */}
-              {slide.type === 'cta' && (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 480 }}>
-                  <motion.span variants={itemVariants} style={tagStyle}>
-                    {slide.tag}
-                  </motion.span>
-                  <motion.h1
-                    variants={itemVariants}
-                    style={{
-                      fontFamily: T.fontHeavy,
-                      fontSize: 'clamp(38px, 7vw, 54px)',
-                      fontWeight: 400,
-                      color: T.ink,
-                      textTransform: 'uppercase',
-                      letterSpacing: '.01em',
-                      lineHeight: 1.05,
-                      margin: '0 0 16px 0',
-                      textShadow: `4px 4px 0 ${T.yellow}`,
-                    }}
-                  >
-                    Matchalize
-                  </motion.h1>
-                  <motion.p variants={itemVariants} style={{ color: T.ink2, fontFamily: T.fontBody, fontSize: 'clamp(15px, 2.5vw, 17px)', fontWeight: 600, margin: '0 0 36px', lineHeight: 1.6, textWrap: 'balance' }}>
-                    {slide.body}
-                  </motion.p>
-                  <motion.button
-                    variants={itemVariants}
-                    onClick={handleUnlock}
-                    className="splash-slam"
-                    style={{
-                      width: '100%',
-                      padding: '22px 32px',
-                      backgroundColor: T.yellow,
-                      color: T.ink,
-                      border: `3px solid ${T.ink}`,
-                      borderRadius: 16,
-                      boxShadow: `6px 6px 0 ${T.ink}`,
-                      fontFamily: T.fontMono,
-                      fontSize: 14,
-                      fontWeight: 700,
-                      letterSpacing: '.14em',
-                      textTransform: 'uppercase',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 14,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <BookOpen size={22} strokeWidth={2.6} /> Enter Matchalize
-                  </motion.button>
+                <div className="huh-device-stage">
+                  {/* Discover: the real profile fields, without fake member data. */}
+
+                  <div className="huh-phone">
+                    <div className="huh-phone-screen">
+                      <div className="huh-phone-status">
+                        <span>huh?</span>
+                        <span className="huh-status-icons">● ▮ ▰</span>
+                      </div>
+
+                      <div className="huh-app-bar">
+                        <span className="huh-app-wordmark">
+                          Discover<span style={{ color: C.coral }}>.</span>
+                        </span>
+                        <span className="huh-app-icon" aria-hidden="true">
+                          ⌕
+                        </span>
+                      </div>
+
+                      <div className="huh-screen-label">
+                        A profile / first impression
+                      </div>
+
+                      <div
+                        className="huh-mock-photo"
+                        aria-label="Decorative placeholder, not a member photo"
+                      >
+                        <span className="huh-photo-tag">
+                          Profile photo
+                        </span>
+                      </div>
+
+                      <div className="huh-card-id">
+                        <span className="huh-card-name">Aanya, 20</span>
+                        <span className="huh-card-pronouns">she / her</span>
+                      </div>
+
+                      <div className="huh-mock-facts">
+                        <div className="huh-mock-fact">
+                          <small>College</small>
+                          <b>IIT Bombay</b>
+                        </div>
+                        <div className="huh-mock-fact">
+                          <small>Year</small>
+                          <b>UG</b>
+                        </div>
+                        <div className="huh-mock-fact">
+                          <small>Here for</small>
+                          <b>Dating</b>
+                        </div>
+                        <div className="huh-mock-fact">
+                          <small>Graduating</small>
+                          <b>2027</b>
+                        </div>
+                      </div>
+
+                      <div className="huh-card-tags">
+                        <span>Chai Walks</span>
+                        <span>Anime</span>
+                        <span>Hackathons</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Profile details: actual content groups and final Align CTA. */}
+
+                  <div className="huh-phone">
+                    <div className="huh-phone-screen">
+                      <div className="huh-phone-status">
+                        <span>huh?</span>
+                        <span className="huh-status-icons">● ▮ ▰</span>
+                      </div>
+
+                      <div className="huh-screen-label">
+                        Look a little closer
+                      </div>
+
+                      <div className="huh-sheet-preview">
+                        <div className="huh-sheet-grabber" />
+
+                        <h3 className="huh-preview-heading">
+                          More to<br />the person.
+                        </h3>
+
+                        <div className="huh-preview-section">
+                          <strong>A little about me</strong>
+                          <p className="huh-preview-bio">
+                            Will trade playlists for chai.
+                          </p>
+                        </div>
+
+                        <div className="huh-preview-section">
+                          <strong>The basics</strong>
+                          <p className="huh-preview-basics">
+                            IIT Bombay · UG · 2027
+                          </p>
+                        </div>
+
+                        <div className="huh-preview-section">
+                          <strong>Here for</strong>
+                          <div className="huh-preview-pills">
+                            <span className="huh-pill accent">Dating</span>
+                          </div>
+                        </div>
+
+                        <div className="huh-preview-section">
+                          <strong>Things I like</strong>
+                          <div className="huh-preview-pills">
+                            <span className="huh-pill">Chai Walks</span>
+                            <span className="huh-pill">Night Canteen</span>
+                            <span className="huh-pill">Music Production</span>
+                          </div>
+                        </div>
+
+                        <div className="huh-preview-prompt">
+                          <strong>Your go-to 2 AM canteen order?</strong>
+                          <p>Maggi. Extra cheese if I like you.</p>
+                        </div>
+
+                        <div className="huh-preview-align">
+                          <span>Align with this person</span>
+                          <span>↗</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Report option and the conditional match/chat outcome. */}
+
+                  <div className="huh-phone">
+                    <div className="huh-phone-screen dark">
+                      <div className="huh-phone-status">
+                        <span>huh?</span>
+                        <span className="huh-status-icons">● ▮ ▰</span>
+                      </div>
+
+                      <div className="huh-app-bar">
+                        <span className="huh-app-wordmark">
+                          Chat<span style={{ color: C.coral }}>.</span>
+                        </span>
+                        <span className="huh-app-icon" aria-hidden="true">
+                          ⋯
+                        </span>
+                      </div>
+
+                      <div className="huh-screen-label">
+                        After a mutual align
+                      </div>
+
+                      <div className="huh-aligned-chip">
+                        <span>Aligned!</span>
+                        <small>
+                          Mutual ·<br />chat unlocked
+                        </small>
+                      </div>
+
+                      <div className="huh-chat-thread">
+                        <p className="huh-chat-line them">
+                          so… chai walk this sunday?
+                        </p>
+
+                        <p className="huh-chat-line me">
+                          only if there’s maggi at the end
+                        </p>
+
+                        <div
+                          className="huh-chat-line them huh-typing"
+                          aria-hidden="true"
+                        >
+                          <i /><i /><i />
+                        </div>
+                      </div>
+
+                      <p className="huh-preview-note">
+                        Report &amp; block stay one tap away.
+                      </p>
+                    </div>
+                  </div>
                 </div>
-              )}
 
-            </motion.div>
-          )}
-        </AnimatePresence>
+                <p className="huh-showcase-caption">
+                  Sample data for illustration — the fields are real, the
+                  people are made up. A profile is whatever each person
+                  makes of theirs.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          {/* 02 — WHY THE PROFILE HAS MORE THAN A PHOTO */}
+
+          <section
+            className="huh-section huh-profiles"
+            id="how-it-works"
+            aria-labelledby="huh-profile-title"
+          >
+            <div className="huh-wrap">
+              <div className="huh-section-head huh-reveal">
+                <div>
+                  <p className="huh-eyebrow">01 / Look beyond the photo</p>
+
+                  <h2 className="huh-h2" id="huh-profile-title">
+                    A face gets<br />
+                    your attention.<br />
+                    <em>Details make it personal.</em>
+                  </h2>
+                </div>
+
+                <p className="huh-copy">
+                  Profiles bring together photos, a little about the person,
+                  basic details, what they’re looking for, interests, and
+                  prompts they’ve answered. You choose what catches your eye.
+                </p>
+              </div>
+
+              <div className="huh-profile-layout">
+                <div className="huh-profile-art huh-reveal-left">
+                  <div className="huh-profile-art-top">
+                    <span>Profile / Expanded</span>
+                    <span>Scroll to explore</span>
+                  </div>
+
+                  <h3 className="huh-profile-art-head">
+                    There’s more<br />
+                    <span>to the story.</span>
+                  </h3>
+
+                  <div className="huh-art-tags">
+                    <span>About</span>
+                    <span>The basics</span>
+                    <span>Interests</span>
+                    <span>Prompts</span>
+                  </div>
+
+                  <p className="huh-profile-art-foot">
+                    Details appear as you move through the profile.
+                  </p>
+                </div>
+
+                <div className="huh-profile-points huh-reveal-right">
+                  <article className="huh-profile-point">
+                    <span className="huh-profile-point-num">01</span>
+                    <div>
+                      <h3>Start with the person.</h3>
+                      <p>
+                        See their photo and the profile information they
+                        have shared.
+                      </p>
+                    </div>
+                  </article>
+
+                  <article className="huh-profile-point">
+                    <span className="huh-profile-point-num">02</span>
+                    <div>
+                      <h3>Stay for the details.</h3>
+                      <p>
+                        Explore interests, intentions and answers to
+                        profile prompts as you scroll.
+                      </p>
+                    </div>
+                  </article>
+
+                  <article className="huh-profile-point">
+                    <span className="huh-profile-point-num">03</span>
+                    <div>
+                      <h3>Make your own move.</h3>
+                      <p>
+                        Reach the Align action at the bottom of the
+                        expanded profile when you’re ready.
+                      </p>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* 03 — A WIDER STUDENT NETWORK */}
+
+          <section
+            className="huh-section huh-network"
+            aria-labelledby="huh-network-title"
+          >
+            <div className="huh-wrap">
+              <div className="huh-section-head huh-reveal">
+                <div>
+                  <p className="huh-eyebrow">02 / Outside your usual circle</p>
+
+                  <h2 className="huh-h2" id="huh-network-title">
+                    Your college<br />
+                    is a start.<br />
+                    <em>Not the whole world.</em>
+                  </h2>
+                </div>
+
+                <p className="huh-copy">
+                  Discover profiles from your college and from other
+                  participating colleges. Your existing circle doesn’t
+                  have to define everyone you get to meet.
+                </p>
+              </div>
+
+              <div className="huh-network-art">
+                <div className="huh-network-node huh-reveal">
+                  <small>01 / Your starting point</small>
+                  <strong>Your<br />college</strong>
+                </div>
+
+                <span className="huh-network-link" aria-hidden="true">
+                  ↗
+                </span>
+
+                <div className="huh-network-node huh-reveal">
+                  <small>02 / Beyond it</small>
+                  <strong>Other<br />colleges</strong>
+                </div>
+
+                <span className="huh-network-link" aria-hidden="true">
+                  ↗
+                </span>
+
+                <div className="huh-network-node huh-reveal">
+                  <small>03 / Who knows?</small>
+                  <strong>New<br />connections</strong>
+                </div>
+              </div>
+
+              <p className="huh-network-note huh-reveal">
+                A wider network of students, without limiting discovery
+                to the people you already know.
+              </p>
+            </div>
+          </section>
+
+          {/* 04 — ELIGIBILITY AND ITS LIMITS */}
+
+          <section
+            className="huh-section huh-verification"
+            aria-labelledby="huh-verify-title"
+          >
+            <div className="huh-wrap huh-verification-layout">
+              <div className="huh-reveal-left">
+                <p className="huh-eyebrow">03 / Who can join</p>
+
+                <h2 className="huh-h2" id="huh-verify-title">
+                  A student network<br />
+                  starts with<br />
+                  <em>eligibility.</em>
+                </h2>
+
+                <p className="huh-copy">
+                  College email verification is part of sign-up. It helps
+                  establish eligibility, while the supported-institution
+                  list determines who can currently join.
+                </p>
+              </div>
+
+              <aside
+                className="huh-verify-card huh-reveal-right"
+                aria-label="College email verification information"
+              >
+                <div className="huh-verify-meta">
+                  <span>Sign-up / Verification</span>
+                  <span>01</span>
+                </div>
+
+                <div className="huh-verify-icon" aria-hidden="true">
+                  ✓
+                </div>
+
+                <h3>College email.<br />Clear eligibility.</h3>
+
+                <p>
+                  Use the college-email verification step during sign-up.
+                  If your institution isn’t currently supported, availability
+                  may be limited until it is added.
+                </p>
+
+                <div className="huh-verify-fine">
+                  <span aria-hidden="true">✳</span>
+                  Verification helps establish student eligibility; it does
+                  not independently verify every detail someone shares
+                  in their profile.
+                </div>
+              </aside>
+            </div>
+          </section>
+
+          {/* 05 — ACTIONS AND REPORTING */}
+
+          <section
+            className="huh-section huh-control"
+            aria-labelledby="huh-control-title"
+          >
+            <div className="huh-wrap">
+              <div className="huh-section-head huh-reveal">
+                <div>
+                  <p className="huh-eyebrow">04 / Your next move</p>
+
+                  <h2 className="huh-h2" id="huh-control-title">
+                    Interest is yours<br />
+                    to <em>act on.</em>
+                  </h2>
+                </div>
+
+                <p className="huh-copy">
+                  Not every profile will be your person. You decide when
+                  to move on, when to take another look, and when something
+                  needs to be reported.
+                </p>
+              </div>
+
+              <div className="huh-control-grid">
+                <article className="huh-control-card huh-reveal">
+                  <div className="huh-control-top">
+                    <span>01 / Pass</span><span>↗</span>
+                  </div>
+
+                  <div className="huh-control-symbol" aria-hidden="true">
+                    ×
+                  </div>
+
+                  <h3>Not your person?</h3>
+                  <p>
+                    Pass on a profile and continue discovering others.
+                  </p>
+                </article>
+
+                <article className="huh-control-card huh-reveal">
+                  <div className="huh-control-top">
+                    <span>02 / Align</span><span>↗</span>
+                  </div>
+
+                  <div className="huh-control-symbol" aria-hidden="true">
+                    ↗
+                  </div>
+
+                  <h3>Curiosity goes both ways.</h3>
+                  <p>
+                    Align with someone. When the alignment is mutual,
+                    the chat opens.
+                  </p>
+                </article>
+
+                <article className="huh-control-card huh-reveal">
+                  <div className="huh-control-top">
+                    <span>03 / Report</span><span>↗</span>
+                  </div>
+
+                  <div className="huh-control-symbol" aria-hidden="true">
+                    !
+                  </div>
+
+                  <h3>Something feels off?</h3>
+                  <p>
+                    Open the profile menu to access Report profile
+                    and raise a concern.
+                  </p>
+                </article>
+              </div>
+            </div>
+          </section>
+
+          {/* THE LAST LINE */}
+
+          <section className="huh-close" aria-labelledby="huh-close-title">
+            <div className="huh-wrap huh-close-inner huh-reveal">
+              <div>
+                <p className="huh-eyebrow">One more thing</p>
+
+                <h2 id="huh-close-title">
+                  Someone new.<br />
+                  Something <span>unexpected.</span>
+                </h2>
+
+                <button
+                  className="huh-cta huh-close-cta"
+                  type="button"
+                  onClick={enter}
+                >
+                  Go see who’s out there
+                  <span className="arrow" aria-hidden="true">↗</span>
+                </button>
+              </div>
+
+              <p className="huh-close-note">
+                Turns out, you haven’t met everyone yet.
+                So… huh?
+              </p>
+            </div>
+          </section>
+        </main>
+
+        <footer className="huh-footer">
+          <div className="huh-wrap huh-footer-inner">
+            <span className="huh-footer-logo">
+              huh<b>?</b>
+            </span>
+
+            <span className="huh-footer-copy">
+              For college students at supported institutions.
+              Interface previews are illustrative; profile content varies.
+            </span>
+          </div>
+        </footer>
       </div>
-
-      {/* slam styles for the CTA */}
-      <style>{`
-        .splash-slam { transition: transform .08s steps(2), box-shadow .08s steps(2); -webkit-tap-highlight-color: transparent; }
-        .splash-slam:hover { transform: translate(-2px, -2px); box-shadow: 8px 8px 0 ${T.ink}; }
-        .splash-slam:active { transform: translate(6px, 6px) !important; box-shadow: 0 0 0 ${T.ink} !important; }
-        .splash-slam:focus-visible { outline: 3px solid ${T.coral}; outline-offset: 3px; }
-        @media (prefers-reduced-motion: reduce) {
-          .splash-slam { transition: none; }
-        }
-      `}</style>
     </div>
   );
 }
+
+```
+
+### ./client/src/styles/neu.js
+
+```
+/* ============================================================
+   MATCHALIZE: THE NEO-BRUTALIST TOKEN LAYER — single source of truth
+   ============================================================
+   Every screen pulls color/font/shadow values from here. Do NOT
+   define local token objects in components — import this module.
+   Values are the converged canon of the old per-file `const t/T/C/F`
+   blocks (Discover + ProfileCard agreed on all of them).
+
+   Shadows are a 3-step scale, always ink:
+     shadow.sm  3px — small chips, tags, inputs
+     shadow.md  5px — default button/card slam
+     shadow.lg  8px — hero cards, modal sheets
+   ============================================================ */
+
+const neu = {
+  /* COLOR — the candy box */
+  desk: '#131313', // the app's night: dark desk behind cards
+  paper: '#FFF9EC', // warm cream — the base paper
+  card: '#FFFFFF', // raised white card
+  ink: '#191919', // text + every border + every shadow
+  ink2: '#5F5B52', // secondary text
+  ink3: '#A39E92', // muted text
+  hair: '#EBE5D6', // hairline borders on white cards
+
+  yellow: '#FFD43D', // primary action
+  yellowDeep: '#FFC91F', // yellow hover/pressed
+  coral: '#FF7A59', // secondary accent
+  green: '#5BD98A', // success / accept
+  pink: '#FFA3C6', // decorative tile
+  red: '#E5484D', // destructive
+
+  /* TYPE — four voices, no more */
+  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif", // display: titles, wordmark, nav labels
+  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif", // body copy
+  fontMono: "'Space Mono', 'Courier New', monospace", // labels: uppercase, letterspaced, stamps
+  fontHand: "'Caveat', 'Segoe Script', cursive", // handwritten annotations
+
+  /* SLAM SHADOWS — always ink, three sizes */
+  shadow: {
+    sm: '3px 3px 0 #191919',
+    md: '5px 5px 0 #191919',
+    lg: '8px 8px 0 #191919',
+  },
+
+  /* BORDERS + RADII */
+  border: {
+    sm: '2px solid #191919',
+    md: '3px solid #191919',
+  },
+  radius: {
+    sm: '10px',
+    md: '14px',
+    lg: '20px',
+    pill: '999px',
+  },
+
+  /* TEXTURE — film grain overlay */
+  grain:
+    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E",
+
+  /* Z-INDEX — layering scale */
+  z: {
+    header: 500,
+    nav: 10,
+    drawer: 1000,
+    modal: 1100,
+    toast: 9999,
+    overlay: 10000,
+  },
+
+  /* PLACEHOLDER — inline SVG fallbacks */
+  placeholder: {
+    avatar:
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Crect width='120' height='120' fill='%23ede7db'/%3E%3Cg fill='none' stroke='%23c9bda6' stroke-width='3'%3E%3Ccircle cx='60' cy='48' r='17'/%3E%3Cpath d='M28 104c0-18 14-32 32-32s32 14 32 32'/%3E%3C/g%3E%3C/svg%3E",
+    image:
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='500' viewBox='0 0 400 500'%3E%3Crect width='400' height='500' fill='%23ede7db'/%3E%3Cg fill='none' stroke='%23c9bda6' stroke-width='3'%3E%3Ccircle cx='200' cy='195' r='50'/%3E%3Cpath d='M112 385c0-49 39-88 88-88s88 39 88 88'/%3E%3C/g%3E%3C/svg%3E",
+    hero:
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='870' viewBox='0 0 600 870'%3E%3Crect width='600' height='870' fill='%23e8e4d9'/%3E%3Cg fill='none' stroke='%23c9bda6' stroke-width='4'%3E%3Ccircle cx='300' cy='340' r='82'/%3E%3Cpath d='M158 660c0-78 63-142 142-142s142 64 142 142'/%3E%3C/g%3E%3Ctext x='300' y='740' text-anchor='middle' font-family='Georgia,serif' font-size='26' fill='%23a89b85'%3ENo Portrait%3C/text%3E%3C/svg%3E",
+  },
+
+  /* MOTION — the slam press, shared recipe */
+  slamTransition: 'transform .08s steps(2), box-shadow .08s steps(2)',
+};
+
+export default neu;
+export const color = neu;
+
 ```
 
 ### ./client/src/utils/theme.js
@@ -3014,79 +5540,6 @@ export function setThemePreference(mode) {
   }
   return mode;
 }
-
-export const theme = {
-  color: {
-    bg: '#f4efe3',
-    paper: '#faf6ec',
-    surface: '#fffdf6',
-    surfaceAlt: '#f3ede0',
-    surfaceDim: '#e7decb',
-
-    ink: '#241f19',
-    inkSoft: '#4e4638',
-    inkMuted: '#6f6758',
-
-    border: '#e3dac7',
-    borderDark: '#cfc3aa',
-
-    accent: '#6e4a2e',
-    accentSoft: 'rgba(110, 74, 46, 0.18)',
-    accentFaint: 'rgba(110, 74, 46, 0.05)',
-
-    crimson: '#8b1a1a',
-    crimsonSoft: 'rgba(139, 26, 26, 0.08)',
-
-    success: '#22543d',
-    warning: '#b46807',
-    telegramTint: 'rgba(176, 141, 87, 0.08)',
-
-    shadowWarm: 'rgba(74, 50, 34, 0.12)',
-    shadowDark: 'rgba(26, 26, 26, 0.20)',
-
-    neuDark: '#dedad2',
-    neuLight: '#ffffff',
-  },
-
-  font: {
-    display: "'Playfair Display', Georgia, serif",
-    heading: "'Playfair Display', Georgia, serif",
-    body: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
-    typewriter: "'Special Elite', 'Courier New', monospace",
-  },
-
-  texture: {
-    grain:
-      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E",
-  },
-
-  radius: {
-    sm: '8px',
-    md: '12px',
-    lg: '24px',
-    pill: '999px',
-  },
-
-  placeholder: {
-    avatar:
-      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Crect width='120' height='120' fill='%23ede7db'/%3E%3Cg fill='none' stroke='%23c9bda6' stroke-width='3'%3E%3Ccircle cx='60' cy='48' r='17'/%3E%3Cpath d='M28 104c0-18 14-32 32-32s32 14 32 32'/%3E%3C/g%3E%3C/svg%3E",
-    image:
-      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='500' viewBox='0 0 400 500'%3E%3Crect width='400' height='500' fill='%23ede7db'/%3E%3Cg fill='none' stroke='%23c9bda6' stroke-width='3'%3E%3Ccircle cx='200' cy='195' r='50'/%3E%3Cpath d='M112 385c0-49 39-88 88-88s88 39 88 88'/%3E%3C/g%3E%3C/svg%3E",
-    hero:
-      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='870' viewBox='0 0 600 870'%3E%3Crect width='600' height='870' fill='%23e8e4d9'/%3E%3Cg fill='none' stroke='%23c9bda6' stroke-width='4'%3E%3Ccircle cx='300' cy='340' r='82'/%3E%3Cpath d='M158 660c0-78 63-142 142-142s142 64 142 142'/%3E%3C/g%3E%3Ctext x='300' y='740' text-anchor='middle' font-family='Georgia,serif' font-size='26' fill='%23a89b85'%3ENo Portrait%3C/text%3E%3C/svg%3E",
-  },
-
-  z: {
-    header: 500,
-    nav: 10,
-    drawer: 1000,
-    modal: 1100,
-    toast: 9999,
-    overlay: 10000,
-  },
-};
-
-export default theme;
 ```
 
 ### ./client/src/App.jsx
@@ -3100,12 +5553,10 @@ import ErrorBoundary from './components/ErrorBoundary.jsx';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import Splash from './pages/Splash.jsx';
 import Admin from './pages/Admin.jsx';
-import Waitlist from './pages/Waitlist.jsx';
 import Auth from './pages/Auth.jsx';
 import Onboarding from './pages/Onboarding.jsx';
 import AppShell from './components/AppShell';
 import ArchivalToast from './components/ArchivalToast.jsx';
-import UiGallery from './components/UiGallery.jsx';
 import { useIsDesktop } from './utils/useIsDesktop';
 
 function AppInner() {
@@ -3142,14 +5593,14 @@ function AppInner() {
     <main style={{
       maxWidth: isDesktop ? '100%' : '430px',
       margin: '0 auto',
-      height: '100dvh',
-      maxHeight: '100dvh',
+      height: screen === 'splash' ? 'auto' : '100dvh',
+      maxHeight: screen === 'splash' ? 'none' : '100dvh',
       backgroundColor: 'var(--surface-alt)',
       display: 'flex',
       flexDirection: 'column',
       position: 'relative',
-      overflow: 'hidden',
-      overscrollBehavior: 'none'
+      overflow: screen === 'splash' ? 'visible' : 'hidden',
+      overscrollBehavior: screen === 'splash' ? 'auto' : 'none'
     }}>
       <AnimatePresence mode="wait">
         {screen === 'splash' && (
@@ -3219,14 +5670,11 @@ const QueryClientBridge = () => {
 };
 
 function App() {
-  // Public /waitlist route lives outside AuthProvider (no auth required)
-  if (typeof window !== 'undefined' && window.location.pathname === '/waitlist') {
-    return (
-      <ErrorBoundary>
-        <Waitlist />
-      </ErrorBoundary>
-    );
-  }
+  // 🗑️ The public /waitlist route is gone. During the IIT Bombay pilot the
+  // gate is the invite list, not a queue: colleagues are added directly, so a
+  // public sign-up page would only collect addresses the pilot cannot serve.
+  // The route, its API, and its model were removed rather than hidden — see
+  // git history if a staged launch ever needs them back.
 
   return (
     <AuthProvider>
@@ -3235,8 +5683,6 @@ function App() {
           <QueryClientBridge />
           <AppInner />
           <ArchivalToast />
-          {/* Dev-only notification gallery. Renders null in production builds. */}
-          <UiGallery />
         </QueryClientProvider>
       </ErrorBoundary>
     </AuthProvider>
@@ -3250,325 +5696,92 @@ export default App;
 ### ./client/src/index.css
 
 ```
-/* ==========================================
-   MATCHALIZE: THE SUNLIT LIBRARY THEME
-   ========================================== */
-
-:root {
-  color-scheme: light;
-
-  /* The Ink & Paper Palette */
-  --color-ink: #241f19;
-  --color-faded-ink: #6f6758;
-  --color-parchment: #faf6ec;
-  --color-paper-white: #fffdf6;
-  --color-leather: #6e4a2e;
-  --color-leather-dark: #4a3120;
-  --color-sepia-border: #cfc3aa;
-  --color-wax-red: #8b1a1a;
-
-  /* Semantic tokens — light (canonical) */
-  --bg: #f4efe3;
-  --desk: #e9e0cc;
-  --paper: #faf6ec;
-  --card: #fefbf3;
-  --surface: #fffdf6;
-  --surface-alt: #f3ede0;
-  --surface-dim: #e7decb;
-
-  --ink: #241f19;
-  --ink-soft: #4e4638;
-  --ink-muted: #6f6758;
-
-  --line: #e3dac7;
-  --line-dark: #cfc3aa;
-
-  --accent: #6e4a2e;
-  --accent-strong: #4a3120;
-  --crimson: #8b1a1a;
-  --crimson-strong: #5a0f1c;
-  --gold: #dfbc7d;
-  --gold-deep: #b08d57;
-  --success: #22543d;
-  --warning: #b46807;
-
-  --neu-dark: #ded8cc;
-  --neu-light: #ffffff;
-
-  --wm-base: #4a3222;
-  --tape: #e0d8c8;
-
-  /* Alpha variants derived from base tokens */
-  --line-90: color-mix(in srgb, var(--line-dark) 90%, transparent);
-  --line-80: color-mix(in srgb, var(--line-dark) 80%, transparent);
-  --line-70: color-mix(in srgb, var(--line-dark) 70%, transparent);
-  --line-50: color-mix(in srgb, var(--line-dark) 50%, transparent);
-
-  --wm-08: color-mix(in srgb, var(--wm-base) 8%, transparent);
-  --wm-10: color-mix(in srgb, var(--wm-base) 10%, transparent);
-  --wm-12: color-mix(in srgb, var(--wm-base) 12%, transparent);
-  --wm-14: color-mix(in srgb, var(--wm-base) 14%, transparent);
-  --wm-16: color-mix(in srgb, var(--wm-base) 16%, transparent);
-  --wm-18: color-mix(in srgb, var(--wm-base) 18%, transparent);
-  --wm-20: color-mix(in srgb, var(--wm-base) 20%, transparent);
-  --wm-22: color-mix(in srgb, var(--wm-base) 22%, transparent);
-  --wm-25: color-mix(in srgb, var(--wm-base) 25%, transparent);
-  --wm-28: color-mix(in srgb, var(--wm-base) 28%, transparent);
-  --wm-30: color-mix(in srgb, var(--wm-base) 30%, transparent);
-
-  --accent-03: color-mix(in srgb, var(--accent) 3%, transparent);
-  --accent-04: color-mix(in srgb, var(--accent) 4%, transparent);
-  --accent-05: color-mix(in srgb, var(--accent) 5%, transparent);
-  --accent-06: color-mix(in srgb, var(--accent) 6%, transparent);
-  --accent-07: color-mix(in srgb, var(--accent) 7%, transparent);
-  --accent-08: color-mix(in srgb, var(--accent) 8%, transparent);
-  --accent-10: color-mix(in srgb, var(--accent) 10%, transparent);
-  --accent-12: color-mix(in srgb, var(--accent) 12%, transparent);
-  --accent-14: color-mix(in srgb, var(--accent) 14%, transparent);
-  --accent-15: color-mix(in srgb, var(--accent) 15%, transparent);
-  --accent-18: color-mix(in srgb, var(--accent) 18%, transparent);
-  --accent-20: color-mix(in srgb, var(--accent) 20%, transparent);
-  --accent-25: color-mix(in srgb, var(--accent) 25%, transparent);
-  --accent-30: color-mix(in srgb, var(--accent) 30%, transparent);
-  --accent-35: color-mix(in srgb, var(--accent) 35%, transparent);
-  --accent-45: color-mix(in srgb, var(--accent) 45%, transparent);
-
-  --crim-04: color-mix(in srgb, var(--crimson) 4%, transparent);
-  --crim-05: color-mix(in srgb, var(--crimson) 5%, transparent);
-  --crim-06: color-mix(in srgb, var(--crimson) 6%, transparent);
-  --crim-08: color-mix(in srgb, var(--crimson) 8%, transparent);
-  --crim-10: color-mix(in srgb, var(--crimson) 10%, transparent);
-  --crim-12: color-mix(in srgb, var(--crimson) 12%, transparent);
-  --crim-15: color-mix(in srgb, var(--crimson) 15%, transparent);
-  --crim-18: color-mix(in srgb, var(--crimson) 18%, transparent);
-  --crim-20: color-mix(in srgb, var(--crimson) 20%, transparent);
-  --crim-25: color-mix(in srgb, var(--crimson) 25%, transparent);
-  --crim-28: color-mix(in srgb, var(--crimson) 28%, transparent);
-  --crim-30: color-mix(in srgb, var(--crimson) 30%, transparent);
-  --crim-32: color-mix(in srgb, var(--crimson) 32%, transparent);
-  --crim-35: color-mix(in srgb, var(--crimson) 35%, transparent);
-  --crim-40: color-mix(in srgb, var(--crimson) 40%, transparent);
-  --crim-50: color-mix(in srgb, var(--crimson) 50%, transparent);
-
-  --paper-08: color-mix(in srgb, var(--paper) 8%, transparent);
-  --paper-10: color-mix(in srgb, var(--paper) 10%, transparent);
-  --paper-20: color-mix(in srgb, var(--paper) 20%, transparent);
-  --paper-35: color-mix(in srgb, var(--paper) 35%, transparent);
-  --paper-40: color-mix(in srgb, var(--paper) 40%, transparent);
-  --paper-60: color-mix(in srgb, var(--paper) 60%, transparent);
-  --paper-70: color-mix(in srgb, var(--paper) 70%, transparent);
-  --paper-90: color-mix(in srgb, var(--paper) 90%, transparent);
-  --paper-92: color-mix(in srgb, var(--paper) 92%, transparent);
-  --paper-94: color-mix(in srgb, var(--paper) 94%, transparent);
-
-  --tape-70: color-mix(in srgb, var(--tape) 70%, transparent);
-  --tape-90: color-mix(in srgb, var(--tape) 90%, transparent);
-  --tape-95: color-mix(in srgb, var(--tape) 95%, transparent);
-
-  --ink-04: color-mix(in srgb, var(--ink) 4%, transparent);
-  --ink-15: color-mix(in srgb, var(--ink) 15%, transparent);
-  --ink-20: color-mix(in srgb, var(--ink) 20%, transparent);
-  --ink-25: color-mix(in srgb, var(--ink) 25%, transparent);
-
-  --success-08: color-mix(in srgb, var(--success) 8%, transparent);
-  --gold-deep-35: color-mix(in srgb, var(--gold-deep) 35%, transparent);
-
-  /* Typography */
-  --font-heading: 'Playfair Display', serif;
-  --font-handwriting: 'Dancing Script', cursive;
-  --font-typewriter: 'Special Elite', cursive;
-  --font-system: 'Inter', sans-serif;
-}
-
-/* ==========================================
-   DARK PALETTES — night-reading modes
-   warm  = sepia night (default dark)
-   invert = literal RGB inversion
-   neutral = standard gray
-   ========================================== */
-html[data-theme='warm'] {
-  color-scheme: dark;
-  --bg: #1a1512;
-  --desk: #141110;
-  --paper: #1e1a16;
-  --card: #24201a;
-  --surface: #2a251d;
-  --surface-alt: #1d1914;
-  --surface-dim: #363027;
-
-  --ink: #f3ecdd;
-  --ink-soft: #cdc2ad;
-  --ink-muted: #9a907c;
-
-  --line: #3a342b;
-  --line-dark: #4f4836;
-
-  --accent: #c99a63;
-  --accent-strong: #8f6a3a;
-  --crimson: #e05552;
-  --crimson-strong: #b33434;
-  --gold: #e2c68b;
-  --gold-deep: #c8a15c;
-  --success: #5fb577;
-  --warning: #dbab47;
-
-  --neu-dark: #0d0b09;
-  --neu-light: #312c23;
-
-  --wm-base: #000000;
-  --tape: #3e382c;
-
-  --color-parchment: #1e1a16;
-  --color-ink: #f3ecdd;
-}
-
-html[data-theme='invert'] {
-  color-scheme: dark;
-  --bg: #0b101c;
-  --desk: #161f33;
-  --paper: #050913;
-  --card: #01040c;
-  --surface: #000209;
-  --surface-alt: #0c121f;
-  --surface-dim: #182134;
-
-  --ink: #dbe0e6;
-  --ink-soft: #b1b9c7;
-  --ink-muted: #9098a7;
-
-  --line: #1c2538;
-  --line-dark: #303c55;
-
-  --accent: #91b5d1;
-  --accent-strong: #b5cedf;
-  --crimson: #74e5e5;
-  --crimson-strong: #a5f0e3;
-  --gold: #204382;
-  --gold-deep: #4f72a8;
-  --success: #ddabc2;
-  --warning: #4b97f8;
-
-  --neu-dark: #212733;
-  --neu-light: #000000;
-
-  --wm-base: #b5cddd;
-  --tape: #1f2737;
-
-  --color-parchment: #050913;
-  --color-ink: #dbe0e6;
-}
-
-html[data-theme='neutral'] {
-  color-scheme: dark;
-  --bg: #161513;
-  --desk: #100f0e;
-  --paper: #1b1a18;
-  --card: #201f1c;
-  --surface: #262522;
-  --surface-alt: #1b1a18;
-  --surface-dim: #2f2e2a;
-
-  --ink: #f0efec;
-  --ink-soft: #cdccc7;
-  --ink-muted: #8e8d87;
-
-  --line: #2f2e2a;
-  --line-dark: #3f3d38;
-
-  --accent: #e08a4e;
-  --accent-strong: #a6602c;
-  --crimson: #e23636;
-  --crimson-strong: #b52a2a;
-  --gold: #d9b45f;
-  --gold-deep: #c9a13b;
-  --success: #56b061;
-  --warning: #d8a846;
-
-  --neu-dark: #0b0b0b;
-  --neu-light: #333333;
-
-  --wm-base: #000000;
-  --tape: #3f3d38;
-
-  --color-parchment: #1b1a18;
-  --color-ink: #f0efec;
-}
-
-html[data-theme='black'] {
-  color-scheme: dark;
-  --bg: #000000;
-  --desk: #050505;
-  --paper: #0a0a0a;
-  --card: #121212;
-  --surface: #161616;
-  --surface-alt: #0c0c0c;
-  --surface-dim: #222222;
-
-  --ink: #f4f4f2;
-  --ink-soft: #c4c4c0;
-  --ink-muted: #858582;
-
-  --line: #262626;
-  --line-dark: #383838;
-
-  --accent: #8b1a1a;
-  --accent-strong: #6e1010;
-  --crimson: #8b1a1a;
-  --crimson-strong: #6e1010;
-  --gold: #dfbc7d;
-  --gold-deep: #b08d57;
-  --success: #5fa574;
-  --warning: #d39452;
-
-  --neu-dark: #000000;
-  --neu-light: #1e1e1e;
-
-  --wm-base: #000000;
-  --tape: #1f1f1f;
-
-  --color-parchment: #0a0a0a;
-  --color-ink: #f4f4f2;
-}
-
 /* Global Resets */
 * {
   -webkit-tap-highlight-color: transparent;
   box-sizing: border-box;
 }
 
-/* Document lock — the app shell is exactly one viewport tall, so the page
-   itself can never scroll or rubber-band. Without this, an overscroll that
-   walks past the inner scrollers reaches the document and triggers iOS
-   pull-to-refresh, dragging the whole site down. */
 html, body {
   margin: 0;
   padding: 0;
-  background-color: var(--color-parchment);
-  color: var(--color-ink);
-  font-family: var(--font-typewriter);
+  background-color: var(--n-paper);
+  color: var(--n-ink);
+  font-family: var(--n-font-mono);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   THE PAGE MUST NOT SCROLL. THE APP MUST.
+   ═══════════════════════════════════════════════════════════════════
+
+   Symptom this fixes: on a phone, dragging anywhere on the Deck drags the
+   WHOLE page — header, nav bar and all — instead of moving the card deck
+   underneath them. It reads as the app itself being scrollable, which it is
+   not: every screen scrolls its own inner `overflow-y: auto` container.
+
+   Three properties, each covering a different browser behaviour, and none of
+   them is sufficient alone:
+
+   1. `overscroll-behavior: none` on html — stops the RUBBER BAND. Without it,
+      dragging past the top of the page stretches it, reveals the page behind,
+      and on Android triggers the pull-to-refresh spinner. This is the
+      pull-to-refresh half of the bug.
+
+   2. `position: fixed; inset: 0` on body — makes the document itself
+      unscrollable. `overscroll-behavior` alone still lets the page scroll if it
+      is taller than the viewport, which it is during page transitions. Because
+      every screen scrolls an inner container rather than the document, this
+      removes nothing the user can see.
+
+   3. `touch-action: manipulation` — drops the ~300ms double-tap-to-zoom delay
+      without disabling pinch-zoom, which `touch-action: none` would do and
+      which would break zooming for anyone who needs it.
+
+   `height: 100%` is deliberately NOT used. The dynamic viewport height is what
+   makes this correct when the on-screen keyboard opens or a sheet slides up:
+   `100dvh` follows the real visible area, whereas `100%` resolves against the
+   html element and can leave a dead strip that is not scrollable.
+
+   The background is `var(--app-bg, var(--n-paper))` so the area above and below
+   the app is painted by the active screen's colour — see utils/chrome.js.
+   ═══════════════════════════════════════════════════════════════════ */
+html {
   overscroll-behavior: none;
+  background-color: var(--app-bg, var(--n-paper));
+}
+
+body {
   position: fixed;
   inset: 0;
   width: 100%;
+  min-height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+  background-color: var(--app-bg, var(--n-paper));
+}
+
+/* Inner scrollers are still allowed to overscroll normally in the direction
+   they cannot go, so a list that ends still feels like a list rather than
+   hitting a wall — while the pull-to-refresh gesture stays gone. */
+.app-container {
+  overscroll-behavior-y: contain;
 }
 
 #root {
   height: 100%;
-  overflow: hidden;
-  overscroll-behavior: none;
 }
 
 h1, h2, h3 {
-  font-family: var(--font-heading);
-  color: var(--color-ink);
+  font-family: var(--n-font-heavy);
+  color: var(--n-ink);
   margin: 0;
 }
 
 p, span, div {
-  font-family: var(--font-typewriter);
+  font-family: var(--n-font-body);
 }
 
 /* The Book Frame (App Container) */
@@ -3577,8 +5790,7 @@ p, span, div {
   margin: 0 auto;
   min-height: 100dvh;
   position: relative;
-  background-color: var(--color-parchment);
-  overflow: hidden;
+  background-color: var(--n-paper);
 }
 
 /* Temporary Canvas Styling (To verify it works) */
@@ -3590,19 +5802,19 @@ p, span, div {
   align-items: center;
   justify-content: center;
   gap: 16px;
-  background: var(--color-parchment);
+  background: var(--n-paper);
 }
 
 .vintage-title {
   font-size: 48px;
   font-weight: 700;
-  color: var(--color-ink);
+  color: var(--n-ink);
   letter-spacing: -1px;
 }
 
 .vintage-subtitle {
   font-size: 16px;
-  color: var(--color-faded-ink);
+  color: var(--n-ink-2);
   font-style: italic;
 }
 
@@ -3638,8 +5850,8 @@ p, span, div {
 .slider {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
-  background-color: var(--line-dark);
-  border: 1px solid var(--line);
+  background-color: var(--n-ink);
+  border: 2px solid var(--n-ink);
   border-radius: 12px;
   transition: background-color .3s ease, border-color .3s ease;
 }
@@ -3653,8 +5865,8 @@ p, span, div {
   left: 4px;
   bottom: 4px;
   z-index: 1;
-  background-color: var(--paper);
-  border: 1px solid var(--line-dark);
+  background-color: var(--n-paper);
+  border: 2px solid var(--n-ink);
   transition: transform .3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
@@ -3679,12 +5891,12 @@ p, span, div {
   height: 18px;
 }
 
-.switch .sun svg { fill: #cf8a2f; }
-.switch .moon svg { fill: var(--ink-muted); }
+.switch .sun svg { fill: var(--n-yellow-deep); }
+.switch .moon svg { fill: var(--n-ink-3); }
 
 input:checked + .slider {
-  background-color: var(--accent-25);
-  border-color: var(--accent-35);
+  background-color: var(--n-yellow);
+  border-color: var(--n-yellow-deep);
 }
 
 input:checked + .slider:before {
@@ -3745,6 +5957,62 @@ button:active { transform: scale(0.98); }
   to { transform: rotate(360deg); }
 }
 
+/* ==========================================
+   MATCHALIZE: NEO-BRUTALIST TOKEN LAYER
+   The one canon. Mirrors src/styles/neu.js —
+   do not add colors/shadows anywhere else.
+   ========================================== */
+:root {
+  --n-desk: #131313;
+  --n-paper: #FFF9EC;
+  --n-card: #FFFFFF;
+  --n-ink: #191919;
+  --n-ink-2: #5F5B52;
+  --n-ink-3: #A39E92;
+  --n-hair: #EBE5D6;
+  --n-yellow: #FFD43D;
+  --n-yellow-deep: #FFC91F;
+  --n-coral: #FF7A59;
+  --n-green: #5BD98A;
+  --n-pink: #FFA3C6;
+  --n-red: #E5484D;
+
+  --n-font-heavy: 'Archivo Black', 'Arial Black', sans-serif;
+  --n-font-body: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+  --n-font-mono: 'Space Mono', 'Courier New', monospace;
+  --n-font-hand: 'Caveat', 'Segoe Script', cursive;
+
+  --n-slam-sm: 3px 3px 0 #191919;
+  --n-slam-md: 5px 5px 0 #191919;
+  --n-slam-lg: 8px 8px 0 #191919;
+}
+
+/* THE SLAM — one shared press recipe. Buttons/chips get
+   .slam + a size class; do not hand-roll this interaction. */
+.slam {
+  transition: transform .08s steps(2), box-shadow .08s steps(2);
+  -webkit-tap-highlight-color: transparent;
+}
+.slam-sm { box-shadow: var(--n-slam-sm); }
+.slam-md { box-shadow: var(--n-slam-md); }
+.slam-lg { box-shadow: var(--n-slam-lg); }
+
+.slam:hover:not(:disabled) { transform: translate(-2px, -2px); }
+.slam-sm:hover:not(:disabled) { box-shadow: 5px 5px 0 #191919; }
+.slam-md:hover:not(:disabled) { box-shadow: 7px 7px 0 #191919; }
+.slam-lg:hover:not(:disabled) { box-shadow: 10px 10px 0 #191919; }
+
+.slam:active:not(:disabled) {
+  transform: translate(3px, 3px) !important;
+  box-shadow: 0 0 0 #191919 !important;
+}
+.slam:focus-visible { outline: 3px solid var(--n-coral); outline-offset: 3px; }
+.slam:disabled { opacity: 0.55; cursor: not-allowed; }
+
+@media (prefers-reduced-motion: reduce) {
+  .slam { transition: none; }
+  .slam:hover:not(:disabled) { transform: none; }
+}
 ```
 
 ### ./client/src/main.jsx
@@ -3798,7 +6066,9 @@ if (import.meta.env.PROD) {
 ```
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { api } from './api';
-import { theme as design } from './theme';
+import neu from '../styles/neu';
+
+const design = neu;
 
 const AppConfigContext = createContext(null);
 
@@ -4152,6 +6422,78 @@ export const api = {
     return handleResponse(res);
   },
 };
+```
+
+### ./client/src/utils/chrome.js
+
+```
+import { useEffect } from 'react';
+
+/**
+ * 📱 BROWSER CHROME COLOUR.
+ *
+ * On a phone the app does not fill the screen. There is a status bar above it
+ * and, on iOS, a home-indicator strip below — these belong to the BROWSER, not
+ * the page, but the browser paints them using colours the page supplies:
+ *
+ *   • `<meta name="theme-color">` — Android Chrome, and the iOS home screen
+ *     when installed to the dock. Must be a REAL `<meta name="theme-color">`
+ *     element; updating it means writing the `content` attribute, since the
+ *     value is not reflected and React will not re-render it.
+ *   • the root element's background — everything else, including the rubber-band
+ *     area you briefly see when overscrolling past the top of the page.
+ *
+ * iOS deliberately does NOT recolour the top status bar from theme-color in the
+ * browser. That is a platform behaviour, not a bug, and it is why
+ * `black-translucent` in index.html matters: it lets the page's own background
+ * paint under the status bar, which is the only way the top edge can match.
+ *
+ * WHY THIS IS A HOOK AND NOT A PROP ON A COMPONENT: the colour follows the
+ * ACTIVE SCREEN, and the screen is component state in App.jsx — there is no
+ * router, so there is no route change to hang an effect on. A hook called
+ * once at the shell, keyed on the active tab, is the only place that knows.
+ */
+
+/**
+ * Set the browser chrome colour and leave it there.
+ *
+ * @param {string} color CSS colour, e.g. '#131313'
+ */
+export const setChromeColor = (color) => {
+  if (typeof document === 'undefined' || !color) return;
+
+  // Android Chrome + installed-PWA title bar.
+  let meta = document.querySelector('meta[name="theme-color"]');
+  if (!meta) {
+    meta = document.createElement('meta');
+    meta.setAttribute('name', 'theme-color');
+    document.head.appendChild(meta);
+  }
+  meta.setAttribute('content', color);
+
+  // The overscroll gutter. Setting this on the ROOT — not the body — is what
+  // covers the area above and below the page: the body's background propagates
+  // to the canvas, but only the root element's covers the rubber-band region.
+  document.documentElement.style.backgroundColor = color;
+};
+
+/**
+ * React binding for {@link setChromeColor}.
+ *
+ * Also publishes the colour as `--app-bg` so any element can reference it
+ * without importing this module.
+ *
+ * @param {string} color
+ */
+export const useChromeColor = (color) => {
+  useEffect(() => {
+    if (!color) return;
+    setChromeColor(color);
+    document.documentElement.style.setProperty('--app-bg', color);
+  }, [color]);
+};
+
+export default useChromeColor;
 ```
 
 ### ./client/src/utils/deckChrome.js
@@ -4901,25 +7243,14 @@ export const useIsDesktop = () => {
 import React, { useEffect } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { Lock, Mail } from 'lucide-react';
+import neu from '../styles/neu';
 
-/* Locked tokens — same family as ProfileCard / Auth / Settings. This screen used
+/* The shared neo-brutalist canon (src/styles/neu.js). This screen used
    to read from theme.js (--surface-alt, --crim-08, --crimson, texture.grain),
    which is the legacy parchment palette: a suspended user landing here out of the
-   neubrutalist Auth flow saw two design languages in one view. Hardcoded hex on
-   purpose — it has to stand alone, exactly like Auth does before login. */
-const T = {
-  desk: '#131313',
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-};
+   neubrutalist Auth flow saw two design languages in one view. It stands alone,
+   exactly like Auth does before login, but now from the shared canon. */
+const T = neu;
 
 /* as- prefix, one injected sheet — same pattern as Header's hd-, Auth's au-. */
 const SUSPENDED_CSS = `
@@ -5091,6 +7422,8 @@ import { useIsDesktop } from '../utils/useIsDesktop';
 import { setToastPresenceHandler } from '../utils/toast';
 import Settings from '../pages/Settings.jsx';
 import socket from '../utils/socket';
+import neu from '../styles/neu';
+import { useChromeColor } from '../utils/chrome';
 
 // Lazy loaded routes
 const Discover = lazy(() => import('../pages/Discover'));
@@ -5099,12 +7432,8 @@ const Chat = lazy(() => import('../pages/Chat'));
 const Profile = lazy(() => import('../pages/Profile'));
 const Roulette = lazy(() => import('../pages/Roulette'));
 
-/* Locked tokens — neubrutalism, same family as ProfileCard */
-const t = {
-  desk: '#131313',
-  paper: '#FFF9EC',
-  ink: '#191919',
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
 
 const ArchivalFallback = () => (
   <motion.div
@@ -5131,6 +7460,27 @@ const ArchivalFallback = () => (
 
 const TAB_TITLES = { discover: 'Deck', matches: 'Letters', roulette: 'Roulette', profile: 'Profile' };
 
+/**
+ * 📱 CHROME COLOUR PER SCREEN — the browser's status bar and the strip above
+ * the home indicator are painted from these, so the app reads as one continuous
+ * surface instead of a page floating between two browser-owned bands.
+ *
+ * Every tab is dark (`neu.desk`) EXCEPT Profile, which is cream, because that
+ * is genuinely what each screen renders — this is not decoration invented to
+ * make the bars look nice, it is reporting the screen's own background. Change a
+ * screen's background in neu.js and this follows it in the same commit.
+ *
+ * The chat overlay takes the tab's colour rather than a third one: Chat is
+ * rendered on top of the tab it was opened from, and giving it its own colour
+ * would flash the bars a different shade every time a conversation opens.
+ */
+const TAB_CHROME = {
+  discover: neu.desk,
+  matches: neu.desk,
+  roulette: neu.desk,
+  profile: neu.paper,
+};
+
 const AppShell = ({ onSignOut }) => {
   const isDesktop = useIsDesktop();
   const [activeTab, setActiveTab] = useState('discover');
@@ -5146,6 +7496,11 @@ const AppShell = ({ onSignOut }) => {
      read as overlapping furniture. */
   const [toastUp, setToastUp] = useState(false);
   const headerVisible = headerWanted && !toastUp;
+
+  // Paint the browser's status bar and overscroll gutter to match the screen
+  // underneath. Falls back to the desk colour for any tab not in the map, so a
+  // future tab cannot leave the bars showing a stale colour.
+  useChromeColor(TAB_CHROME[activeTab] || neu.desk);
 
   /* Subscribe to toast presence. Kept separate from the render handler so this
      effect doesn't re-register on every toast that fires. */
@@ -5537,6 +7892,7 @@ import {
   X, AlertCircle, CheckCircle2, Info, WifiOff, Server,
   MessageSquareOff, Ban, ShieldAlert,
 } from 'lucide-react';
+import neu from '../styles/neu';
 
 /* How long a toast stays up.
    A toast WITH an action gets longer: the user has to read the message AND
@@ -5545,21 +7901,8 @@ import {
 const MS_PLAIN = 4000;
 const MS_WITH_ACTION = 7000;
 
-/* Locked tokens — neubrutalism, same family as ProfileCard */
-const t = {
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  red: '#E5484D',
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
 
 const ArchivalToast = () => {
   const [toast, setToast] = useState(null);
@@ -5623,7 +7966,34 @@ const ArchivalToast = () => {
   return (
     <AnimatePresence>
       {toast && (
+      <>
+      <style>{`
+        .archival-toast {
+          left: max(16px, env(safe-area-inset-left));
+          right: max(16px, env(safe-area-inset-right));
+          width: auto;
+          max-width: 420px;
+          margin-inline: auto;
+          pointer-events: none;
+        }
+
+        .archival-toast > * {
+          max-width: 100%;
+          overflow-wrap: anywhere;
+          pointer-events: auto;
+        }
+
+        @media (min-width: 600px) {
+          .archival-toast {
+            left: auto;
+            right: max(24px, env(safe-area-inset-right));
+            width: min(420px, calc(100vw - 48px));
+            margin-inline: 0;
+          }
+        }
+      `}</style>
       <motion.div
+        className="archival-toast"
         initial={{ y: -100, opacity: 0, scale: 0.95 }}
         animate={{ y: 0, opacity: 1, scale: 1 }}
         exit={{ y: -100, opacity: 0, scale: 0.95 }}
@@ -5631,8 +8001,6 @@ const ArchivalToast = () => {
         style={{
           position: 'fixed',
           top: 'max(16px, env(safe-area-inset-top))',
-          left: '16px',
-          right: '16px',
           zIndex: 9999,
           backgroundColor: t.paper,
           border: `2px solid ${t.ink}`,
@@ -5701,6 +8069,7 @@ const ArchivalToast = () => {
           </button>
         </div>
       </motion.div>
+      </>
       )}
     </AnimatePresence>
   );
@@ -5847,24 +8216,17 @@ import { X, Undo2, Compass } from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
 import { DECK_TOP, DECK_EDGE } from '../utils/deckChrome';
 import { useToastPresence } from '../utils/toast';
+import neu from '../styles/neu';
 
-const C = {
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  yellow: '#FFD43D',
-  red: '#E5484D',
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const C = neu;
 
 const UNDO_MS = 5000;
 const RING_R = 19.25;
 const RING_CIRC = 2 * Math.PI * RING_R;
 
-/* One spring, used for BOTH the undo's entrance and its exit —
-   so the exit is the exact reverse of the entrance.
-   Matched to the column slide spring for consistent timing. */
-const UNDO_SPRING = { type: 'spring', stiffness: 350, damping: 30 };
-const COLUMN_SPRING = { type: 'spring', stiffness: 350, damping: 30 };
+/* A single soft, quick glide keeps the Undo reveal and Compass shift in sync. */
+const ACTION_STACK_TRANSITION = { duration: 0.32, ease: [0.22, 1, 0.36, 1] };
 
 const DECK_ACTIONS_CSS = `
   .da-float {
@@ -5886,8 +8248,10 @@ const DECK_ACTIONS_CSS = `
     box-shadow: 4px 4px 0 var(--ink);
     transition: transform .08s steps(2), box-shadow .08s steps(2);
     -webkit-tap-highlight-color: transparent; }
+  .da-float > .da-floatbtn:not(.undo) { z-index: 2; }
   .da-floatbtn:active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--ink); }
-  .da-floatbtn.undo { border-radius: 999px; background: var(--yellow); }
+  .da-floatbtn.undo { position: absolute; top: 0; left: 0; z-index: 1;
+    border-radius: 999px; background: var(--yellow); }
   .da-floatbtn.undo svg { color: var(--ink); }
   /* Location refresh — deliberately quieter than pass (red) and undo (yellow).
      It is a maintenance control, not a decision about a person, so it gets a
@@ -5945,7 +8309,10 @@ const DECK_ACTIONS_CSS = `
   }
 `;
 
-const DeckActions = ({ onPass, onAlign, canAlign = true, onUndo, canGoBack, undoNonce, onRefreshLocation }) => {
+const DeckActions = ({
+  onPass, onAlign, showAlignButton = true, canAlign = true,
+  onUndo, canGoBack, undoNonce, onRefreshLocation,
+}) => {
   const [showUndo, setShowUndo] = useState(false);
   const ringMV = useMotionValue(0);
   const reduceMotion = useReducedMotion();
@@ -5984,7 +8351,7 @@ const DeckActions = ({ onPass, onAlign, canAlign = true, onUndo, canGoBack, undo
       <motion.div
         className="da-float"
         animate={{ y: toastUp ? 80 : 0 }}
-        transition={reduceMotion ? { duration: 0 } : COLUMN_SPRING}
+        transition={reduceMotion ? { duration: 0 } : ACTION_STACK_TRANSITION}
         style={{ position: 'fixed', top: DECK_TOP, left: DECK_EDGE, zIndex: 500, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, pointerEvents: 'none' }}
       >
         <button
@@ -6005,10 +8372,10 @@ const DeckActions = ({ onPass, onAlign, canAlign = true, onUndo, canGoBack, undo
               className="da-floatbtn undo"
               aria-label="Go to previous profile — available for 5 seconds"
               title="Previous profile (5s)"
-              initial={reduceMotion ? false : { opacity: 0, y: -16, scale: 0.5, rotate: -8 }}
-              animate={{ opacity: 1, y: 0, scale: 1, rotate: 0 }}
-              exit={reduceMotion ? undefined : { opacity: 0, y: -16, scale: 0.5, rotate: 8 }}
-              transition={UNDO_SPRING}
+              initial={reduceMotion ? false : { y: 0 }}
+              animate={{ y: 56 }}
+              exit={reduceMotion ? undefined : { y: 0 }}
+              transition={reduceMotion ? { duration: 0 } : ACTION_STACK_TRANSITION}
               onClick={handleUndo}
             >
               <Undo2 size={19} strokeWidth={2.8} />
@@ -6041,20 +8408,22 @@ const DeckActions = ({ onPass, onAlign, canAlign = true, onUndo, canGoBack, undo
          * one re-reads a position; if the position is the same, the server reports
          * `moved: false` and nothing is rebuilt. */}
         {onRefreshLocation && (
-          <button
+          <motion.button
             type="button"
             className="da-refreshloc"
             aria-label="Update my location"
             title="Update my location"
+            animate={{ y: showUndo && canGoBack ? 56 : 0 }}
+            transition={reduceMotion ? { duration: 0 } : ACTION_STACK_TRANSITION}
             onClick={onRefreshLocation}
           >
             <Compass size={19} strokeWidth={2.6} />
-          </button>
+          </motion.button>
         )}
       </motion.div>
 
       {/* ✨ GLOBAL ALIGN — profile-level, no photo or prompt attached. */}
-      {onAlign && (
+      {onAlign && showAlignButton && (
         <div className="da-alignbar">
           <button
             type="button"
@@ -6080,22 +8449,10 @@ export default DeckActions;
 import React from 'react';
 import { motion } from 'framer-motion';
 import { Compass, Heart, User, Shuffle, LogOut } from 'lucide-react';
-import { theme as design } from '../utils/theme';
+import neu from '../styles/neu';
 import { triggerHaptic } from '../utils/haptics';
 
-/* Locked tokens — same family as ProfileCard */
-const t = {
-  paper: 'var(--paper)',
-  card: 'var(--card)',
-  surfaceAlt: 'var(--surface-alt)',
-  lineDark: 'var(--line-dark)',
-  ink: 'var(--ink)',
-  inkMuted: 'var(--ink-muted)',
-  accent: 'var(--accent)',
-  crimson: 'var(--crimson)',
-  fontDisplay: design?.font?.heading || "'Playfair Display', Georgia, serif'",
-  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif'",
-};
+const t = neu;
 
 const tabs = [
   { key: 'discover', label: 'Deck', Icon: Compass },
@@ -6120,8 +8477,8 @@ const DesktopSidebar = ({ activeTab, onTabChange, matchBadge = 0, onSignOut }) =
         height: 'calc(100dvh - 32px)',
         margin: 16,
         backgroundColor: t.paper,
-        border: '1px solid var(--line-70)',
-        borderRadius: 18,
+        border: `2px solid ${t.ink}`,
+        borderRadius: t.radius.lg,
         display: 'flex',
         flexDirection: 'column',
         position: 'relative',
@@ -6137,7 +8494,7 @@ const DesktopSidebar = ({ activeTab, onTabChange, matchBadge = 0, onSignOut }) =
         style={{
           position: 'absolute',
           inset: 0,
-          backgroundImage: `url("${design?.texture?.grain || ''}")`,
+          backgroundImage: `url("${t.grain || ''}")`,
           mixBlendMode: 'multiply',
           opacity: 0.3,
           pointerEvents: 'none',
@@ -6146,9 +8503,9 @@ const DesktopSidebar = ({ activeTab, onTabChange, matchBadge = 0, onSignOut }) =
       />
 
       {/* Header */}
-      <div style={{ padding: '22px 20px 18px', borderBottom: '1px solid var(--line-70)', position: 'relative', zIndex: 2 }}>
-        <h1 style={{ fontFamily: t.fontDisplay, fontSize: 26, fontWeight: 900, color: t.ink, margin: 0, letterSpacing: '-0.02em', lineHeight: 1 }}>matchalize</h1>
-        <p style={{ fontFamily: t.fontBody, fontSize: 9.5, fontWeight: 800, color: t.inkMuted, margin: '8px 0 0 0', letterSpacing: '1.5px', textTransform: 'uppercase' }}>Campus Ledger</p>
+      <div style={{ padding: '22px 20px 18px', borderBottom: `1px solid ${t.ink}`, position: 'relative', zIndex: 2 }}>
+        <h1 style={{ fontFamily: t.fontHeavy, fontSize: 26, fontWeight: 900, color: t.ink, margin: 0, letterSpacing: '-0.02em', lineHeight: 1 }}>matchalize</h1>
+        <p style={{ fontFamily: t.fontBody, fontSize: 9.5, fontWeight: 800, color: t.ink3, margin: '8px 0 0 0', letterSpacing: '1.5px', textTransform: 'uppercase' }}>Campus Ledger</p>
       </div>
 
       {/* Navigation */}
@@ -6163,13 +8520,14 @@ const DesktopSidebar = ({ activeTab, onTabChange, matchBadge = 0, onSignOut }) =
               onClick={() => handleTabClick(tab.key)}
               whileHover={isActive ? {} : { x: 3 }}
               whileTap={{ scale: 0.98 }}
+              className="slam slam-sm"
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 padding: '11px 14px',
-                borderRadius: 12,
-                border: isActive ? '1px solid var(--line-90)' : '1px solid transparent',
+                borderRadius: t.radius.md,
+                border: isActive ? `2px solid ${t.ink}` : '2px solid transparent',
                 backgroundColor: isActive ? t.card : 'transparent',
                 cursor: 'pointer',
                 width: '100%',
@@ -6177,14 +8535,14 @@ const DesktopSidebar = ({ activeTab, onTabChange, matchBadge = 0, onSignOut }) =
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <tab.Icon size={18} color={isActive ? t.crimson : t.inkMuted} strokeWidth={isActive ? 2.5 : 2} />
+                <tab.Icon size={18} color={isActive ? t.coral : t.ink3} strokeWidth={isActive ? 2.5 : 2} />
                 <span style={{ fontFamily: t.fontBody, fontSize: 13.5, letterSpacing: '0.3px', color: t.ink, fontWeight: isActive ? 700 : 500 }}>
                   {tab.label}
                 </span>
               </div>
 
               {showBadge && (
-                <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} style={{ backgroundColor: t.crimson, color: '#fff', fontFamily: t.fontBody, fontSize: 10, fontWeight: 800, padding: '3px 8px', borderRadius: 999, minWidth: 20, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
+                <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} style={{ backgroundColor: t.coral, color: '#fff', fontFamily: t.fontBody, fontSize: 10, fontWeight: 800, padding: '3px 8px', borderRadius: 999, minWidth: 20, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
                   {matchBadge > 99 ? '99+' : matchBadge}
                 </motion.div>
               )}
@@ -6194,14 +8552,14 @@ const DesktopSidebar = ({ activeTab, onTabChange, matchBadge = 0, onSignOut }) =
       </nav>
 
       {/* Footer actions — notifications live in the top Header on desktop, so only logout lives here. */}
-      <div style={{ padding: '16px 20px', borderTop: '1px solid var(--line-70)', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', position: 'relative', zIndex: 2 }}>
+      <div style={{ padding: '16px 20px', borderTop: `1px solid ${t.ink}`, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', position: 'relative', zIndex: 2 }}>
         <motion.button
           onClick={() => { triggerHaptic('light'); onSignOut(); }}
           whileTap={{ scale: 0.94 }}
           title="Log Out"
-          style={{ backgroundColor: t.surfaceAlt, border: '1px solid var(--line-70)', borderRadius: 12, width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+          style={{ backgroundColor: t.card, border: `2px solid ${t.ink}`, borderRadius: t.radius.md, width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
         >
-          <LogOut size={18} color={t.inkMuted} strokeWidth={2} />
+          <LogOut size={18} color={t.ink3} strokeWidth={2} />
         </motion.button>
       </div>
     </aside>
@@ -6215,6 +8573,7 @@ export default DesktopSidebar;
 
 ```
 import React from 'react';
+import neu from '../styles/neu';
 
 /* Reuses the shimmer from ProfileCardSkeleton (sk- namespace) so the deck's
    loading language is consistent. No framer-motion — plain conditional + CSS. */
@@ -6245,7 +8604,7 @@ const DiscoverRebuildOverlay = ({ show }) => {
          * the one moment it exists to explain — the deck visibly changing — was
          * the moment it was hidden behind something else. */
         zIndex: 99999,
-        backgroundColor: '#131313',
+        backgroundColor: neu.desk,
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -6260,10 +8619,10 @@ const DiscoverRebuildOverlay = ({ show }) => {
       <div className="sk-photo" style={{ width: 120, height: 120, borderRadius: 16, marginBottom: 20 }} />
 
       <div style={{
-        fontFamily: "'Archivo Black', 'Arial Black', sans-serif",
+        fontFamily: neu.fontHeavy,
         fontSize: 20,
         fontWeight: 400,
-        color: '#FFFFFF',
+        color: neu.card,
         textAlign: 'center',
         marginBottom: 6,
         letterSpacing: '-.01em',
@@ -6273,10 +8632,10 @@ const DiscoverRebuildOverlay = ({ show }) => {
       </div>
 
       <div style={{
-        fontFamily: "'Inter', -apple-system, 'Segoe UI', sans-serif",
+        fontFamily: neu.fontBody,
         fontSize: 14,
         fontWeight: 500,
-        color: '#A39E92',
+        color: neu.ink3,
         textAlign: 'center',
         maxWidth: 280,
         lineHeight: 1.5,
@@ -6296,22 +8655,10 @@ export default DiscoverRebuildOverlay;
 import React from 'react';
 import * as Sentry from '@sentry/react';
 import { FileWarning, RotateCw } from 'lucide-react';
+import neu from '../styles/neu';
 
-/* Locked tokens — neubrutalism, same family as ProfileCard / Discover */
-const t = {
-  desk: '#131313',
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -6541,23 +8888,10 @@ export default memo(Icon);
 import React from 'react';
 import { motion } from 'framer-motion';
 import { X, Mail, Info, LifeBuoy } from 'lucide-react';
+import neu from '../styles/neu';
 
-/* Locked tokens — neubrutalism, same family as ProfileCard */
-const t = {
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  red: '#E5484D',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
 
 /**
  * LearnMoreSheet — Bottom-sheet for "account under review".
@@ -6767,6 +9101,9 @@ import { MapPin, ChevronDown, ChevronUp, X } from 'lucide-react';
 import { api } from '../utils/api';
 import { readLocationOnce, LOCATION_UNAVAILABLE } from '../utils/geolocation';
 import { triggerHaptic } from '../utils/haptics';
+import neu from '../styles/neu';
+
+const t = neu;
 
 /**
  * 📍 CAMPUS-FALLBACK NOTICE.
@@ -6995,14 +9332,17 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
           style={{
             position: 'absolute',
             top: 12,
-            left: '50%',
-            transform: 'translateX(-50%)',
+            left: 12,
+            right: 12,
             zIndex: 34,
-            width: 'min(430px, calc(100vw - 24px))',
-            borderRadius: 16,
-            background: 'var(--card)',
-            border: '1px solid var(--line)',
-            boxShadow: '0 6px 22px rgba(0,0,0,0.12)',
+            width: 'calc(100% - 24px)',
+            maxWidth: 430,
+            marginInline: 'auto',
+            boxSizing: 'border-box',
+            borderRadius: t.radius.md,
+            background: t.card,
+            border: `2px solid ${t.ink}`,
+            boxShadow: t.shadow.md,
             overflow: 'hidden',
           }}
         >
@@ -7019,16 +9359,16 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
               <MapPin
                 size={15}
                 strokeWidth={2.6}
-                color="var(--ink-3)"
+                color={t.ink3}
                 style={{ marginTop: 2, flexShrink: 0 }}
               />
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontFamily: 'var(--font-body)', fontSize: 13.5, fontWeight: 700, color: 'var(--ink)', lineHeight: 1.3 }}>
+                <div style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 700, color: t.ink, lineHeight: 1.3 }}>
                   {isActive
                     ? 'Using your location to sort people near you'
                     : "Your feed isn't using your live location"}
                 </div>
-                <div style={{ marginTop: 2, fontFamily: 'var(--font-body)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.35 }}>
+                <div style={{ marginTop: 2, fontFamily: t.fontBody, fontSize: 12.5, color: t.ink2, lineHeight: 1.35 }}>
                   {isActive
                     ? `People near you show up first, not just near ${COLLEGE_LABEL}`
                     : `Sorted according to ${COLLEGE_LABEL}`}
@@ -7051,14 +9391,15 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
                 onClick={ask}
                 disabled={busy}
                 aria-label="Turn on your location"
+                className="slam slam-sm"
                 style={{
                   border: 'none',
                   cursor: busy ? 'default' : 'pointer',
                   padding: '7px 13px',
-                  borderRadius: 999,
-                  background: 'var(--yellow)',
-                  color: 'var(--ink)',
-                  fontFamily: 'var(--font-body)',
+                  borderRadius: t.radius.pill,
+                  backgroundColor: t.yellow,
+                  color: t.ink,
+                  fontFamily: t.fontBody,
                   fontSize: 12.5,
                   fontWeight: 700,
                   opacity: busy ? 0.6 : 1,
@@ -7079,10 +9420,10 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
                   justifyContent: 'center',
                   width: 30,
                   height: 30,
-                  border: '1px solid var(--line)',
+                  border: `1px solid ${t.ink}`,
                   borderRadius: 999,
                   background: 'transparent',
-                  color: 'var(--ink-2)',
+                  color: t.ink2,
                   cursor: locked ? 'default' : 'pointer',
                   opacity: locked ? 0.4 : 1,
                 }}
@@ -7105,7 +9446,7 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
                   height: 26,
                   border: 'none',
                   background: 'transparent',
-                  color: 'var(--ink-3)',
+                  color: t.ink3,
                   cursor: locked ? 'default' : 'pointer',
                   opacity: locked ? 0.4 : 1,
                 }}
@@ -7129,14 +9470,14 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
                 transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
                 style={{ overflow: 'hidden' }}
               >
-                <div style={{ borderTop: '1px solid var(--line)', padding: '10px 12px 12px' }}>
-                  <div style={{ fontFamily: 'var(--font-body)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+                <div style={{ borderTop: `1px solid ${t.ink}`, padding: '10px 12px 12px' }}>
+                  <div style={{ fontFamily: t.fontBody, fontSize: 12.5, color: t.ink2, lineHeight: 1.5 }}>
                     Your location is off, so people near {COLLEGE_LABEL} show up
                     first — even if you&apos;re somewhere else.
                   </div>
 
                   {error && (
-                    <div style={{ marginTop: 8, fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45 }}>
+                    <div style={{ marginTop: 8, fontFamily: t.fontBody, fontSize: 12, color: t.ink3, lineHeight: 1.45 }}>
                       {error}
                     </div>
                   )}
@@ -7150,8 +9491,8 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
                       border: 'none',
                       background: 'transparent',
                       padding: 0,
-                      color: 'var(--ink-3)',
-                      fontFamily: 'var(--font-body)',
+                      color: t.ink3,
+                      fontFamily: t.fontBody,
                       fontSize: 12,
                       textDecoration: 'underline',
                       cursor: locked ? 'default' : 'pointer',
@@ -7176,7 +9517,7 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
               transition={{ duration: AUTO_HIDE_MS / 1000, ease: 'linear' }}
               style={{
                 height: 2,
-                background: 'var(--yellow)',
+                background: t.yellow,
                 transformOrigin: 'left center',
               }}
             />
@@ -7193,24 +9534,25 @@ export default LocationNotice;
 ### ./client/src/components/NavBar.jsx
 
 ```
-// client/src/components/NavBar.jsx
+
 import React from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { triggerHaptic } from '../utils/haptics';
 import { Compass, Heart, User, Shuffle } from 'lucide-react';
+import neu from '../styles/neu';
 
 const C = {
-  paper: '#FFF9EC',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-};
-
-const F = {
-  mono: "'Space Mono', 'Courier New', monospace",
-  body: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  bungee: "'Bungee', sans-serif",
+  ...neu,
+  ink: '#111211',
+  ink2: '#383832',
+  paper: '#F1EDE2',
+  yellow: '#E0A15E',
+  coral: '#C96F68',
+  green: '#779477',
+  hair: 'rgba(17,18,17,.2)',
+  fontHeavy: "'Barlow Condensed', sans-serif",
+  fontBody: "'Space Grotesk', sans-serif",
+  fontMono: "'IBM Plex Mono', monospace",
 };
 
 const tabs = [
@@ -7221,90 +9563,229 @@ const tabs = [
 ];
 
 const NAV_CSS = `
-  .nb-bar { flex-shrink: 0; user-select: none; -webkit-user-select: none;
-    font-family: ${F.body};
-    background: ${C.paper}; border-top: 2px solid ${C.ink};
-    border-radius: 22px 22px 0 0;
-    box-shadow: 0 -3px 0 rgba(25,25,25,.10);
-    padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
-    position: relative; z-index: 50; }
+  .nb-bar {
+    position: relative;
+    z-index: 50;
+    flex-shrink: 0;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+    background: ${C.paper};
+    border-top: 1px solid ${C.ink};
+    box-shadow: 0 -4px 0 rgba(17,18,17,.06);
+    font-family: ${C.fontBody};
+    user-select: none;
+    -webkit-user-select: none;
+  }
 
-  .nb-row { display: flex; align-items: stretch; gap: 6px; max-width: 460px; margin: 0 auto; }
+  .nb-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 8px;
+    width: 100%;
+    max-width: 480px;
+    margin: 0 auto;
+  }
 
-  /* equal zones — fixed basis, so all four align perfectly on any width */
-  .nb-tab { flex: 1 1 0; width: 0; min-width: 0; height: 50px;
-    border: 2px solid transparent; border-radius: 13px;
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-    background: transparent; cursor: pointer; position: relative; outline: none;
-    touch-action: manipulation; -webkit-tap-highlight-color: transparent;
-    font-family: ${F.mono}; transition: background .15s ease; }
-  .nb-tab:focus-visible { border-color: ${C.ink}; }
+  .nb-tab {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+    min-height: 54px;
+    padding: 5px 2px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: ${C.ink};
+    cursor: pointer;
+    outline: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+      background-color .18s ease,
+      border-color .18s ease,
+      box-shadow .18s ease,
+      color .18s ease;
+  }
 
-  /* active = yellow tile (the vitals-tile language) */
-  .nb-tab.active { background: ${C.yellow}; border-color: ${C.ink};
-    box-shadow: 3px 3px 0 ${C.ink}; }
+  .nb-tab:focus-visible {
+    outline: 2px solid ${C.ink};
+    outline-offset: 2px;
+  }
 
-  .nb-ic { display: flex; color: ${C.ink2}; transition: color .15s ease, transform .15s ease; }
-  .nb-tab.active .nb-ic { color: ${C.ink}; transform: translateY(-1px); }
+  .nb-tab.active {
+    background: ${C.yellow};
+    border-color: ${C.ink};
+    box-shadow: 2px 2px 0 ${C.ink};
+  }
 
-  /* labels — Bungee, the app's "where am I" font, matching the header titles */
-  .nb-label { font-family: ${F.bungee}; font-weight: 400;
-    font-size: 8px; letter-spacing: .04em; text-transform: uppercase;
-    line-height: 1; color: ${C.ink2}; transition: color .15s ease; }
-  .nb-tab.active .nb-label { color: ${C.ink}; }
+  .nb-ic {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 23px;
+    color: ${C.ink2};
+    transition: transform .18s ease, color .18s ease;
+  }
 
-  /* badge rides the active tile like the ⋮ shadow */
-  .nb-badge { position: absolute; top: -7px; right: calc(50% - 24px); z-index: 2;
-    min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
-    background: ${C.coral}; border: 2px solid ${C.ink}; box-sizing: border-box;
-    display: flex; align-items: center; justify-content: center;
-    font-family: ${F.body}; font-size: 9px; font-weight: 800; color: #fff;
-    line-height: 1; font-variant-numeric: tabular-nums; }
+  .nb-tab.active .nb-ic {
+    color: ${C.ink};
+    transform: translateY(-1px);
+  }
 
-  .nb-tab:active .nb-ic { transform: scale(.9); }
+  .nb-label {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    color: ${C.ink2};
+    font-family: ${C.fontMono};
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .045em;
+    line-height: 1.1;
+    text-align: center;
+    text-transform: uppercase;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color .18s ease;
+  }
+
+  .nb-tab.active .nb-label {
+    color: ${C.ink};
+    font-weight: 700;
+  }
+
+  .nb-badge {
+    position: absolute;
+    top: -5px;
+    right: 4px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 19px;
+    height: 19px;
+    padding: 0 4px;
+    box-sizing: border-box;
+    border: 1px solid ${C.ink};
+    border-radius: 3px;
+    background: ${C.coral};
+    color: ${C.ink};
+    font-family: ${C.fontMono};
+    font-size: 9px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .nb-tab:not(.active):hover {
+      background: rgba(17,18,17,.055);
+      border-color: rgba(17,18,17,.15);
+    }
+  }
+
+  .nb-tab:active .nb-ic {
+    transform: scale(.92);
+  }
+
+  @media (max-width: 360px) {
+    .nb-bar {
+      padding-right: 7px;
+      padding-left: 7px;
+    }
+
+    .nb-row {
+      gap: 4px;
+    }
+
+    .nb-tab {
+      min-height: 50px;
+    }
+
+    .nb-label {
+      font-size: 8px;
+      letter-spacing: .025em;
+    }
+
+    .nb-badge {
+      right: 1px;
+    }
+  }
 
   @media (prefers-reduced-motion: reduce) {
-    .nb-ic, .nb-label, .nb-tab { transition: none; }
+    .nb-ic,
+    .nb-label,
+    .nb-tab {
+      transition: none !important;
+    }
   }
 `;
 
 const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
   const reduceMotion = useReducedMotion();
-  const T = reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 34 };
 
   const handleTabClick = (key) => {
-    if (activeTab !== key) {
-      triggerHaptic('light');
-      onTabChange(key);
-    }
+    if (activeTab === key) return;
+
+    triggerHaptic('light');
+    onTabChange(key);
   };
 
   return (
     <nav className="nb-bar" aria-label="Primary">
       <style>{NAV_CSS}</style>
+
       <div className="nb-row">
-        {tabs.map((tab) => {
-          const isActive = activeTab === tab.key;
-          const showBadge = tab.key === 'matches' && matchBadge > 0;
+        {tabs.map(({ key, label, Icon }) => {
+          const isActive = activeTab === key;
+          const showBadge = key === 'matches' && matchBadge > 0;
+
           return (
             <motion.button
-              key={tab.key}
+              key={key}
               type="button"
               className={`nb-tab${isActive ? ' active' : ''}`}
-              onClick={() => handleTabClick(tab.key)}
+              onClick={() => handleTabClick(key)}
+              aria-label={
+                key === 'matches' && matchBadge > 0
+                  ? `${label}, ${matchBadge} unread matches`
+                  : label
+              }
               aria-current={isActive ? 'page' : undefined}
-              whileTap={reduceMotion ? undefined : { y: 2 }}
-              transition={{ type: 'spring', stiffness: 600, damping: 30 }}
+              whileTap={reduceMotion ? undefined : { scale: 0.96 }}
+              transition={
+                reduceMotion
+                  ? { duration: 0 }
+                  : { type: 'spring', stiffness: 450, damping: 28 }
+              }
             >
-              <span className="nb-ic"><tab.Icon size={19} strokeWidth={isActive ? 2.6 : 2.2} /></span>
-              <span className="nb-label">{tab.label}</span>
+              <span className="nb-ic" aria-hidden="true">
+                <Icon
+                  size={20}
+                  strokeWidth={isActive ? 2.5 : 1.9}
+                />
+              </span>
+
+              <span className="nb-label">{label}</span>
+
               {showBadge && (
                 <motion.span
                   key={matchBadge}
                   className="nb-badge"
-                  initial={reduceMotion ? false : { scale: 0.4, opacity: 0 }}
+                  initial={reduceMotion ? false : { scale: 0.65, opacity: 0 }}
                   animate={{ scale: 1, opacity: 1 }}
-                  transition={{ type: 'spring', stiffness: 500, damping: 22 }}
+                  transition={
+                    reduceMotion
+                      ? { duration: 0 }
+                      : { type: 'spring', stiffness: 480, damping: 24 }
+                  }
                 >
                   {matchBadge > 99 ? '99+' : matchBadge}
                 </motion.span>
@@ -7318,6 +9799,7 @@ const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
 };
 
 export default NavBar;
+
 ```
 
 ### ./client/src/components/NotificationDrawer.jsx
@@ -7328,23 +9810,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '../utils/api';
 import { X, Send } from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
+import neu from '../styles/neu';
 
-/* Locked tokens — neubrutalism, same family as ProfileCard */
-const t = {
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  red: '#E5484D',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
 
 const FALLBACK_AVATAR = 'https://placehold.co/100/fff3dc/191919?text=%3F';
 const FALLBACK_PHOTO = 'https://placehold.co/500x625/fff3dc/191919?text=%C2%B7';
@@ -7917,17 +10386,10 @@ export default NotificationDrawer;
 import React, { useState, memo } from 'react';
 import { motion } from 'framer-motion';
 import { Camera } from 'lucide-react';
+import neu from '../styles/neu';
 
-/* Locked tokens — neubrutalism, same family as ProfileCard */
-const t = {
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  fontMono: "'Space Mono', 'Courier New', monospace",
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
 
 const FALLBACK_IMG = 'https://placehold.co/480x480/fff3dc/191919?text=%C2%B7';
 
@@ -8036,25 +10498,20 @@ import { motion, AnimatePresence, useMotionValue, useTransform, animate, useRedu
 import { triggerHaptic } from '../utils/haptics';
 import { useIsDesktop } from '../utils/useIsDesktop';
 import { ChevronDown } from 'lucide-react';
+import neu from '../styles/neu';
 
-/* ── locked tokens — ProfileCard "candy box" family ── */
+/* ── The shared neo-brutalist canon (src/styles/neu.js).
+   Keyed by the legacy short names so every ${F.*} usage site keeps working. ── */
 const F = {
-  heavy: "'Archivo Black', 'Arial Black', sans-serif",
-  body: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-  mono: "'Space Mono', 'Courier New', monospace",
+  heavy: neu.fontHeavy,
+  body: neu.fontBody,
+  mono: neu.fontMono,
 };
 
-const C = {
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  yellowDeep: '#E5B824',
-  coral: '#FF7A59',
-};
+/* The shared neo-brutalist canon (src/styles/neu.js).
+   The drifted local yellowDeep (#E5B824) was dropped — C.yellowDeep now
+   inherits the canon value (#FFC91F) from neu. */
+const C = neu;
 
 const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
 const PRESS_MS = 280;
@@ -8665,6 +11122,7 @@ export default PopoutItem;
 ```
 // client/src/components/ProfileCardSkeleton.jsx
 import React from 'react';
+import neu from '../styles/neu';
 
 /* Self-contained shimmer (sk-* namespace).
    Matches the deck card's ENTRANCE START STATE: full-bleed photo only —
@@ -8687,7 +11145,7 @@ const ProfileCardSkeleton = () => (
     aria-hidden="true"
     style={{
       position: 'relative', width: '100%', height: '100%',
-      overflow: 'hidden', backgroundColor: '#131313', contain: 'strict',
+      overflow: 'hidden', backgroundColor: neu.desk, contain: 'strict',
     }}
   >
     <style>{SKELETON_CSS}</style>
@@ -8696,7 +11154,7 @@ const ProfileCardSkeleton = () => (
     <div className="sk-photo" style={{ position: 'absolute', inset: 0 }} />
     <div style={{
       position: 'absolute', inset: 0, pointerEvents: 'none',
-      background: 'linear-gradient(to top, rgba(15,13,10,.4) 0%, rgba(15,13,10,.08) 42%, rgba(15,13,10,.18) 100%)',
+      background: 'linear-gradient(to top, rgba(17,18,17,.65) 0%, rgba(17,18,17,.08) 44%, rgba(17,18,17,.20) 100%)',
     }} />
   </div>
 );
@@ -8712,22 +11170,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Bell } from 'lucide-react';
 import { subscribeToPush, registerServiceWorker } from '../utils/push';
 import { triggerHaptic } from '../utils/haptics';
+import neu from '../styles/neu';
 
 const PREF_KEY = 'matchalize:pushState';
 
-/* Locked tokens — neubrutalism, same family as ProfileCard */
-const t = {
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
 
 const PUSH_CSS = `
   .pp-slam { transition: transform .08s steps(2), box-shadow .08s steps(2), background .08s steps(2);
@@ -8903,21 +11351,10 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { AlertTriangle } from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
+import neu from '../styles/neu';
 
-/* Locked tokens — neubrutalism, same family as ProfileCard */
-const t = {
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  red: '#E5484D',
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
 
 /**
  * ShadowbanBanner — Shows "account under review" banner.
@@ -9045,6 +11482,7 @@ export default ShadowbanBanner;
 ```
 // client/src/components/Skeleton.jsx
 import React from 'react';
+import neu from '../styles/neu';
 
 /* ── Locked skeleton system — matches the neubrutalism theme ──
    Fill = the cream hairline tone (visible on both the dark desk and cream sheets).
@@ -9052,7 +11490,7 @@ import React from 'react';
 
 const SKELETON_CSS = `
   .sk-box { position: relative; overflow: hidden; flex-shrink: 0;
-    background-color: #EBE5D6;
+    background-color: ${neu.hair};
     contain: paint; }
   .sk-box::after { content: ''; position: absolute; inset: 0;
     background-image: linear-gradient(100deg, transparent 30%, rgba(255,255,255,0.55) 50%, transparent 70%);
@@ -9097,542 +11535,6 @@ export const SkeletonBox = ({ width, height, radius = 4, dark = false }) => {
 export default SkeletonBox;
 ```
 
-### ./client/src/components/UiGallery.jsx
-
-```
-import React, { useState } from 'react';
-import { X, Sparkles } from 'lucide-react';
-import { toast } from '../utils/toast';
-import { useIsDesktop } from '../utils/useIsDesktop';
-import { useQueryClient } from '@tanstack/react-query';
-
-/* ──────────────────────────────────────────────────────────────────────────
-   TEST-ONLY. Not a feature.
-
-   Renders nothing in a production build (see the DEV guard on <UiGallery> at
-   the bottom). Its only job is to let every toast in the app be fired on
-   demand, so the real component can be judged where it actually lives —
-   over a real page, in real surroundings, at the real 4s/7s timings.
-
-   Copy here is a SNAPSHOT taken from the call sites, not a source of
-   truth. Fixing a string in this file does not fix the app; the call site is
-   the thing that has to change.
-   ────────────────────────────────────────────────────────────────────────── */
-
-const t = {
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  red: '#E5484D',
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-};
-
-const TYPE_META = {
-  success: { label: 'SUCCESS', bg: t.green, fg: '#FFFFFF' },
-  error: { label: 'ERROR', bg: t.red, fg: '#FFFFFF' },
-  info: { label: 'INFO', bg: t.yellow, fg: t.ink },
-};
-
-/* Candidate copy proposed during the review. NOT live call sites — these rows
-   exist only so the wording can be judged in the real component (real tile,
-   real 4s timing, real width) before it gets written into the app. A proposal
-   is deleted from here once it lands in code. */
-const PROPOSALS = [
-  { type: 'error', msg: 'Something went wrong. Please try again.', from: 'G2a/G3 · api.js:56 & :63 fallback' },
-  { type: 'error', msg: 'Our side had a problem. Try again in a moment.', from: 'G3 · api.js:67 — 5xx (Server icon)', icon: 'Server' },
-  { type: 'error', msg: 'This conversation is no longer available.', from: 'G2b · messages.js:53, 89, 150, 252, 294 — and the you-were-blocked case' },
-  { type: 'error', msg: "You can't message someone you've blocked.", from: 'G2c · messages.js:154 — you blocked them', action: 'Unblock' },
-];
-
-/* `action` mirrors the real call site's { label, onClick } shape so the button
-   renders at the real 7s timing instead of the 4s plain one. */
-const GROUPS = [
-  {
-    name: 'API — fires on any failed request',
-    source: 'utils/api.js:39, 57, 73',
-    rows: [
-      { type: 'error', msg: 'Action not allowed.', from: 'api.js:57 — 403 not gated' },
-      { type: 'error', msg: 'Something went wrong. Please try again.', from: 'api.js:73 — any !response.ok' },
-    ],
-  },
-  {
-    name: 'Discover',
-    source: 'pages/Discover.jsx',
-    rows: [
-      { type: 'error', msg: 'Location permission was denied. Enable it in browser settings.', from: 'Discover.jsx:400 · denied' },
-      { type: 'error', msg: 'Location only works on a secure connection.', from: 'Discover.jsx:401 · insecure-context' },
-      { type: 'error', msg: "Couldn't get a location reading. Try again, or check phone GPS settings.", from: 'Discover.jsx:402 · other' },
-      { type: 'info', msg: 'Your location is already current.', from: 'Discover.jsx:406 · not moved' },
-      { type: 'success', msg: 'Location updated. Showing people near you.', from: 'Discover.jsx:419 · moved' },
-      { type: 'info', msg: "Profile strength: 82%. You need 75% to interact.", from: 'Discover.jsx:717 · deck gate, has score', action: 'Profile' },
-      { type: 'info', msg: 'Finish your profile to interact — you need 75%.', from: 'Discover.jsx:720 · deck gate, no score', action: 'Profile' },
-    ],
-  },
-  {
-    name: 'Profile',
-    source: 'pages/Profile.jsx',
-    rows: [
-      { type: 'error', msg: 'Edits are paused while your account is under review.', from: 'Profile.jsx:715 openEditDrawer', action: 'Contact support' },
-      { type: 'error', msg: 'Edits are paused while your account is under review.', from: 'Profile.jsx:730 openPhotoSlot', action: 'Contact support' },
-      { type: 'error', msg: 'Wait for the current upload to finish.', from: 'Profile.jsx:733' },
-      { type: 'error', msg: 'Edits are paused while your account is under review.', from: 'Profile.jsx:759 removePhoto', action: 'Contact support' },
-      { type: 'error', msg: 'Edits are paused while your account is under review.', from: 'Profile.jsx:1139 updateProfile', action: 'Contact support' },
-      { type: 'error', msg: 'Could not save. Please try again.', from: 'Profile.jsx:1170' },
-      { type: 'error', msg: 'Upload failed. Check your connection, or try a smaller image.', from: 'Profile.jsx:1258' },
-      { type: 'success', msg: 'Others can now see your college.', from: 'Profile.jsx:1813 · ON branch' },
-      { type: 'success', msg: 'Your college is now hidden from the feed.', from: 'Profile.jsx:1813 · OFF branch' },
-    ],
-  },
-  {
-    name: 'Chat',
-    source: 'pages/Chat.jsx',
-    rows: [
-      { type: 'error', msg: "Couldn't send message. Check your connection.", from: 'Chat.jsx:553', action: 'Retry' },
-      { type: 'error', msg: "Couldn't upload photo. Check your connection.", from: 'Chat.jsx:596', action: 'Retry' },
-      { type: 'error', msg: 'Failed to delete. Please try again.', from: 'Chat.jsx:681' },
-      { type: 'error', msg: 'Failed to end this conversation. Please try again.', from: 'Chat.jsx:708' },
-      { type: 'error', msg: 'Failed to block this user. Please try again.', from: 'Chat.jsx:723', action: 'Retry' },
-      { type: 'success', msg: 'Report submitted. Thank you for keeping the community safe.', from: 'Chat.jsx:1049' },
-    ],
-  },
-  {
-    name: 'Settings',
-    source: 'pages/Settings.jsx',
-    rows: [
-      { type: 'error', msg: 'Location permission was denied. Enable it in browser settings.', from: 'Settings.jsx:139 · denied' },
-      { type: 'error', msg: 'Location only works on a secure connection.', from: 'Settings.jsx:140 · insecure-context' },
-      { type: 'error', msg: "Couldn't get a location reading. Try again, or check phone GPS settings.", from: 'Settings.jsx:141 · other' },
-      { type: 'success', msg: 'Updating your feed for your location.', from: 'Settings.jsx:149' },
-      { type: 'error', msg: 'Could not save your location. Try again.', from: 'Settings.jsx:151' },
-      { type: 'success', msg: 'Updating your feed for your campus.', from: 'Settings.jsx:174' },
-      { type: 'error', msg: 'Could not update your location preference. Try again.', from: 'Settings.jsx:176' },
-      { type: 'success', msg: 'Show me preference saved.', from: 'Settings.jsx:224' },
-      { type: 'error', msg: 'Could not save your preference. Try again.', from: 'Settings.jsx:227' },
-      { type: 'error', msg: 'Could not load your blocked list. Try again.', from: 'Settings.jsx:250' },
-      { type: 'success', msg: 'Unblocked Priya. They can now appear in your feed.', from: 'Settings.jsx:261' },
-      { type: 'error', msg: 'Could not unblock Priya. Try again.', from: 'Settings.jsx:263' },
-      { type: 'error', msg: 'Could not delete your account. Try again.', from: 'Settings.jsx:286' },
-      { type: 'error', msg: 'Select a college and enter your college email.', from: 'Settings.jsx:529' },
-      { type: 'success', msg: 'Code sent to priya@college.edu.', from: 'Settings.jsx:533' },
-      { type: 'error', msg: 'Could not send code. Try again.', from: 'Settings.jsx:535' },
-      { type: 'success', msg: 'College updated. Your feed will refresh for your new campus.', from: 'Settings.jsx:557' },
-      { type: 'error', msg: 'Could not change college. Try again.', from: 'Settings.jsx:560' },
-    ],
-  },
-  {
-    name: 'Other screens',
-    source: 'Header · ProfileCard · ReportModal · Onboarding · Matches · Roulette',
-    rows: [
-      { type: 'success', msg: 'Report submitted. Thank you for keeping the community safe.', from: 'ProfileCard.jsx:984' },
-      { type: 'error', msg: 'Could not submit your report. Check your connection and try again.', from: 'ReportModal.jsx:216' },
-      { type: 'error', msg: 'Upload failed. Check your connection, or try a smaller image.', from: 'Onboarding.jsx:505' },
-      { type: 'error', msg: 'Could not publish your profile. Check your connection and try again.', from: 'Onboarding.jsx:589' },
-      { type: 'error', msg: 'Could not unmatch. Try again.', from: 'Matches.jsx:130' },
-      { type: 'info', msg: 'Roulette is coming soon.', from: 'Roulette.jsx:53' },
-    ],
-  },
-];
-
-const fire = (row) => {
-  toast[row.type](
-    row.msg,
-    row.action ? { label: row.action, onClick: () => {} } : undefined,
-    row.icon ? { icon: row.icon } : undefined,
-  );
-};
-
-const Row = ({ row }) => {
-  const meta = TYPE_META[row.type];
-  return (
-    <button
-      onClick={() => fire(row)}
-      style={{
-        display: 'block',
-        width: '100%',
-        textAlign: 'left',
-        background: t.card,
-        border: `2px solid ${t.ink}`,
-        borderRadius: 12,
-        boxShadow: `3px 3px 0 ${t.ink}`,
-        padding: '10px 12px',
-        margin: '0 0 10px',
-        cursor: 'pointer',
-        fontFamily: t.fontBody,
-        WebkitTapHighlightColor: 'transparent',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
-        <span style={{
-          background: meta.bg,
-          color: meta.fg,
-          border: `1.5px solid ${t.ink}`,
-          borderRadius: 5,
-          padding: '1px 5px',
-          fontFamily: t.fontMono,
-          fontSize: 8,
-          fontWeight: 700,
-          letterSpacing: '.08em',
-        }}>{meta.label}</span>
-        {row.action && (
-          <span style={{
-            border: `1.5px solid ${t.ink}`,
-            borderRadius: 5,
-            padding: '1px 5px',
-            fontFamily: t.fontMono,
-            fontSize: 8,
-            fontWeight: 700,
-            letterSpacing: '.08em',
-            color: t.ink,
-          }}>ACTION: {row.action}</span>
-        )}
-      </div>
-      <div style={{ fontSize: 13, fontWeight: 700, color: t.ink, lineHeight: 1.4, marginBottom: 5 }}>
-        {row.msg}
-      </div>
-      <div style={{ fontFamily: t.fontMono, fontSize: 9, color: t.ink3, letterSpacing: '.02em' }}>
-        Fires from {row.from}
-      </div>
-    </button>
-  );
-};
-
-/* Base style for gallery action buttons */
-const BASE_BTN_STYLE = {
-  display: 'block',
-  width: '100%',
-  textAlign: 'left',
-  background: t.card,
-  border: `2px solid ${t.ink}`,
-  borderRadius: 12,
-  boxShadow: `3px 3px 0 ${t.ink}`,
-  padding: '10px 12px',
-  margin: '0 0 10px',
-  cursor: 'pointer',
-  fontFamily: t.fontBody,
-  WebkitTapHighlightColor: 'transparent',
-};
-
-const UiGallery = () => {
-  const [open, setOpen] = useState(false);
-  const isDesktop = useIsDesktop();
-  const queryClient = useQueryClient();
-
-  const total = GROUPS.reduce((n, g) => n + g.rows.length, 0);
-
-  /* Live badge test helpers */
-  const seedMatches = () => {
-    queryClient.setQueryData(['matches'], {
-      matches: [
-        { _id: 'chat-1', user: { _id: 'u1', name: 'Priya' }, unreadCount: 5, lastMessage: { senderId: 'u1', readAt: null }, yourTurn: true },
-        { _id: 'chat-2', user: { _id: 'u2', name: 'Sam' }, unreadCount: 2, lastMessage: { senderId: 'u2', readAt: null }, yourTurn: true },
-        { _id: 'chat-3', user: { _id: 'u3', name: 'Alex' }, unreadCount: 0, lastMessage: { senderId: 'u3', readAt: new Date().toISOString() }, yourTurn: false },
-      ],
-      total: 3,
-      page: 1,
-      totalPages: 1,
-      hasMore: false,
-    });
-    toast.info('Seeded 3 chats (Priya:5, Sam:2, Alex:0)');
-  };
-
-  const newMessagePriya = () => {
-    queryClient.setQueryData(['matches'], (old) => {
-      if (!old?.matches) return old;
-      return {
-        ...old,
-        matches: old.matches.map((m) =>
-          m._id === 'chat-1'
-            ? { ...m, unreadCount: (m.unreadCount || 0) + 1, yourTurn: true, lastMessage: { ...m.lastMessage, senderId: 'u1', readAt: null } }
-            : m
-        ),
-      };
-    });
-    toast.info('New message from Priya');
-  };
-
-  const openPriyaChat = () => {
-    queryClient.setQueryData(['matches'], (old) => {
-      if (!old?.matches) return old;
-      return {
-        ...old,
-        matches: old.matches.map((m) =>
-          m._id === 'chat-1'
-            ? { ...m, unreadCount: 0, yourTurn: false, lastMessage: { ...m.lastMessage, readAt: new Date().toISOString() } }
-            : m
-        ),
-      };
-    });
-    toast.info('Opened Priya\'s chat (unread cleared)');
-  };
-
-  const clearMatches = () => {
-    queryClient.setQueryData(['matches'], { matches: [], total: 0, page: 1, totalPages: 1, hasMore: false });
-    toast.info('Cleared mock matches');
-  };
-
-  const getBadgeCount = () => {
-    const matches = queryClient.getQueryData(['matches']);
-    return matches?.matches?.reduce((sum, m) => sum + (m.unreadCount || 0), 0) ?? 0;
-  };
-
-  const getChatCount = () => {
-    const matches = queryClient.getQueryData(['matches']);
-    return matches?.matches?.length ?? 0;
-  };
-
-  return (
-    <>
-      {/* Launcher. Sits ABOVE the push-permission prompt on mobile — that panel
-          is full-width at `bottom: 84px`, so anything on the same line would be
-          buried under it. Hidden while the sheet is open, otherwise it would
-          float over the live page the sheet is meant to be revealing. */}
-      {!open && (
-      <button
-        onClick={() => setOpen(true)}
-        aria-label="Open notification gallery"
-        title="Notification gallery (dev only)"
-        style={{
-          position: 'fixed',
-          right: 14,
-          bottom: isDesktop
-            ? 'calc(84px + env(safe-area-inset-bottom, 0px))'
-            : 'calc(190px + env(safe-area-inset-bottom, 0px))',
-          width: 52,
-          height: 52,
-          borderRadius: 999,
-          background: t.yellow,
-          border: `2px solid ${t.ink}`,
-          boxShadow: `4px 4px 0 ${t.ink}`,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 9988,
-          cursor: 'pointer',
-          WebkitTapHighlightColor: 'transparent',
-        }}
-      >
-        <Sparkles size={22} strokeWidth={2.6} color={t.ink} />
-      </button>
-      )}
-
-      {open && (
-        <div
-          role="dialog"
-          aria-label="Notification gallery"
-          style={{
-            position: 'fixed',
-            left: 0,
-            right: 0,
-            bottom: 0,
-            /* Bottom sheet, NOT a full-screen takeover. The whole point is to
-               see the toast land on the REAL page — so the top of the viewport
-               has to stay clear. At 38% a 70-80px toast (top: 16px) clears the
-               sheet edge on every phone size we support. */
-            top: '38%',
-            zIndex: 9998,
-            background: t.paper,
-            borderTop: `2px solid ${t.ink}`,
-            borderTopLeftRadius: 22,
-            borderTopRightRadius: 22,
-            boxShadow: '0 -8px 28px rgba(0,0,0,0.20)',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-          }}
-        >
-          <div aria-hidden="true" style={{
-            alignSelf: 'center',
-            width: 44,
-            height: 4,
-            borderRadius: 999,
-            background: t.hair,
-            margin: '8px 0 2px',
-            flexShrink: 0,
-          }} />
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-            padding: '14px 14px 12px',
-            borderBottom: `2px solid ${t.ink}`,
-            background: t.card,
-            flexShrink: 0,
-          }}>
-            <div>
-              <div style={{ fontFamily: t.fontMono, fontSize: 9, letterSpacing: '.12em', color: t.ink3, fontWeight: 700 }}>
-                TEST ONLY — NOT IN PRODUCTION
-              </div>
-              <div style={{ fontFamily: t.fontBody, fontSize: 17, fontWeight: 800, color: t.ink }}>
-                Notifications · {total}
-              </div>
-            </div>
-            <button
-              onClick={() => setOpen(false)}
-              aria-label="Close gallery"
-              style={{
-                width: 38, height: 38, borderRadius: 999,
-                background: t.paper, border: `2px solid ${t.ink}`,
-                boxShadow: `2px 2px 0 ${t.ink}`,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                cursor: 'pointer', flexShrink: 0,
-              }}
-            >
-              <X size={17} strokeWidth={3} color={t.ink} />
-            </button>
-          </div>
-
-          <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '14px 14px 40px' }}>
-            <div style={{ marginBottom: 22 }}>
-              <div style={{
-                fontFamily: t.fontMono, fontSize: 10, fontWeight: 700,
-                letterSpacing: '.1em', color: t.coral, marginBottom: 2,
-              }}>&#9670; PROPOSED COPY &mdash; NOT LIVE YET</div>
-              <div style={{ fontFamily: t.fontMono, fontSize: 9, color: t.ink3, marginBottom: 10 }}>
-                {PROPOSALS.length} candidate{PROPOSALS.length === 1 ? '' : 's'} from the current review
-              </div>
-              {PROPOSALS.length === 0
-                ? <div style={{ fontFamily: t.fontMono, fontSize: 10, color: t.ink3 }}>None pending.</div>
-                : PROPOSALS.map((row, i) => <Row key={i} row={row} />)}
-            </div>
-            {GROUPS.map((g) => (
-              <div key={g.name} style={{ marginBottom: 22 }}>
-                <div style={{
-                  fontFamily: t.fontMono, fontSize: 10, fontWeight: 700,
-                  letterSpacing: '.1em', color: t.ink, marginBottom: 2,
-                }}>{g.name}</div>
-                <div style={{ fontFamily: t.fontMono, fontSize: 9, color: t.ink3, marginBottom: 10 }}>
-                  {g.source}
-                </div>
-                {g.rows.map((row, i) => <Row key={i} row={row} />)}
-              </div>
-            ))}
-
-            {/* Live Badge Test Section */}
-            <div style={{ marginBottom: 22, marginTop: 10 }}>
-              <div style={{
-                fontFamily: t.fontMono, fontSize: 10, fontWeight: 700,
-                letterSpacing: '.1em', color: t.coral, marginBottom: 2,
-              }}>&#9670; LIVE BADGE TEST</div>
-              <div style={{ fontFamily: t.fontMono, fontSize: 9, color: t.ink3, marginBottom: 12 }}>
-                Test the WhatsApp-style live unread badge. Buttons update the real query cache — the NavBar/Letters badge updates instantly.
-              </div>
-
-              {/* Current badge visual */}
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap',
-                padding: '12px', background: t.card, border: `2px solid ${t.ink}`, borderRadius: 12,
-              }}>
-                <span style={{ fontFamily: t.fontMono, fontSize: 9, color: t.ink3 }}>Current Badge:</span>
-                <span style={{
-                  fontFamily: t.fontMono, fontSize: 28, fontWeight: 800, color: t.coral,
-                  background: t.yellow, border: `2px solid ${t.ink}`, borderRadius: 999,
-                  padding: '4px 16px', minWidth: 56, textAlign: 'center',
-                  boxShadow: '3px 3px 0 var(--ink)',
-                }}>
-                  {getBadgeCount()}
-                </span>
-                <span style={{ fontFamily: t.fontMono, fontSize: 9, color: t.ink3, marginLeft: 'auto' }}>
-                  {getChatCount()} chat{getChatCount() !== 1 ? 's' : ''}
-                </span>
-              </div>
-
-              {/* Action buttons */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <button
-                  onClick={seedMatches}
-                  style={{
-                    ...BASE_BTN_STYLE,
-                    background: t.green, color: '#fff', border: `2px solid ${t.ink}`,
-                    boxShadow: `4px 4px 0 ${t.ink}`, fontWeight: 700,
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontFamily: t.fontMono, fontSize: 12 }}>SEED</span>
-                    <span style={{ fontFamily: t.fontBody, fontSize: 13, fontWeight: 700 }}>
-                      Seed 3 chats (Priya: 5, Sam: 2, Alex: 0) → Badge = 7
-                    </span>
-                  </div>
-                </button>
-
-                <button
-                  onClick={newMessagePriya}
-                  style={{
-                    ...BASE_BTN_STYLE,
-                    background: t.coral, color: '#fff', border: `2px solid ${t.ink}`,
-                    boxShadow: `4px 4px 0 ${t.ink}`, fontWeight: 700,
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontFamily: t.fontMono, fontSize: 12 }}>NEW MSG</span>
-                    <span style={{ fontFamily: t.fontBody, fontSize: 13, fontWeight: 700 }}>
-                      Simulate new message from Priya (+1)
-                    </span>
-                  </div>
-                </button>
-
-                <button
-                  onClick={openPriyaChat}
-                  style={{
-                    ...BASE_BTN_STYLE,
-                    background: t.yellow, color: t.ink, border: `2px solid ${t.ink}`,
-                    boxShadow: `4px 4px 0 ${t.ink}`, fontWeight: 700,
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontFamily: t.fontMono, fontSize: 12 }}>OPEN CHAT</span>
-                    <span style={{ fontFamily: t.fontBody, fontSize: 13, fontWeight: 700 }}>
-                      Open Priya's chat (clears her 5 unread) → Badge drops by 5
-                    </span>
-                  </div>
-                </button>
-
-                <button
-                  onClick={clearMatches}
-                  style={{
-                    ...BASE_BTN_STYLE,
-                    background: t.red, color: '#fff', border: `2px solid ${t.ink}`,
-                    boxShadow: `4px 4px 0 ${t.ink}`, fontWeight: 700,
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontFamily: t.fontMono, fontSize: 12 }}>CLEAR</span>
-                    <span style={{ fontFamily: t.fontBody, fontSize: 13, fontWeight: 700 }}>
-                      Clear all mock data
-                    </span>
-                  </div>
-                </button>
-              </div>
-            </div>
-            <div style={{
-              fontFamily: t.fontMono, fontSize: 9, color: t.ink3, lineHeight: 1.6,
-              borderTop: `1px solid ${t.hair}`, paddingTop: 12,
-            }}>
-              Copy here is a snapshot. Editing it does not change the app —
-              the call sites in {GROUPS.length} page files are the source of truth.
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
-};
-
-/* DEV gate. `import.meta.env.DEV` is statically false in a production build, so
-   Vite drops this branch entirely and the component never mounts. */
-export default function UiGalleryDevOnly() {
-  if (!import.meta.env.DEV) return null;
-  return <UiGallery />;
-}
-```
-
 ### ./client/src/components/chat/EmojiPicker.jsx
 
 ```
@@ -9640,21 +11542,11 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
-import { theme as design } from '../../utils/theme';
+import neu from '../../styles/neu';
 
 const REACTION_EMOJIS = ['❤️', '😂', '🔥', '👍', '😲', '😢'];
 
-/* ==================================================================
-   ARCHIVAL THEME CONSTANTS
-================================================================== */
-const theme = {
-  paper: 'var(--paper)',
-  borderDark: 'var(--line-dark)',
-  ink: 'var(--ink)',
-  crimson: 'var(--crimson)',
-  shadowWarm: 'var(--accent-15)',
-  shadowDark: 'var(--ink-25)',
-};
+const t = neu;
 
 const EmojiPicker = ({ anchorRect, onSelect, onClose }) => {
   if (!anchorRect) return null;
@@ -9717,7 +11609,7 @@ const EmojiPicker = ({ anchorRect, onSelect, onClose }) => {
         style={{
           position: 'fixed',
           inset: 0,
-          backgroundColor: 'rgba(20, 15, 10, 0.4)',
+          backgroundColor: 'rgba(25, 25, 25, 0.4)',
           backdropFilter: 'blur(2px)', // Subtle focus pull
           zIndex: 9996,
         }}
@@ -9736,11 +11628,10 @@ const EmojiPicker = ({ anchorRect, onSelect, onClose }) => {
           left,
           width: pickerWidth,
           height: pickerHeight,
-          backgroundColor: theme.paper,
-          backgroundImage: `url("${design?.texture?.grain || ''}")`,
-          border: `1.5px solid ${theme.borderDark}`,
+          backgroundColor: t.paper,
+          backgroundImage: `url("${t.grain || ''}")`,
+          border: `2px solid ${t.ink}`,
           borderRadius: '32px', // Pill shape for reaction menus
-          border: `1.5px solid ${theme.borderDark}`,
           zIndex: 9997,
           padding: '0 16px',
           display: 'flex',
@@ -9803,27 +11694,12 @@ import React, { memo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
-import { theme as design } from '../../utils/theme';
+import neu from '../../styles/neu';
 
-/* ==================================================================
-   ARCHIVAL THEME CONSTANTS
-================================================================== */
-const theme = { 
-  paper: 'var(--paper)', 
-  surface: 'var(--surface)', 
-  surfaceAlt: 'var(--surface-alt)', 
-  border: 'var(--line)', 
-  borderDark: 'var(--line-dark)', 
-  ink: 'var(--ink)', 
-  inkMuted: 'var(--ink-muted)', 
-  accent: 'var(--accent)', 
-  crimson: 'var(--crimson)', 
-  shadowWarm: 'var(--accent-12)',
-  shadowDark: 'var(--ink-20)',
-};
+const t = neu;
 
 // Zero-Lag Memoized Icon Component
-const Icon = memo(({ path, size = 20, color = theme.ink, strokeWidth = 1.8 }) => (
+const Icon = memo(({ path, size = 20, color = t.ink, strokeWidth = 1.8 }) => (
   <svg 
     width={size} 
     height={size} 
@@ -9885,19 +11761,20 @@ const MessageActionMenu = ({ anchorRect, isMine, isMedia, onClose, onReply, onRe
         }
         @media (hover: hover) {
           .tactile-menu-btn:hover {
-            background-color:'var(--accent-05)'; /* Subtle warm paper highlight */
+            background-color: var(--n-yellow) !important;
           }
           .tactile-menu-btn.danger-btn:hover {
-            background-color:'var(--crim-05)'; /* Subtle crimson highlight */
+            background-color: var(--n-red) !important;
+            color: #fff !important;
           }
         }
         .tactile-menu-btn:active {
           transform: scale3d(0.97, 0.97, 1) !important;
           transition: transform 0.08s cubic-bezier(0, 0, 0.2, 1) !important;
-          background-color:'var(--accent-10)' !important;
+          background-color: var(--n-yellow-deep) !important;
         }
         .tactile-menu-btn.danger-btn:active {
-          background-color:'var(--crim-10)' !important;
+          background-color: var(--n-red) !important;
         }
         @media (prefers-reduced-motion: reduce) {
           .tactile-menu-btn { transition: none !important; transform: none !important; }
@@ -9914,7 +11791,7 @@ const MessageActionMenu = ({ anchorRect, isMine, isMedia, onClose, onReply, onRe
         style={{ 
           position: 'fixed', 
           inset: 0, 
-          backgroundColor: 'rgba(20, 15, 10, 0.35)', 
+          backgroundColor: 'rgba(25, 25, 25, 0.35)', 
           backdropFilter: 'blur(2px)', 
           zIndex: 9998 
         }}
@@ -9932,10 +11809,10 @@ const MessageActionMenu = ({ anchorRect, isMine, isMedia, onClose, onReply, onRe
           top,
           left,
           width: menuWidth,
-          backgroundColor: theme.surface,
-          backgroundImage: `url("${design?.texture?.grain || ''}")`,
-          border: `1.5px solid ${theme.borderDark}`,
-          borderRadius: '16px',
+          backgroundColor: t.card,
+          backgroundImage: `url("${t.grain || ''}")`,
+          border: `2px solid ${t.ink}`,
+          borderRadius: t.radius.lg,
           padding: '8px',
           zIndex: 9999,
           display: 'flex',
@@ -9946,8 +11823,8 @@ const MessageActionMenu = ({ anchorRect, isMine, isMedia, onClose, onReply, onRe
       >
         {visible.map((a) => {
           const isDanger = a.key === 'delete' || a.key === 'report';
-          const iconColor = isDanger ? theme.crimson : theme.inkSoft;
-          const textColor = isDanger ? theme.crimson : theme.ink;
+          const iconColor = isDanger ? t.red : t.ink2;
+          const textColor = isDanger ? t.red : t.ink;
 
           return (
             <button
@@ -9966,7 +11843,7 @@ const MessageActionMenu = ({ anchorRect, isMine, isMedia, onClose, onReply, onRe
                 padding: '12px 16px',
                 backgroundColor: 'transparent',
                 border: 'none',
-                borderRadius: '8px', // Modern rounded internal list items
+                borderRadius: t.radius.sm,
                 cursor: 'pointer',
                 textAlign: 'left',
                 outline: 'none',
@@ -9976,7 +11853,7 @@ const MessageActionMenu = ({ anchorRect, isMine, isMedia, onClose, onReply, onRe
               <Icon path={a.path} size={18} color={iconColor} strokeWidth={2} />
               <span 
                 style={{ 
-                  fontFamily: "'Inter', sans-serif", 
+                  fontFamily: t.fontBody, 
                   fontWeight: 600, 
                   fontSize: '14px',
                   color: textColor,
@@ -10006,23 +11883,9 @@ import { triggerHaptic } from '../../utils/haptics';
 import { Check, CheckCheck } from 'lucide-react';
 import PolaroidCard from '../PolaroidCard';
 import CassettePlayer from '../CassettePlayer';
-import { theme as design } from '../../utils/theme';
+import neu from '../../styles/neu';
 
-/* ==================================================================
-   ARCHIVAL THEME CONSTANTS
-================================================================== */
-const theme = {
-  paper: 'var(--paper)', 
-  surface: 'var(--surface)', 
-  surfaceAlt: 'var(--surface-alt)', 
-  border: 'var(--line)', 
-  borderDark: 'var(--line-dark)',
-  ink: 'var(--ink)', 
-  inkMuted: 'var(--ink-muted)', 
-  accent: 'var(--accent)', 
-  crimson: 'var(--crimson)', 
-  shadowWarm: 'var(--accent-12)',
-};
+const t = neu;
 
 const MessageBubble = ({ 
   message, 
@@ -10068,13 +11931,13 @@ const MessageBubble = ({
     if (message.type === 'audio') {
       return (
         <div data-no-longpress>
-          <CassettePlayer audioUrl={message.mediaUrl} themeColor={isMine ? theme.accent : theme.inkSoft} />
+          <CassettePlayer audioUrl={message.mediaUrl} themeColor={isMine ? t.yellow : t.ink2} />
         </div>
       );
     }
     if (message.deleted) {
       return (
-        <span style={{ fontStyle: 'italic', color: theme.inkMuted, fontSize: '13px', fontFamily: "'Inter', sans-serif" }}>
+        <span style={{ fontStyle: 'italic', color: t.ink3, fontSize: '13px', fontFamily: t.fontBody }}>
           This artifact was removed.
         </span>
       );
@@ -10132,13 +11995,13 @@ const MessageBubble = ({
           maxWidth: '75%', 
           padding: '8px 12px', 
           marginBottom: '6px', 
-          backgroundColor: isMine ? 'var(--accent-05)' : theme.surface, 
-          border: `1px solid ${theme.border}`,
-          borderLeft: `3px solid ${theme.accent}`, 
-          borderRadius: '6px', 
+          backgroundColor: isMine ? 'var(--n-yellow-deep)' : t.paper, 
+          border: `1px solid ${t.ink}`, 
+          borderLeft: `3px solid ${t.yellow}`, 
+          borderRadius: t.radius.sm, 
           fontSize: '12px', 
-          color: theme.inkMuted, 
-          fontFamily: "'Inter', sans-serif", 
+          color: t.ink2, 
+          fontFamily: t.fontBody, 
           fontStyle: 'italic', 
           whiteSpace: 'nowrap', 
           overflow: 'hidden', 
@@ -10152,18 +12015,16 @@ const MessageBubble = ({
       <div style={{ 
         maxWidth: '82%', 
         padding: '14px 18px', 
-        borderRadius: '12px', 
-        backgroundColor: isMine ? theme.surfaceAlt : theme.surface, 
-        border: `1px solid ${theme.border}`, 
-        borderLeft: isMine ? `1px solid ${theme.border}` : `3px solid ${theme.crimson}`, 
-        borderRight: isMine ? `3px solid ${theme.accent}` : `1px solid ${theme.border}`, 
-        color: theme.ink, 
-        fontFamily: "'Special Elite', 'Courier New', monospace", 
+        borderRadius: t.radius.md, 
+        backgroundColor: isMine ? t.card : t.paper, 
+        border: `2px solid ${t.ink}`, 
+        boxShadow: isMine ? t.shadow.sm : 'none',
+        color: t.ink, 
+        fontFamily: t.fontMono, 
         fontSize: '15px', 
         lineHeight: '1.5', 
         wordBreak: 'break-word', 
         position: 'relative',
-        transition: 'border-color 0.3s ease',
       }}>
         {renderContent()}
 
@@ -10177,9 +12038,9 @@ const MessageBubble = ({
               [isMine ? 'right' : 'left']: '16px', 
               width: '32px', 
               height: '14px', 
-              backgroundColor: 'var(--tape-90)', 
+              backgroundColor: 'var(--n-paper)', 
               backdropFilter: 'blur(2px)',
-              border: `1px solid var(--accent-15)`,
+              border: `1px solid ${t.yellow}`,
               transform: `rotate(${isMine ? '4deg' : '-4deg'})`,
               zIndex: 2,
             }} 
@@ -10210,9 +12071,9 @@ const MessageBubble = ({
                 alignItems: 'center', 
                 gap: '4px', 
                 padding: '4px 8px', 
-                backgroundColor: theme.surface, 
-                border: `1px solid ${theme.borderDark}`, 
-                borderRadius: '16px', 
+                backgroundColor: t.paper, 
+                border: `1px solid ${t.ink}`, 
+                borderRadius: t.radius.pill, 
                 fontSize: '14px', 
                 lineHeight: 1,
               }}
@@ -10220,10 +12081,10 @@ const MessageBubble = ({
               <span>{emoji}</span>
               {users.length > 1 && (
                 <span style={{ 
-                  fontFamily: "'Inter', sans-serif", 
+                  fontFamily: t.fontBody, 
                   fontSize: '11px', 
                   fontWeight: 700, 
-                  color: theme.inkMuted 
+                  color: t.ink3 
                 }}>
                   {users.length}
                 </span>
@@ -10237,19 +12098,19 @@ const MessageBubble = ({
       <div style={{ 
         marginTop: '8px', 
         fontSize: '10px', 
-        fontFamily: "'Inter', sans-serif", 
+        fontFamily: t.fontBody, 
         fontWeight: 700, 
         letterSpacing: '1px', 
-        color: theme.inkMuted, 
+        color: t.ink3, 
         display: 'flex', 
         gap: '8px', 
         alignItems: 'center', 
         textTransform: 'uppercase' 
       }}>
-        <span>{time}</span>
+        <span style={{ fontFamily: t.fontMono }}>{time}</span>
         {receipt && (
           <span style={{ 
-            color: message.readAt ? 'var(--success)' : theme.accent, 
+            color: message.readAt ? t.green : t.yellow, 
             display: 'flex', 
             alignItems: 'center', 
             gap: '4px',
@@ -10287,29 +12148,18 @@ import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
-import { theme as design } from '../../utils/theme';
+import neu from '../../styles/neu';
 import { X } from 'lucide-react';
 
-/* ==================================================================
-   ARCHIVAL THEME CONSTANTS
-================================================================== */
-const theme = {
-  paper: 'var(--paper)',
-  border: 'var(--line)',
-  borderDark: 'var(--line-dark)',
-  ink: 'var(--ink)',
-  inkMuted: 'var(--ink-muted)',
-  accent: 'var(--accent)',
-  shadowWarm: 'var(--accent-15)',
-};
+const t = neu;
 
 // GPU-Promoted, Memoized Archival Corner Mounts
 const CornerMounts = React.memo(() => (
   <>
-    <span aria-hidden="true" style={{ position: 'absolute', top: 0, left: 0, width: 24, height: 24, background: '#fff', clipPath: 'polygon(0 0, 100% 0, 0 100%)', zIndex: 3 }} />
-    <span aria-hidden="true" style={{ position: 'absolute', top: 0, right: 0, width: 24, height: 24, background: '#fff', clipPath: 'polygon(100% 0, 0 0, 100% 100%)', zIndex: 3 }} />
-    <span aria-hidden="true" style={{ position: 'absolute', bottom: 0, left: 0, width: 24, height: 24, background: '#fff', clipPath: 'polygon(0 100%, 100% 100%, 0 0)', zIndex: 3 }} />
-    <span aria-hidden="true" style={{ position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, background: '#fff', clipPath: 'polygon(100% 100%, 0 100%, 100% 0)', zIndex: 3 }} />
+    <span aria-hidden="true" style={{ position: 'absolute', top: 0, left: 0, width: 24, height: 24, background: t.card, clipPath: 'polygon(0 0, 100% 0, 0 100%)', zIndex: 3 }} />
+    <span aria-hidden="true" style={{ position: 'absolute', top: 0, right: 0, width: 24, height: 24, background: t.card, clipPath: 'polygon(100% 0, 0 0, 100% 100%)', zIndex: 3 }} />
+    <span aria-hidden="true" style={{ position: 'absolute', bottom: 0, left: 0, width: 24, height: 24, background: t.card, clipPath: 'polygon(0 100%, 100% 100%, 0 0)', zIndex: 3 }} />
+    <span aria-hidden="true" style={{ position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, background: t.card, clipPath: 'polygon(100% 100%, 0 100%, 100% 0)', zIndex: 3 }} />
   </>
 ));
 CornerMounts.displayName = 'CornerMounts';
@@ -10350,8 +12200,8 @@ const PhotoViewer = ({ src, onClose }) => {
         style={{
           position: 'fixed',
           inset: 0,
-          backgroundColor: 'rgba(10, 8, 6, 0.85)',
-          backgroundImage: `url("${design?.texture?.grain || ''}")`,
+backgroundColor: t.desk,
+           backgroundImage: `url("${t.grain || ''}")`,
           backgroundSize: '150px 150px',
           backdropFilter: 'blur(6px)', // Depth of field focus pull
           zIndex: 10000,
@@ -10373,7 +12223,7 @@ const PhotoViewer = ({ src, onClose }) => {
             top: 'max(24px, env(safe-area-inset-top))',
             right: '24px',
             color: 'rgba(255,255,255,0.8)',
-            fontFamily: "'Inter', sans-serif",
+            fontFamily: t.fontBody,
             fontSize: '11px',
             fontWeight: 700,
             letterSpacing: '1.5px',
@@ -10398,10 +12248,10 @@ const PhotoViewer = ({ src, onClose }) => {
           onDoubleClick={handleDoubleClick}
           onClick={(e) => e.stopPropagation()}
           style={{
-            backgroundColor: 'var(--surface)',
+            backgroundColor: t.card,
             padding: '16px 16px 48px 16px',
-            borderRadius: '4px',
-            border: `1px solid ${theme.borderDark}`,
+            borderRadius: t.radius.sm,
+            border: `2px solid ${t.ink}`,
             position: 'relative',
             maxWidth: '100%',
             maxHeight: '85dvh',
@@ -10434,8 +12284,8 @@ const PhotoViewer = ({ src, onClose }) => {
               objectFit: 'contain',
               borderRadius: '2px',
               display: 'block',
-              border: `1px solid ${theme.border}`,
-              backgroundColor: 'var(--surface-alt)', // Fallback color while decoding
+              border: `1px solid ${t.ink}`,
+              backgroundColor: t.paper, // Fallback color while decoding
             }}
           />
 
@@ -10446,10 +12296,10 @@ const PhotoViewer = ({ src, onClose }) => {
               bottom: '16px',
               left: '50%',
               transform: 'translateX(-50%)',
-              fontFamily: "'Special Elite', 'Courier New', monospace",
+              fontFamily: t.fontMono,
               fontSize: '13px',
               fontWeight: 600,
-              color: theme.inkMuted,
+              color: t.ink2,
               fontStyle: 'italic',
               textAlign: 'center',
               letterSpacing: '-0.01em',
@@ -10475,23 +12325,9 @@ import React, { memo } from 'react';
 import { motion } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
 import { Image, Mic, X } from 'lucide-react';
-import { theme as design } from '../../utils/theme';
+import neu from '../../styles/neu';
 
-/* ==================================================================
-   ARCHIVAL THEME CONSTANTS
-================================================================== */
-const theme = {
-  paper: 'var(--paper)',
-  surface: 'var(--surface)',
-  surfaceAlt: 'var(--surface-alt)',
-  border: 'var(--line)',
-  borderDark: 'var(--line-dark)',
-  ink: 'var(--ink)',
-  inkMuted: 'var(--ink-muted)',
-  accent: 'var(--accent)',
-  crimson: 'var(--crimson)',
-  shadowWarm: 'var(--accent-12)',
-};
+const t = neu;
 
 const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
   if (!replyTo) return null;
@@ -10512,8 +12348,8 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
       exit={{ height: 0, opacity: 0 }}
       transition={{ duration: 0.25, ease: [0.2, 0.8, 0.2, 1] }}
       style={{
-        backgroundColor: theme.surfaceAlt,
-        borderTop: `1px solid ${theme.borderDark}`,
+        backgroundColor: t.paper,
+        borderTop: `1px solid ${t.ink}`,
         overflow: 'hidden',
         willChange: 'height, opacity', // GPU Promotion for layout animation
         position: 'relative',
@@ -10529,9 +12365,9 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
         @media (hover: hover) {
           .tactile-cancel-btn:hover {
             transform: translate3d(0, -2px, 0) scale3d(1.05, 1.05, 1);
-            background-color:'var(--crim-08)' !important;
-            color: ${theme.crimson} !important;
-            border-color: ${theme.crimson} !important;
+            background-color: var(--n-red) !important;
+            color: #fff !important;
+            border-color: var(--n-red) !important;
           }
         }
         .tactile-cancel-btn:active {
@@ -10558,7 +12394,7 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
           aria-hidden="true" 
           style={{ 
             position: 'absolute', inset: 0, 
-            backgroundImage: `url("${design?.texture?.grain || ''}")`, 
+            backgroundImage: `url("${t.grain || ''}")`, 
             mixBlendMode: 'multiply', opacity: 0.5, pointerEvents: 'none', zIndex: 0 
           }} 
         />
@@ -10569,7 +12405,7 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
           style={{
             width: '3px',
             alignSelf: 'stretch',
-            backgroundColor: theme.accent,
+            backgroundColor: t.yellow,
             borderRadius: '2px',
             flexShrink: 0,
             zIndex: 1,
@@ -10580,12 +12416,12 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
         <div style={{ flex: 1, minWidth: 0, zIndex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <div
             style={{
-              fontFamily: "'Inter', sans-serif",
+              fontFamily: t.fontBody,
               fontSize: '10px',
               fontWeight: 800,
               letterSpacing: '1px',
               textTransform: 'uppercase',
-              color: theme.accent,
+              color: t.yellow,
               lineHeight: 1,
             }}
           >
@@ -10593,10 +12429,10 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
           </div>
           <div
             style={{
-              fontFamily: "'Special Elite', 'Courier New', monospace",
+              fontFamily: t.fontMono,
               fontSize: '13px',
               fontWeight: 600,
-              color: theme.inkMuted,
+              color: t.ink2,
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -10618,15 +12454,15 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
           }}
           aria-label="Cancel reply"
           style={{
-            backgroundColor: 'rgba(255, 255, 255, 0.5)',
-            border: `1.5px solid ${theme.borderDark}`,
+            backgroundColor: t.paper,
+            border: `2px solid ${t.ink}`,
             borderRadius: '50%',
             width: '28px',
             height: '28px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: theme.inkMuted,
+            color: t.ink,
             cursor: 'pointer',
             padding: 0,
             flexShrink: 0,
@@ -10656,30 +12492,63 @@ import { motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { api } from '../../utils/api';
 import { triggerHaptic } from '../../utils/haptics';
-import { theme as design } from '../../utils/theme';
+
 import { toast } from '../../utils/toast';
+import neu from '../../styles/neu';
 
 /* ==================================================================
-   DECK AESTHETIC — tokens lifted 1:1 from ProfileCard.jsx
-   (neubrutalism candy box). Fonts (Archivo Black / Space Mono /
-   Inter) are loaded once in index.html — no @import here.
+   DECK AESTHETIC — the shared neo-brutalist canon (src/styles/neu.js).
+   Fonts (Archivo Black / Space Mono / Inter) are loaded once in
+   index.html — no @import here.
 ================================================================== */
 const F = {
-  heavy: "'Archivo Black', 'Arial Black', sans-serif",
-  body: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  mono: "'Space Mono', 'Courier New', monospace",
+  heavy: neu.fontHeavy,
+  body: neu.fontBody,
+  mono: neu.fontMono,
 };
-const C = {
-  paper: '#FFF9EC', card: '#FFFFFF', ink: '#191919',
-  ink2: '#5F5B52', ink3: '#A39E92', hair: '#EBE5D6',
-  yellow: '#FFD43D', coral: '#FF7A59', red: '#E5484D',
-};
+const C = neu;
 
 const MAX_DETAILS = 500;
 
 const REPORT_SHEET_CSS = `
   .rm-root { font-family: ${F.body}; color: ${C.ink}; -webkit-font-smoothing: antialiased; }
   .rm-root ::selection { background: ${C.yellow}; color: ${C.ink}; }
+
+  .rm-backdrop {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding:
+      max(16px, env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      max(16px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+    overflow-y: auto;
+    background: rgba(19,19,19,.62);
+    backdrop-filter: blur(2px);
+  }
+
+  .rm-dialog {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 460px;
+    max-height: calc(100vh - 32px);
+    margin: 0;
+    overflow: hidden;
+    overscroll-behavior: contain;
+  }
+
+  @supports (height: 100dvh) {
+    .rm-dialog {
+      max-height: calc(100dvh - max(16px, env(safe-area-inset-top)) - max(16px, env(safe-area-inset-bottom)));
+    }
+  }
+
+  @media (min-width: 600px) {
+    .rm-backdrop { align-items: center; }
+  }
 
   /* sheet — same recipe as .pc-sheet: cream, 2px ink border, ONE big shadow */
   .rm-sheet { background: ${C.paper}; border: 2px solid ${C.ink}; border-radius: 22px;
@@ -10873,6 +12742,7 @@ const ReportModal = ({ reportedUserId, onClose, onReported }) => {
      UNDER the floating deck chrome (zIndex 500) no matter its own z-index. */
   return createPortal(
     <motion.div
+      className="rm-backdrop"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -10880,17 +12750,12 @@ const ReportModal = ({ reportedUserId, onClose, onReported }) => {
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: 'rgba(19,19,19,0.62)',
-        backdropFilter: 'blur(2px)',
-        zIndex: design.z?.modal || 1100, // token — above header (500), drawer (1000)
-        display: 'flex',
-        alignItems: 'flex-end',
-        justifyContent: 'center',
+        zIndex: C.z.modal, // token — above header (500), drawer (1000)
       }}
     >
       <motion.div
         ref={sheetRef}
-        className="rm-root rm-sheet"
+        className="rm-root rm-sheet rm-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="report-modal-title"
@@ -10902,12 +12767,8 @@ const ReportModal = ({ reportedUserId, onClose, onReported }) => {
         transition={{ type: 'spring', damping: 28, stiffness: 300 }}
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 'min(100% - 24px, 560px)',
-          maxHeight: '85vh',
-          marginBottom: 12,
           display: 'flex',
           flexDirection: 'column',
-          overflow: 'hidden',
         }}
       >
         <style>{REPORT_SHEET_CSS}</style>
@@ -11053,24 +12914,10 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
 import { api } from '../../utils/api';
-import { theme as design } from '../../utils/theme';
+import neu from '../../styles/neu';
 import { ChevronLeft, Search, XCircle } from 'lucide-react';
 
-/* ==================================================================
-   ARCHIVAL THEME CONSTANTS
-================================================================== */
-const theme = {
-  paper: 'var(--paper)',
-  surface: 'var(--surface)',
-  surfaceAlt: 'var(--surface-alt)',
-  border: 'var(--line)',
-  borderDark: 'var(--line-dark)',
-  ink: 'var(--ink)',
-  inkMuted: 'var(--ink-muted)',
-  accent: 'var(--accent)',
-  crimson: 'var(--crimson)',
-  shadowWarm: 'var(--accent-12)',
-};
+const t = neu;
 
 const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
   const [query, setQuery] = useState('');
@@ -11126,8 +12973,8 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
         <mark
           key={i}
           style={{
-            backgroundColor: 'var(--gold-deep-35)', // Archival highlighter
-            color: theme.ink,
+            backgroundColor: 'var(--n-yellow-deep)', // Archival highlighter
+            color: t.ink,
             padding: '0 2px',
             borderRadius: '2px',
           }}
@@ -11149,7 +12996,7 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: theme.paper,
+        backgroundColor: t.paper,
         zIndex: 1000,
         display: 'flex',
         flexDirection: 'column',
@@ -11165,7 +13012,7 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
         @media (hover: hover) {
           .tactile-result-btn:hover {
             transform: translate3d(0, -2px, 0) scale3d(1.01, 1.01, 1);
-            border-color: ${theme.borderDark} !important;
+            border-color: ${t.ink} !important;
           }
         }
         .tactile-result-btn:active {
@@ -11175,7 +13022,7 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
 
         .archival-scrollbar::-webkit-scrollbar { width: 4px; }
         .archival-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .archival-scrollbar::-webkit-scrollbar-thumb { background: ${theme.borderDark}; border-radius: 4px; }
+        .archival-scrollbar::-webkit-scrollbar-thumb { background: ${t.ink}; border-radius: 4px; }
       `}</style>
 
       {/* Cinematic Film Grain Overlay */}
@@ -11183,7 +13030,7 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
         aria-hidden="true" 
         style={{ 
           position: 'absolute', inset: 0, 
-          backgroundImage: `url("${design?.texture?.grain || ''}")`, 
+          backgroundImage: `url("${t.grain || ''}")`, 
           mixBlendMode: 'multiply', opacity: 0.7, pointerEvents: 'none', zIndex: 0 
         }} 
       />
@@ -11192,9 +13039,8 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
       <div
         style={{
           padding: 'max(12px, env(safe-area-inset-top)) 16px 12px',
-          backgroundColor: theme.surface,
-          borderBottom: `1px solid ${theme.borderDark}`,
-          display: 'flex',
+          backgroundColor: t.paper,
+          borderBottom: `1px solid ${t.ink}`,
           display: 'flex',
           alignItems: 'center',
           gap: '12px',
@@ -11211,9 +13057,9 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
           style={{
             background: 'none',
             border: 'none',
-            color: theme.inkMuted,
+            color: t.ink2,
             fontSize: '11px',
-            fontFamily: "'Inter', sans-serif",
+            fontFamily: t.fontBody,
             fontWeight: 800,
             textTransform: 'uppercase',
             letterSpacing: '1px',
@@ -11230,13 +13076,13 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
           flex: 1,
           display: 'flex',
           alignItems: 'center',
-          backgroundColor: theme.surfaceAlt,
-          border: `1.5px solid ${theme.border}`,
-          borderRadius: '12px',
+          backgroundColor: t.card,
+          border: `2px solid ${t.ink}`,
+          borderRadius: t.radius.md,
           padding: '6px 12px',
           gap: '8px',
         }}>
-          <Search size={16} color={theme.inkMuted} strokeWidth={2.5} />
+          <Search size={16} color={t.ink2} strokeWidth={2.5} />
           <input
             autoFocus
             value={query}
@@ -11247,8 +13093,8 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
               backgroundColor: 'transparent',
               border: 'none',
               fontSize: '15px',
-              fontFamily: "'Special Elite', 'Courier New', monospace",
-              color: theme.ink,
+              fontFamily: t.fontMono,
+              color: t.ink,
               outline: 'none',
               WebkitAppearance: 'none', // Strip iOS native input styling
             }}
@@ -11265,7 +13111,7 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
                 }}
                 style={{
                   background: 'none', border: 'none', padding: 0,
-                  color: theme.inkMuted, cursor: 'pointer', display: 'flex'
+                  color: t.ink2, cursor: 'pointer', display: 'flex'
                 }}
               >
                 <XCircle size={16} color="currentColor" />
@@ -11287,39 +13133,39 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
           contain: 'layout style paint',
         }}
       >
-        {query.trim() && isSearching && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            style={{
-              textAlign: 'center',
-              padding: '60px 20px',
-              color: theme.inkMuted,
-              fontFamily: "'Playfair Display', serif",
-              fontStyle: 'italic',
-              fontSize: '16px',
-            }}
-          >
-            Consulting the archives...
-          </motion.div>
-        )}
+{query.trim() && isSearching && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              style={{
+                textAlign: 'center',
+                padding: '60px 20px',
+                color: t.ink2,
+                fontFamily: t.fontHeavy,
+                fontStyle: 'italic',
+                fontSize: '16px',
+              }}
+            >
+              Consulting the archives...
+            </motion.div>
+          )}
 
-        {query.trim() && !isSearching && results.length === 0 && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            style={{
-              textAlign: 'center',
-              padding: '60px 20px',
-              color: theme.inkMuted,
-              fontFamily: "'Playfair Display', serif",
-              fontStyle: 'italic',
-              fontSize: '16px',
-            }}
-          >
-            No artifacts found matching "{query}"
-          </motion.div>
-        )}
+          {query.trim() && !isSearching && results.length === 0 && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              style={{
+                textAlign: 'center',
+                padding: '60px 20px',
+                color: t.ink2,
+                fontFamily: t.fontHeavy,
+                fontStyle: 'italic',
+                fontSize: '16px',
+              }}
+            >
+              No artifacts found matching "{query}"
+            </motion.div>
+          )}
 
         {results.map((m) => {
           const isMine = String(m.senderId || m.sender) === String(myId);
@@ -11347,10 +13193,10 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
                 textAlign: 'left',
                 padding: '16px',
                 marginBottom: '12px',
-                backgroundColor: theme.surface,
-                border: `1px solid ${theme.border}`,
-                borderLeft: `3px solid ${isMine ? theme.accent : theme.crimson}`,
-                borderRadius: '12px',
+                backgroundColor: t.card,
+                border: `2px solid ${t.ink}`,
+                borderLeft: `4px solid ${isMine ? t.yellow : t.coral}`,
+                borderRadius: t.radius.md,
                 cursor: 'pointer',
                 outline: 'none',
                 WebkitTapHighlightColor: 'transparent',
@@ -11358,26 +13204,26 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
             >
               <div
                 style={{
-                  fontFamily: "'Inter', sans-serif",
+                  fontFamily: t.fontBody,
                   fontSize: '10px',
                   fontWeight: 800,
                   letterSpacing: '1px',
                   textTransform: 'uppercase',
-                  color: theme.inkMuted,
+                  color: t.ink2,
                   marginBottom: '8px',
                   display: 'flex',
                   justifyContent: 'space-between'
                 }}
               >
                 <span>{isMine ? 'Your messages' : 'Their messages'}</span>
-                <span>{time}</span>
+                <span style={{ fontFamily: t.fontMono }}>{time}</span>
               </div>
               
               <div
                 style={{
-                  fontFamily: "'Special Elite', 'Courier New', monospace",
+                  fontFamily: t.fontMono,
                   fontSize: '14px',
-                  color: theme.ink,
+                  color: t.ink,
                   lineHeight: 1.5,
                   wordBreak: 'break-word',
                 }}
@@ -11399,6 +13245,7 @@ export default SearchOverlay;
 
 ```
 import React, { useState, useEffect } from 'react';
+import neu from '../styles/neu';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, AlertTriangle, Users, BarChart3, Settings,
@@ -11406,24 +13253,8 @@ import {
   Ban, EyeOff, X, Clock, GraduationCap, Plus, Send, Trash2
 } from 'lucide-react';
 
-/* ── Locked tokens — neubrutalism, same family as ProfileCard ── */
-const T = {
-  desk: '#131313',
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  gold: '#dfbc7d',
-  red: '#E5484D',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const T = neu;
 
 const ADMIN_CSS = `
   .adm-slam { transition: transform .08s steps(2), box-shadow .08s steps(2), background .08s steps(2);
@@ -12228,7 +14059,35 @@ function CollegesTab() {
   const pending = requests.filter((g) => g.status === 'pending').length;
   const oldCount = requests.filter((g) => g.status === 'pending' && g.ageDays >= 30).length;
 
-  const inputStyle = { ...input, marginBottom: 12 };
+  // ⚠️ This used to read `{ ...input, marginBottom: 12 }`, spreading an `input`
+  // that is never declared in this scope. Every one of the six text fields
+  // below was styled from it, so the whole Colleges tab threw
+  // "ReferenceError: Can't find variable: input" on its first render and the
+  // error boundary took the page down with it.
+  //
+  // The base style is written out rather than derived, so there is nothing left
+  // to be undefined. `inputStyle` is just that base plus the spacing this form
+  // wants — it was always only ever those two things.
+  const inputStyle = {
+    display: 'block',
+    width: '100%',
+    boxSizing: 'border-box',
+    fontFamily: T.fontBody,
+    fontSize: 14,
+    fontWeight: 500,
+    color: T.ink,
+    backgroundColor: T.hair,
+    border: `2px solid ${T.ink}`,
+    borderRadius: 10,
+    padding: '10px 12px',
+    outline: 'none',
+    marginBottom: 12,
+  };
+
+  // Fields laid out inside a flex row manage their own width and must not also
+  // carry the block-level margin, or they sit visually misaligned with the
+  // stacked fields above them.
+  const inputStyleInline = { ...inputStyle, flex: 1, marginBottom: 0 };
 
   return (
     <div>
@@ -12267,7 +14126,7 @@ function CollegesTab() {
           <label style={label}>Email domains (at least one)</label>
           {form.domains.map((d, i) => (
             <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-              <input style={{ ...input, flex: 1 }} value={d} onChange={(e) => setDomainAt(i, e.target.value)}
+              <input style={inputStyleInline} value={d} onChange={(e) => setDomainAt(i, e.target.value)}
                 placeholder="iitd.ac.in" />
               {form.domains.length > 1 && (
                 <button type="button" className="adm-slam" onClick={() => setForm((f) => ({ ...f, domains: f.domains.filter((_, x) => x !== i) }))}
@@ -12281,9 +14140,9 @@ function CollegesTab() {
           </button>
 
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <input style={{ ...input, flex: '1 1 140px' }} value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} placeholder="City" />
-            <input style={{ ...input, flex: '1 1 140px' }} value={form.state} onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))} placeholder="State" />
-            <input style={{ ...input, flex: '1 1 140px' }} value={form.country} onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))} placeholder="Country" />
+            <input style={inputStyleInline} value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} placeholder="City" />
+            <input style={inputStyleInline} value={form.state} onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))} placeholder="State" />
+            <input style={inputStyleInline} value={form.country} onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))} placeholder="Country" />
           </div>
 
           {/* 📍 Campus map position. Optional — a college without one is fully
@@ -12293,14 +14152,14 @@ function CollegesTab() {
               transposed pair far more easily in separate fields. */}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
             <input
-              style={{ ...input, flex: '0 1 150px' }}
+              style={{ ...inputStyle, flex: '0 1 150px', marginBottom: 0 }}
               value={form.lat}
               onChange={(e) => setForm((f) => ({ ...f, lat: e.target.value }))}
               placeholder="Latitude (19.076)"
               inputMode="decimal"
             />
             <input
-              style={{ ...input, flex: '0 1 150px' }}
+              style={{ ...inputStyle, flex: '0 1 150px', marginBottom: 0 }}
               value={form.lng}
               onChange={(e) => setForm((f) => ({ ...f, lng: e.target.value }))}
               placeholder="Longitude (72.878)"
@@ -12518,298 +14377,1622 @@ export default function Admin() {
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { api } from '../utils/api';
+import { useChromeColor } from '../utils/chrome';
 import socket from '../utils/socket';
 import { triggerHaptic } from '../utils/haptics';
-import { CheckCircle2, Search, GraduationCap } from 'lucide-react';
+import { CheckCircle2, Search } from 'lucide-react';
 import AccountSuspendedScreen from '../components/AccountSuspendedScreen';
 import { useAuth } from '../utils/AuthContext';
+import neu from '../styles/neu';
+import { useIsDesktop } from '../utils/useIsDesktop';
+import campusPhoto from '../assets/college-town-aesthetic-cute-college-town.jpg';
 
-/* ── Locked tokens — the exact candy-box set Header / ProfileCard / AppShell /
-      Settings use. This screen was the last cream-page holdout; it now sits on
-      the same desk as everything after login, so Splash → Auth → Deck reads as
-      one product. Hardcoded hex on purpose: the deck chrome ignores theme.js,
-      and this screen must stand alone before any of it has mounted. ── */
-const T = {
-  desk: '#131313',
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  red: '#E5484D',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-  fontHand: "'Caveat', 'Segoe Script', cursive",
+const M = neu;
+
+const C = {
+  ink: '#111211',
+  ink2: '#383832',
+  muted: '#77766F',
+  paper: '#F1EDE2',
+  card: '#F8F5EC',
+  amber: '#E0A15E',
+  coral: '#C96F68',
+  sage: '#779477',
+  concrete: '#A3A3A1',
+  red: '#A84F4A',
+  body: "'Space Grotesk', sans-serif",
+  display: "'Barlow Condensed', sans-serif",
+  mono: "'IBM Plex Mono', monospace",
 };
 
-/* One injected stylesheet, au- prefix — same pattern as Header's hd- /
-   ProfileCard's pc- / Settings' st-. Restraint is deliberate: no grain, no
-   decorative icon tiles — the candy-box family identifies sections with
-   marker squares and type, and yellow does all the accent work. */
-const AUTH_CSS = `
-  /* Caveat is not in the global <link> set in index.html — Header and Splash
-     each declare it, and this screen has to stand on its own because it can
-     be reached without either having mounted. */
-  @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@700&display=swap');
+/* ============================================================
+   AUTH_CSS — desktop + shared foundation.
+   Mobile used to override this in three stacked layers; all
+   mobile styling now lives in one sheet: MOBILE_AUTH_CSS.
+   ============================================================ */
+export const AUTH_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Bowlby+One+SC&family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
   .au-root {
-    --paper: ${T.paper}; --card: ${T.card}; --ink: ${T.ink};
-    --ink2: ${T.ink2}; --ink3: ${T.ink3};
-    --yellow: ${T.yellow}; --coral: ${T.coral}; --green: ${T.green}; --red: ${T.red};
-    --desk: ${T.desk}; --bw: 2px;
-    --heavy: ${T.fontHeavy}; --body: ${T.fontBody};
-    --mono: ${T.fontMono}; --hand: ${T.fontHand};
+    --ink: ${C.ink};
+    --ink2: ${C.ink2};
+    --muted: ${C.muted};
+    --paper: ${C.paper};
+    --card: ${C.card};
+    --amber: ${C.amber};
+    --coral: ${C.coral};
+    --sage: ${C.sage};
+    --red: ${C.red};
+    --accent: var(--coral);
+    --tint: rgba(201,111,104,.14);
+    --body: ${C.body};
+    --display: ${C.display};
+    --mono: ${C.mono};
 
-    min-height: 100vh; min-height: 100dvh; width: 100%;
-    display: flex;
-    padding: max(24px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
-    background: var(--desk); box-sizing: border-box; position: relative;
-    /* overflowY auto, not hidden — keeps the Phantom Hitbox fix (native scroll
-       instead of a clipped layout that desyncs touch targets after the keyboard). */
-    overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 100dvh;
+    margin: 0;
+    padding: 0;
+    position: relative;
+    isolation: isolate;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    -webkit-font-smoothing: antialiased;
+    transition: background .4s ease, color .3s ease;
   }
-  .au-root * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
-  .au-root ::selection { background: var(--yellow); color: var(--ink); }
 
-  /* margin:auto centers when it fits and SCROLLS when it doesn't — the same
-     scroll-safe pattern PopoutItem uses (.po-scroll). justify-content:center
-     would clip the wordmark off the top on short screens. */
-  .au-fit { margin: auto; width: 100%; max-width: 400px;
-    display: flex; flex-direction: column; align-items: center; gap: 28px; }
+  .au-root *,
+  .au-root *::before,
+  .au-root *::after {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
 
-  /* ── HERO — the header wordmark, one size up, on the dark desk.
-     Identical letterform recipe to .hd-display: white interior, 2px ink stroke,
-     paint-order keeps the stroke behind the fill so Caveat isn't chewed. ── */
-  .au-hero { display: flex; flex-direction: column; align-items: center;
-    gap: 8px; text-align: center; }
-  .au-wordmark { font-family: var(--hand); font-weight: 700; font-size: 54px;
-    line-height: 1; color: #ffffff; -webkit-text-stroke: 2px var(--ink);
-    paint-order: stroke fill; text-shadow: 2.5px 2.5px 0 var(--ink);
-    letter-spacing: .02em; margin: 0; user-select: none; -webkit-user-select: none; }
-  .au-tagline { font-family: var(--mono); font-size: 10px; font-weight: 700;
-    letter-spacing: .24em; text-transform: uppercase; color: var(--ink3); margin: 0; }
+  .au-root::before,
+  .au-root::after {
+    content: '';
+    position: fixed;
+    z-index: 0;
+    pointer-events: none;
+    border-radius: 50%;
+  }
 
-  /* ── PANEL — the deck's sheet object: cream, chunky border, ONE big shadow.
-     Byte-for-byte the .pc-sheet recipe (ProfileCard.jsx). ── */
-  .au-panel { width: 100%; background: var(--paper);
-    border: var(--bw) solid var(--ink); border-radius: 22px;
-    box-shadow: 8px 8px 0 var(--ink); padding: 26px 22px; }
+  .au-root::before {
+    width: min(55vw, 390px);
+    height: min(55vw, 390px);
+    top: -190px;
+    right: -100px;
+    background: var(--tint);
+    filter: blur(24px);
+    transition: background .4s ease;
+  }
 
-  .au-step { display: flex; flex-direction: column; gap: 16px; }
+  .au-root::after {
+    width: 260px;
+    height: 260px;
+    bottom: -190px;
+    left: -110px;
+    background: rgba(119,148,119,.12);
+    filter: blur(20px);
+  }
 
-  /* step head — ProfileCard's marker-square + mono label language */
-  .au-shead { display: flex; align-items: center; gap: 10px; }
-  .au-mark { width: 11px; height: 11px; flex-shrink: 0;
-    border: var(--bw) solid var(--ink); border-radius: 3px; background: var(--coral); }
-  .au-mark.yellow { background: var(--yellow); }
-  .au-steplabel { font-family: var(--mono); font-size: 11.5px; font-weight: 700;
-    letter-spacing: .18em; text-transform: uppercase; color: var(--ink); }
+  .au-root ::selection {
+    background: var(--accent);
+    color: var(--ink);
+  }
 
-  /* Headline — pc-name's marker highlight (ProfileCard.jsx uses the identical
-     linear-gradient). Two details matter here:
-       • clamp() — 28px Archivo Black made "Your campus email." overflow 320px
-         viewports, and a wrapped block-level gradient smears the swatch across
-         the whole block instead of sitting under the last line.
-       • box-decoration-break: clone — so that IF it still wraps at an extreme
-         width (or a user has a min 18px font size), each line box gets its own
-         highlight instead of one stripe across both.
-     width:fit-content is why the highlight hugs the text rather than the panel. */
-  .au-headline { font-family: var(--heavy); font-weight: 400;
-    font-size: clamp(20px, 6.2vw, 28px);
-    line-height: 1.12; letter-spacing: -.01em; color: var(--ink); margin: 0;
-    width: fit-content; max-width: 100%; padding: 0 6px 3px 0;
-    background-image: linear-gradient(180deg, transparent 58%, var(--yellow) 58%);
-    -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+  .au-root-college {
+    --paper: #F1EDE2;
+    --ink: #111211;
+    --ink2: #383832;
+    --muted: #77766F;
+    --card: #F8F5EC;
+    --accent: #C96F68;
+    --tint: rgba(201,111,104,.14);
+  }
 
-  .au-sub { font-family: var(--mono); font-size: 10.5px; font-weight: 700;
-    letter-spacing: .1em; text-transform: uppercase; color: var(--ink2);
-    margin: 0; line-height: 1.8; word-break: break-word; }
-  .au-sub b { color: var(--ink); }
-  /* the sent-to email reads lowercase — uppercase emails look broken */
-  .au-sub b.low { text-transform: lowercase; letter-spacing: .03em; }
+  .au-root-request {
+    --paper: #E1E7D9;
+    --ink: #111211;
+    --ink2: #383832;
+    --muted: #77766F;
+    --card: #F8F5EC;
+    --accent: #779477;
+    --tint: rgba(119,148,119,.18);
+  }
 
-  /* ── COLLEGE SEARCH ──
-     Step 1. The search field is deliberately EMPTY on open — nothing is
-     pre-filled and no institution is assumed. It filters on the full official
-     name plus city/state, because a student often knows "Delhi" rather than the
-     full name of the campus. */
-  .au-search { width: 100%; height: 56px; padding: 0 16px; background: var(--card);
-    border: var(--bw) solid var(--ink); border-radius: 14px;
-    box-shadow: 4px 4px 0 var(--ink);
-    font-family: var(--body); font-size: 16px; font-weight: 600; color: var(--ink);
-    outline: none; -webkit-appearance: none; appearance: none;
-    transition: transform .08s steps(2), box-shadow .08s steps(2); }
-  .au-search::placeholder { color: var(--ink3); font-weight: 500; }
-  .au-search:focus { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 var(--ink); }
+  .au-root-email {
+    --paper: #F1EDE2;
+    --ink: #111211;
+    --ink2: #383832;
+    --muted: #77766F;
+    --card: #F8F5EC;
+    --accent: #E0A15E;
+    --tint: rgba(224,161,94,.22);
+  }
 
-  /* Results list. Max-height + scroll rather than an unbounded column, so a
-     long list can't push the CTA off-screen on a short viewport. */
-  .au-results { display: flex; flex-direction: column; gap: 8px;
-    max-height: 260px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-  .au-result { display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
-    width: 100%; text-align: left; padding: 12px 14px;
-    background: var(--card); border: var(--bw) solid var(--ink); border-radius: 12px;
-    box-shadow: 3px 3px 0 var(--ink); cursor: pointer;
-    transition: transform .08s steps(2), box-shadow .08s steps(2); }
-  .au-result:active:not(:disabled) { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink); }
-  .au-result-name { font-family: var(--body); font-size: 15px; font-weight: 700;
-    color: var(--ink); line-height: 1.3; }
-  .au-result-meta { font-family: var(--mono); font-size: 10px; font-weight: 700;
-    letter-spacing: .08em; text-transform: uppercase; color: var(--ink3); }
-  .au-result.chosen { background: var(--yellow); }
-  .au-result.chosen .au-result-meta { color: var(--ink2); }
+  .au-root-otp,
+  .au-root-verify {
+    --paper: #111211;
+    --ink: #F1EDE2;
+    --ink2: #D8D3C8;
+    --muted: #A3A3A1;
+    --card: #20211F;
+    --accent: #779477;
+    --tint: rgba(119,148,119,.18);
+  }
 
-  .au-empty { padding: 14px 4px; font-family: var(--mono); font-size: 11px; font-weight: 700;
-    letter-spacing: .08em; text-transform: uppercase; color: var(--ink2); line-height: 1.7; }
+  .au-fit {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
 
-  /* ── EMAIL ──
-     The domain is PRE-FILLED from the college the student picked, and it is
-     EDITABLE — not locked. Locking it would lock out anyone whose real address
-     sits on a department subdomain (cse.iitb.ac.in). The server validates
-     whatever is typed against the selected college's domains using exact-or-
-     subdomain matching, so an editable field is safe here. */
-  .au-form { display: flex; flex-direction: column; gap: 14px; }
-  .au-suffix { font-family: var(--mono); font-size: 14px; font-weight: 700;
-    color: var(--ink2); letter-spacing: .04em; flex-shrink: 0; }
-  .au-input { width: 100%; height: 56px; padding: 0 16px; background: var(--card);
-    border: var(--bw) solid var(--ink); border-radius: 14px;
-    box-shadow: 4px 4px 0 var(--ink);
-    font-family: var(--body); font-size: 16px; font-weight: 600; color: var(--ink);
-    outline: none; -webkit-appearance: none; appearance: none;
-    transition: transform .08s steps(2), box-shadow .08s steps(2); }
-  .au-input::placeholder { color: var(--ink3); font-weight: 500; }
-  .au-input:focus { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 var(--ink); }
-  .au-input:disabled { opacity: .55; }
-  /* Safari autofill paints its own yellow over the card — repaint it with ours */
-  .au-input:-webkit-autofill { -webkit-box-shadow: 0 0 0 60px var(--card) inset;
-    -webkit-text-fill-color: var(--ink); }
+  .au-panel {
+    width: 100%;
+    min-height: 100vh;
+    min-height: 100dvh;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    margin: 0;
+    padding:
+      max(34px, env(safe-area-inset-top))
+      clamp(22px, 6vw, 88px)
+      max(30px, env(safe-area-inset-bottom));
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
 
-  /* ── CTA — the one yellow moment. Slam like every tile in the deck. ── */
-  .au-cta { height: 56px; border: var(--bw) solid var(--ink); border-radius: 14px;
-    background: var(--yellow); color: var(--ink); cursor: pointer;
-    font-family: var(--mono); font-size: 12.5px; font-weight: 700;
-    letter-spacing: .18em; text-transform: uppercase;
-    box-shadow: 5px 5px 0 var(--ink);
-    transition: transform .08s steps(2), box-shadow .08s steps(2),
-      background .08s steps(2), color .08s steps(2); }
-  .au-cta:active:not(:disabled) { transform: translate(5px, 5px);
-    box-shadow: 0 0 0 var(--ink); background: var(--ink); color: var(--yellow); }
-  /* Disabled was paper-on-paper, which made the button vanish into the panel
-     and left only its border. Card keeps a visible surface; ink3 keeps it
-     clearly inactive without pretending to be a live CTA. */
-  .au-cta:disabled { background: var(--card); color: var(--ink3);
-    box-shadow: 3px 3px 0 var(--ink); cursor: default; }
+  .au-step {
+    position: relative;
+    width: 100%;
+    max-width: 1040px;
+    min-width: 0;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, .72fr);
+    align-content: center;
+    align-items: center;
+    gap: 19px clamp(22px, 4vw, 45px);
+  }
 
-  /* ── GHOST CHIP — quiet secondary (back to email) ── */
-  .au-ghost { align-self: center; padding: 10px 16px;
-    border: var(--bw) solid var(--ink); border-radius: 999px;
-    background: var(--card); color: var(--ink2); cursor: pointer;
-    font-family: var(--mono); font-size: 10px; font-weight: 700;
-    letter-spacing: .14em; text-transform: uppercase;
-    box-shadow: 3px 3px 0 var(--ink);
-    transition: transform .08s steps(2), box-shadow .08s steps(2),
-      background .08s steps(2), color .08s steps(2); }
-  .au-ghost:active:not(:disabled) { transform: translate(3px, 3px);
-    box-shadow: 0 0 0 var(--ink); background: var(--ink); color: var(--paper); }
-  .au-ghost:disabled { opacity: .5; cursor: not-allowed; }
+  .au-step > .au-headline {
+    grid-column: 1;
+    margin: 0;
+    max-width: 100%;
+  }
 
-  /* ── OTP — flex-sized so six always fit, from 320px up ── */
-  .au-otp { display: flex; gap: 9px; justify-content: center; }
-  .au-box { flex: 1 1 0; min-width: 0; max-width: 54px; height: 60px;
-    text-align: center; padding: 0; background: var(--card);
-    border: var(--bw) solid var(--ink); border-radius: 12px;
-    box-shadow: 4px 4px 0 var(--ink);
-    font-family: var(--mono); font-size: 24px; font-weight: 700; color: var(--ink);
-    caret-color: var(--coral); outline: none;
-    transition: transform .08s steps(2), box-shadow .08s steps(2),
-      background-color .15s ease, border-color .08s steps(2); }
-  .au-box:focus { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 var(--ink);
-    background: #FFFDF6; }
-  /* Dim only the "checking" disables. Verified boxes stay full-strength green —
-     dimming them would wash out the success moment. */
-  .au-box:disabled:not(.ok) { opacity: .6; }
-  .au-box.err { border-color: var(--red); animation: au-shake .3s steps(2) 2; }
-  .au-box.ok { background: var(--green); border-color: var(--ink);
-    transform: translate(-1px, -3px); box-shadow: 3px 3px 0 var(--ink); }
+  .au-step > .au-sub {
+    grid-column: 1;
+  }
+
+  .au-step > .au-art {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .au-step > *:not(.au-headline):not(.au-sub):not(.au-art) {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+
+  .au-headline {
+    margin: 0;
+    max-width: 100%;
+    color: var(--ink);
+    font-family: var(--display);
+    font-size: clamp(55px, 7.4vw, 91px);
+    font-weight: 800;
+    letter-spacing: -.035em;
+    line-height: .87;
+    text-transform: uppercase;
+    overflow-wrap: anywhere;
+    text-wrap: balance;
+    transition: color .3s ease;
+  }
+
+  .au-headline::after {
+    content: '';
+    display: block;
+    width: 62px;
+    height: 7px;
+    margin-top: 16px;
+    border-radius: 99px;
+    background: var(--accent);
+    transition: background .3s ease;
+  }
+
+  .au-sub {
+    margin: 0;
+    max-width: 570px;
+    color: var(--ink2);
+    font-family: var(--body);
+    font-size: 15px;
+    font-weight: 400;
+    line-height: 1.8;
+    overflow-wrap: anywhere;
+    transition: color .3s ease;
+  }
+
+  .au-sub b {
+    color: var(--ink);
+    font-weight: 700;
+  }
+
+  .au-sub b.low {
+    overflow-wrap: anywhere;
+    text-transform: lowercase;
+  }
+
+  /* Each screen has a little illustration of its own. */
+  .au-art {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+    height: clamp(190px, 25vw, 280px);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--tint);
+    border: 1px solid rgba(17,18,17,.1);
+    border-radius: 30px 30px 9px 30px;
+    transition: background .35s ease, border-color .35s ease;
+  }
+
+  .au-root-otp .au-art,
+  .au-root-verify .au-art {
+    border-color: rgba(241,237,226,.12);
+  }
+
+  .au-art::before {
+    content: '';
+    position: absolute;
+    width: 120px;
+    height: 120px;
+    top: -52px;
+    right: -42px;
+    border: 1px solid var(--accent);
+    border-radius: 50%;
+    opacity: .5;
+  }
+
+  .au-art::after {
+    content: '';
+    position: absolute;
+    bottom: -31px;
+    left: -20px;
+    width: 66px;
+    height: 66px;
+    border-radius: 22px;
+    background: var(--accent);
+    opacity: .17;
+    transform: rotate(-16deg);
+  }
+
+  .au-art svg {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+
+  .au-art .art-float {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: au-float 4s ease-in-out infinite;
+  }
+
+  .au-art .art-late {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: au-float 4.5s ease-in-out -1.5s infinite;
+  }
+
+  .au-art .art-pulse {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: au-pulse 3.4s ease-in-out infinite;
+  }
+
+  @keyframes au-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+
+  @keyframes au-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.035); }
+  }
+
+  .au-searchwrap {
+    width: 100%;
+    position: relative;
+  }
+
+  .au-searchicon {
+    width: 43px;
+    height: 43px;
+    position: absolute;
+    z-index: 1;
+    left: 11px;
+    top: 50%;
+    display: grid;
+    place-items: center;
+    transform: translateY(-50%);
+    color: var(--ink);
+    background: var(--tint);
+    border-radius: 15px;
+    pointer-events: none;
+  }
+
+  .au-search,
+  .au-input {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    height: 68px;
+    padding: 0 20px;
+    color: var(--ink);
+    background: var(--card);
+    border: 1.5px solid var(--line, rgba(17,18,17,.16));
+    border-radius: 17px;
+    outline: none;
+    box-shadow: 0 3px 0 rgba(17,18,17,.025);
+    font-family: var(--body);
+    font-size: 18px;
+    font-weight: 500;
+    -webkit-appearance: none;
+    appearance: none;
+    transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+  }
+
+  .au-search {
+    padding-left: 67px;
+  }
+
+  .au-search::placeholder,
+  .au-input::placeholder {
+    color: var(--muted);
+    opacity: .85;
+    font-weight: 400;
+  }
+
+  .au-search:focus,
+  .au-input:focus {
+    background: var(--card);
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 4px var(--tint);
+  }
+
+  .au-input:disabled {
+    opacity: .6;
+  }
+
+  .au-input:-webkit-autofill {
+    -webkit-box-shadow: 0 0 0 60px var(--card) inset;
+    -webkit-text-fill-color: var(--ink);
+  }
+
+  .au-results {
+    width: 100%;
+    max-height: max(230px, calc(100dvh - 350px));
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-content: start;
+    gap: 11px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 3px 4px 8px 2px;
+  }
+
+  .au-result {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 7px;
+    min-height: 94px;
+    width: 100%;
+    padding: 16px 38px 16px 16px;
+    text-align: left;
+    background: var(--card);
+    color: var(--ink);
+    border: 1px solid rgba(17,18,17,.1);
+    border-radius: 16px;
+    cursor: pointer;
+    box-shadow: 0 3px 0 rgba(17,18,17,.035);
+    transition: background .18s ease, border-color .18s ease, transform .18s ease;
+  }
+
+  .au-result:nth-child(5n + 2) {
+    background: #E8EBDD;
+  }
+
+  .au-result:nth-child(5n + 4) {
+    background: #F1DFD5;
+  }
+
+  .au-result::after {
+    content: '↗';
+    position: absolute;
+    top: 15px;
+    right: 14px;
+    color: var(--muted);
+    font: 16px var(--body);
+    transition: transform .18s ease, color .18s ease;
+  }
+
+  .au-result-name {
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  .au-result-meta {
+    color: #77766F;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1.5;
+    letter-spacing: .025em;
+    text-transform: uppercase;
+  }
+
+  .au-result.chosen {
+    background: #E6E8DA;
+    border-color: var(--sage);
+  }
+
+  .au-result.chosen::after {
+    content: '✓';
+    color: var(--sage);
+  }
+
+  .au-empty {
+    margin: 0;
+    padding: 10px 2px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.8;
+  }
+
+  .au-form {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 19px;
+  }
+
+  .au-cta {
+    min-height: 62px;
+    width: 100%;
+    padding: 15px 22px;
+    color: var(--ink);
+    background: var(--accent);
+    border: 1px solid rgba(17,18,17,.13);
+    border-radius: 17px 17px 6px 17px;
+    cursor: pointer;
+    box-shadow: 0 4px 0 rgba(17,18,17,.08);
+    font-family: var(--body);
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0;
+    transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
+  }
+
+  .au-cta:active:not(:disabled) {
+    transform: translateY(3px);
+    box-shadow: 0 1px 0 rgba(17,18,17,.08);
+  }
+
+  .au-cta:disabled {
+    background: #D6D0C3;
+    color: #77766F;
+    border-color: #77766F;
+    box-shadow: 0 3px 0 rgba(17,18,17,.06);
+    cursor: default;
+    opacity: .75;
+  }
+
+  .au-ghost {
+    align-self: flex-start;
+    min-height: 38px;
+    padding: 7px 0;
+    background: transparent;
+    color: var(--ink2);
+    border: 0;
+    border-bottom: 1px solid rgba(127,125,115,.4);
+    border-radius: 0;
+    cursor: pointer;
+    font-family: var(--body);
+    font-size: 13px;
+    font-weight: 600;
+    transition: color .15s ease, border-color .15s ease;
+  }
+
+  .au-ghost:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+  }
+
+  .au-otp {
+    width: 100%;
+    display: flex;
+    justify-content: flex-start;
+    gap: clamp(7px, 2vw, 13px);
+  }
+
+  .au-box {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 72px;
+    height: 70px;
+    padding: 0;
+    text-align: center;
+    color: var(--ink);
+    background: var(--card);
+    border: 1.5px solid var(--line, rgba(17,18,17,.16));
+    border-radius: 16px;
+    font-family: var(--display);
+    font-size: 32px;
+    font-weight: 800;
+    outline: none;
+    caret-color: var(--accent);
+    transition: background .15s ease, border-color .15s ease, transform .15s ease;
+  }
+
+  .au-box:focus {
+    background: var(--card);
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+    transform: translateY(-2px);
+  }
+
+  .au-box:disabled:not(.ok) {
+    opacity: .6;
+  }
+
+  .au-box.err {
+    border-color: var(--red);
+    animation: au-shake .3s steps(2) 2;
+  }
+
+  .au-box.ok {
+    background: #E1E9DB;
+    color: var(--ink2);
+    border-color: var(--sage);
+    transform: translateY(-2px);
+  }
+
   @keyframes au-shake {
     0%, 100% { transform: translateX(0); }
     25% { transform: translateX(-4px); }
     75% { transform: translateX(4px); }
   }
 
-  /* ── ERROR — the hd-toast object, inlined: card + red spine ── */
-  .au-banner { position: relative; background: var(--card);
-    border: var(--bw) solid var(--ink); border-radius: 14px;
-    box-shadow: 4px 4px 0 var(--ink); padding: 12px 14px 12px 20px; overflow: hidden; }
-  .au-banner::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0;
-    width: 5px; background: var(--red); }
-  .au-banner p { margin: 0; font-family: var(--body); font-size: 13.5px;
-    font-weight: 600; color: var(--ink); line-height: 1.5; }
-
-  /* ── VERIFIED — green strip, the vitals-tile language ── */
-  .au-strip { display: flex; align-items: center; justify-content: center; gap: 10px;
-    padding: 16px; background: var(--green); color: var(--ink);
-    border: var(--bw) solid var(--ink); border-radius: 14px;
-    box-shadow: 4px 4px 0 var(--ink);
-    font-family: var(--mono); font-size: 12px; font-weight: 700;
-    letter-spacing: .12em; text-transform: uppercase; }
-
-  /* universal focus token — yellow ring, same as every other component */
-  .au-input:focus-visible, .au-box:focus-visible, .au-search:focus-visible,
-  .au-result:focus-visible, .au-cta:focus-visible, .au-ghost:focus-visible {
-    outline: 3px solid var(--yellow); outline-offset: 2px; }
-
-  /* request-college form rows */
-  .au-field { display: flex; flex-direction: column; gap: 7px; }
-  .au-field label { font-family: var(--mono); font-size: 10px; font-weight: 700;
-    letter-spacing: .12em; text-transform: uppercase; color: var(--ink2); }
-  .au-field input { width: 100%; height: 50px; padding: 0 14px; background: var(--card);
-    border: var(--bw) solid var(--ink); border-radius: 12px; box-shadow: 3px 3px 0 var(--ink);
-    font-family: var(--body); font-size: 15px; font-weight: 600; color: var(--ink);
-    outline: none; -webkit-appearance: none; appearance: none;
-    transition: transform .08s steps(2), box-shadow .08s steps(2); }
-  .au-field input:focus { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--ink); }
-  .au-field input::-webkit-outer-spin-button,
-  .au-field input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-
-  /* ── RE-VERIFY (annual student check) ── */
-  .au-revnote { font-family: var(--mono); font-size: 10px; font-weight: 700;
-    letter-spacing: .1em; text-transform: uppercase; color: var(--ink2); line-height: 1.8; }
-
-  /* Hover rules sit BEFORE the active rules inside this block, so pressing
-     while hovering still slams — same ordering Header.jsx uses. */
-  @media (hover: hover) and (pointer: fine) {
-    .au-cta:hover:not(:disabled) { transform: translate(-1px, -1px);
-      box-shadow: 6px 6px 0 var(--ink); }
-    .au-cta:active:not(:disabled) { transform: translate(5px, 5px);
-      box-shadow: 0 0 0 var(--ink); background: var(--ink); color: var(--yellow); }
-    .au-ghost:hover:not(:disabled) { transform: translate(-1px, -1px);
-      box-shadow: 4px 4px 0 var(--ink); }
-    .au-ghost:active:not(:disabled) { transform: translate(3px, 3px);
-      box-shadow: 0 0 0 var(--ink); background: var(--ink); color: var(--paper); }
+  .au-banner {
+    position: relative;
+    padding: 14px 16px;
+    background: #F0DCD3;
+    border: 1px solid rgba(168,79,74,.2);
+    border-radius: 14px;
+    overflow: hidden;
   }
+
+  .au-banner p {
+    margin: 0;
+    color: #111211;
+    font-family: var(--body);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.65;
+  }
+
+  .au-strip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 18px;
+    background: #E1E9DB;
+    color: #111211;
+    border: 1px solid rgba(119,148,119,.35);
+    border-radius: 15px;
+    font-family: var(--body);
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .au-field {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    min-width: 0;
+  }
+
+  .au-field label {
+    color: var(--ink2);
+    font-family: var(--body);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .au-field input {
+    width: 100%;
+    min-width: 0;
+    height: 60px;
+    padding: 0 16px;
+    color: var(--ink);
+    background: var(--card);
+    border: 1.5px solid var(--line, rgba(17,18,17,.16));
+    border-radius: 14px;
+    outline: none;
+    font-family: var(--body);
+    font-size: 16px;
+    font-weight: 500;
+    -webkit-appearance: none;
+    appearance: none;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+
+  .au-field input:focus {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 4px var(--tint);
+  }
+
+  .au-field input::-webkit-outer-spin-button,
+  .au-field input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  .au-revnote {
+    margin: 0;
+    color: var(--muted);
+    font-family: var(--body);
+    font-size: 12px;
+    line-height: 1.7;
+  }
+
+  .au-search:focus-visible,
+  .au-input:focus-visible,
+  .au-box:focus-visible,
+  .au-result:focus-visible,
+  .au-cta:focus-visible,
+  .au-ghost:focus-visible,
+  .au-field input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .au-result:hover:not(:disabled) {
+      border-color: rgba(17,18,17,.28);
+      transform: translateY(-2px);
+    }
+
+    .au-result:hover::after {
+      color: var(--coral);
+      transform: translate(2px, -2px);
+    }
+
+    .au-cta:hover:not(:disabled) {
+      filter: brightness(.96);
+    }
+
+    .au-ghost:hover:not(:disabled) {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+  }
+
+  @media (min-width: 1100px) {
+    .au-results {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      max-height: calc(100dvh - 360px);
+    }
+
+    .au-result {
+      min-height: 99px;
+    }
+
+    .au-art {
+      height: 280px;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
-    .au-input, .au-cta, .au-ghost, .au-box, .au-search, .au-result, .au-field input { transition: none; }
-    .au-box.err { animation: none; }
+    .au-art .art-float,
+    .au-art .art-late,
+    .au-art .art-pulse {
+      animation: none;
+    }
+
+    .au-search,
+    .au-input,
+    .au-result,
+    .au-cta,
+    .au-ghost,
+    .au-box,
+    .au-field input {
+      transition: none;
+    }
+
+    .au-box.err {
+      animation: none;
+    }
+  }
+
+  /* Mobile-only chrome: hidden on desktop, revealed by MOBILE_AUTH_CSS. */
+  .au-brandbar { display: none; }
+  .au-campus-scene,
+  .au-campus-blur,
+  .au-backdrop { display: none; }
+  .au-mobile-field-label,
+  .au-mobile-sub { display: none; }
+`;
+
+/* ============================================================
+   MOBILE_AUTH_CSS — the single, consolidated mobile sheet.
+   This is the final computed result of the old three-layer
+   stack (base skin + campus scene + smooth polish), with the
+   dead rules removed: the per-step photo grading and washes
+   were fully overridden by the full-bleed photo rules, and the
+   hand-built campus SVG was never visible (display:none on
+   every breakpoint).
+   ============================================================ */
+export const MOBILE_AUTH_CSS = `
+  @media (max-width: 700px) {
+    /* ---- tokens & root ---- */
+    .au-root {
+      --ink: ${M.ink};
+      --ink2: ${M.ink2};
+      --muted: ${M.ink2};
+      --paper: ${M.paper};
+      --card: ${M.card};
+      --accent: ${M.yellow};
+      --tint: rgba(255,212,61,.14);
+      --red: ${M.red};
+      --line: ${M.ink};
+      --body: ${M.fontBody};
+      --display: ${M.fontHeavy};
+      --mono: ${M.fontMono};
+      background: ${M.paper};
+      color: ${M.ink};
+      font-family: var(--body);
+    }
+
+    /* Desktop per-step palettes are replaced by one uniform skin. */
+    .au-root.au-root-college,
+    .au-root.au-root-request,
+    .au-root.au-root-email,
+    .au-root.au-root-otp,
+    .au-root.au-root-verify {
+      --ink: ${M.ink};
+      --ink2: ${M.ink2};
+      --muted: ${M.ink2};
+      --paper: ${M.paper};
+      --card: ${M.card};
+      --accent: ${M.yellow};
+      --tint: rgba(255,212,61,.14);
+      --red: ${M.red};
+      --line: ${M.ink};
+      background: ${M.paper};
+      color: ${M.ink};
+    }
+
+    .au-root::before,
+    .au-root::after { display: none; content: none; }
+
+    /* ---- layout frame ---- */
+    .au-fit {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 430px;
+      min-height: 100dvh;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .au-panel {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      min-height: 100dvh;
+      flex: 1 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+      gap: 0;
+      margin: 0;
+      padding:
+        max(18px, env(safe-area-inset-top, 0px))
+        22px
+        max(28px, env(safe-area-inset-bottom, 0px));
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    /* ---- brand: the product wordmark, set directly on the canvas ---- */
+    .au-brandbar {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      width: 100%;
+      max-width: 380px;
+      margin: 7px 0 0;
+      min-height: 0;
+      transition: opacity .35s ease, transform .5s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-wordmark {
+      display: inline-block;
+      color: ${M.ink};
+      font-family: 'Bowlby One SC', ${M.fontHeavy};
+      font-size: clamp(37px, 10vw, 47px);
+      font-weight: 400;
+      letter-spacing: -.065em;
+      line-height: .92;
+      text-shadow: 2px 2px 0 ${M.yellow};
+    }
+
+    .au-brand-question {
+      display: inline-block;
+      color: ${M.coral};
+      margin-left: .015em;
+      transform: rotate(7deg) translateY(-.015em);
+      transform-origin: 60% 65%;
+    }
+
+    .au-brand-whisper {
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .015em;
+      line-height: 1.35;
+    }
+
+    /* ---- step: content sits directly on the paper, pushed to the bottom ---- */
+    .au-step {
+      position: relative;
+      isolation: isolate;
+      z-index: 1;
+      width: 100%;
+      max-width: 380px;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+      margin: auto auto max(10px, env(safe-area-inset-bottom, 0px));
+      padding: 18px 0 max(8px, env(safe-area-inset-bottom, 0px));
+      background: transparent;
+      color: ${M.ink};
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    /* Soft veil so text never fights the photo directly behind it. */
+    .au-step::before {
+      content: '';
+      position: absolute;
+      z-index: -1;
+      pointer-events: none;
+      top: -34px;
+      right: -22px;
+      bottom: -24px;
+      left: -22px;
+      background: linear-gradient(180deg, rgba(241,237,226,0) 0%, rgba(241,237,226,.76) 18%, rgba(241,237,226,.92) 46%, ${M.paper} 100%);
+      opacity: .94;
+      transition: opacity .4s cubic-bezier(.32,.72,0,1);
+    }
+
+    /* The long request form gets extra breathing room at the bottom. */
+    .au-panel:has(.au-step .au-form .au-field:nth-of-type(3)) .au-step {
+      margin-bottom: max(28px, env(safe-area-inset-bottom, 0px));
+    }
+
+    .au-step .au-headline {
+      max-width: 21ch;
+      margin: 0;
+      color: ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: clamp(30px, 8.3vw, 36px);
+      font-weight: 800;
+      line-height: 1.04;
+      letter-spacing: -.06em;
+      text-transform: none;
+      overflow-wrap: anywhere;
+      text-wrap: balance;
+    }
+
+    .au-headline::after { display: none; content: none; }
+
+    .au-headline .au-huh-inline {
+      font-family: 'Bowlby One SC', ${M.fontHeavy};
+      font-size: 1.02em;
+      font-weight: 400;
+      letter-spacing: -.055em;
+      white-space: nowrap;
+      text-shadow: 1.5px 1.5px 0 ${M.yellow};
+    }
+
+    .au-step .au-sub {
+      max-width: 31ch;
+      margin: -2px 0 0;
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 13.5px;
+      font-weight: 400;
+      line-height: 1.48;
+      overflow-wrap: anywhere;
+    }
+
+    .au-sub b { color: ${M.ink}; font-weight: 700; }
+    .au-sub b.low { overflow-wrap: anywhere; text-transform: lowercase; }
+
+    .au-mobile-sub { display: block; }
+
+    .au-mobile-field-label {
+      display: block;
+      margin: 4px 0 -3px;
+      color: ${M.ink2};
+      font-family: ${M.fontMono};
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+
+    /* Mobile replaces the framed illustration with the full-bleed photo. */
+    .au-step > .au-art { display: none !important; }
+
+    /* ---- search field ---- */
+    .au-searchwrap { position: relative; z-index: 2; width: 100%; }
+
+    .au-searchicon {
+      position: absolute;
+      z-index: 1;
+      left: 15px;
+      top: 50%;
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      transform: translateY(-50%);
+      color: ${M.ink};
+      background: transparent;
+      pointer-events: none;
+    }
+
+    .au-search {
+      display: block;
+      width: 100%;
+      height: 56px;
+      padding: 0 14px 0 47px;
+      color: ${M.ink};
+      background: rgba(255,253,247,.97);
+      border: 2px solid ${M.ink};
+      border-radius: 15px;
+      outline: none;
+      box-shadow: 4px 4px 0 ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: 16px;
+      font-weight: 500;
+      -webkit-appearance: none;
+      appearance: none;
+      transition: box-shadow .2s cubic-bezier(.32,.72,0,1), background .2s ease, transform .2s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-search:focus {
+      background: #FFFEFA;
+      border-color: ${M.ink};
+      box-shadow: 4px 4px 0 ${M.ink};
+      transform: none;
+    }
+
+    /* ---- inputs & fields ---- */
+    .au-input,
+    .au-field input {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      height: 54px;
+      padding: 0 14px;
+      color: ${M.ink};
+      background: rgba(255,255,255,.94);
+      border: 2px solid ${M.ink};
+      border-radius: 12px;
+      outline: none;
+      box-shadow: 3px 3px 0 ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: 16px;
+      font-weight: 500;
+      -webkit-appearance: none;
+      appearance: none;
+      transition: box-shadow .2s cubic-bezier(.32,.72,0,1), background .2s ease, transform .2s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-search::placeholder,
+    .au-input::placeholder,
+    .au-field input::placeholder {
+      color: ${M.ink2};
+      opacity: .8;
+      font-weight: 400;
+    }
+
+    .au-input:focus,
+    .au-field input:focus {
+      background: #FFFFFF;
+      border-color: ${M.ink};
+      box-shadow: 4px 4px 0 ${M.ink};
+      transform: none;
+    }
+
+    .au-input:disabled,
+    .au-field input:disabled { opacity: .65; }
+
+    .au-input:-webkit-autofill,
+    .au-field input:-webkit-autofill {
+      -webkit-box-shadow: 0 0 0 60px ${M.card} inset, 3px 3px 0 ${M.ink};
+      -webkit-text-fill-color: ${M.ink};
+    }
+
+    /* ---- results: calm full-width rows, not a grid of cards ---- */
+    .au-results {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      width: 100%;
+      max-height: min(30dvh, 250px);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      padding: 0;
+      border-top: 1px solid rgba(17,18,17,.24);
+      scrollbar-width: thin;
+      scrollbar-color: ${M.ink2} transparent;
+    }
+
+    .au-result,
+    .au-result:nth-child(5n + 2),
+    .au-result:nth-child(5n + 4) {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 3px;
+      width: 100%;
+      min-height: 52px;
+      padding: 9px 34px 9px 2px;
+      text-align: left;
+      color: ${M.ink};
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid ${M.hair};
+      border-radius: 0;
+      box-shadow: none;
+      cursor: pointer;
+      transition: background .12s ease;
+    }
+
+    .au-result::after {
+      content: '→';
+      position: absolute;
+      top: 50%;
+      right: 10px;
+      transform: translateY(-50%);
+      color: ${M.ink};
+      font: 20px/1 ${M.fontBody};
+    }
+
+    .au-result:active { background: #FFF1AE; }
+
+    .au-result-name {
+      color: ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: 13.5px;
+      font-weight: 700;
+      line-height: 1.32;
+      overflow-wrap: anywhere;
+    }
+
+    .au-result-meta {
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 11px;
+      font-weight: 400;
+      line-height: 1.4;
+    }
+
+    .au-result.chosen { background: #E5F3E7; }
+    .au-result.chosen::after { content: '✓'; color: ${M.ink}; font-weight: 700; }
+
+    .au-empty {
+      margin: 0;
+      padding: 8px 0;
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.6;
+    }
+
+    /* ---- form controls ---- */
+    .au-form { width: 100%; display: flex; flex-direction: column; gap: 14px; }
+
+    .au-cta {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 52px;
+      width: 100%;
+      padding: 13px 18px;
+      color: ${M.ink};
+      background: ${M.yellow};
+      border: 2px solid ${M.ink};
+      border-radius: 12px;
+      box-shadow: 4px 4px 0 ${M.ink};
+      cursor: pointer;
+      font-family: ${M.fontBody};
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+      text-align: center;
+      transition: transform .08s steps(2), box-shadow .08s steps(2), background .12s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .au-cta:active:not(:disabled) {
+      transform: translate(4px, 4px);
+      box-shadow: 0 0 0 ${M.ink};
+      background: ${M.yellowDeep};
+    }
+
+    .au-cta:disabled {
+      color: ${M.ink2};
+      background: ${M.hair};
+      border-color: ${M.ink2};
+      box-shadow: 3px 3px 0 ${M.ink2};
+      cursor: not-allowed;
+      opacity: 1;
+    }
+
+    .au-ghost {
+      align-self: flex-start;
+      min-height: 42px;
+      padding: 9px 0;
+      color: ${M.ink2};
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid ${M.ink2};
+      border-radius: 0;
+      box-shadow: none;
+      cursor: pointer;
+      font-family: ${M.fontBody};
+      font-size: 13px;
+      font-weight: 600;
+      transition: color .12s ease;
+    }
+
+    .au-ghost:active:not(:disabled) { color: ${M.ink}; }
+    .au-ghost:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ---- OTP boxes ---- */
+    .au-otp {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      justify-content: stretch;
+      gap: clamp(5px, 1.7vw, 9px);
+      width: 100%;
+    }
+
+    .au-box {
+      width: 100%;
+      min-width: 0;
+      max-width: none;
+      height: 50px;
+      padding: 0;
+      text-align: center;
+      color: ${M.ink};
+      background: rgba(255,255,255,.94);
+      border: 2px solid ${M.ink};
+      border-radius: 12px;
+      box-shadow: 3px 3px 0 ${M.ink};
+      font-family: ${M.fontHeavy};
+      font-size: 23px;
+      font-weight: 400;
+      outline: none;
+      caret-color: ${M.ink};
+      transition: background .2s cubic-bezier(.32,.72,0,1), box-shadow .2s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-box:focus {
+      background: #FFF1AE;
+      border-color: ${M.ink};
+      box-shadow: 3px 3px 0 ${M.ink};
+      transform: none;
+    }
+
+    .au-box:disabled:not(.ok) { opacity: .65; }
+    .au-box.err { border-color: ${M.red}; animation: au-shake .3s steps(2) 2; }
+    .au-box.ok { background: #E5F3E7; color: ${M.ink}; border-color: ${M.ink}; transform: none; }
+
+    /* ---- notes, banners, misc ---- */
+    .au-banner {
+      position: relative;
+      padding: 5px 0 5px 11px;
+      background: transparent;
+      border: 0;
+      border-left: 3px solid ${M.red};
+      border-radius: 0;
+      overflow: visible;
+    }
+
+    .au-banner p {
+      margin: 0;
+      color: ${M.ink};
+      font-family: ${M.fontBody};
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+
+    .au-strip {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 6px 0;
+      color: ${M.ink};
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      font-family: ${M.fontBody};
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .au-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+    .au-field label {
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .au-revnote {
+      margin: 0;
+      color: ${M.ink2};
+      font-family: ${M.fontBody};
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .au-search:focus-visible,
+    .au-input:focus-visible,
+    .au-box:focus-visible,
+    .au-result:focus-visible,
+    .au-cta:focus-visible,
+    .au-ghost:focus-visible,
+    .au-field input:focus-visible {
+      outline: 2px solid ${M.ink};
+      outline-offset: 3px;
+    }
+
+    /* ---- campus photo scene: the photo is the canvas, the form floats above ---- */
+    .au-campus-scene {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      overflow: hidden;
+      pointer-events: none;
+      background: ${M.paper};
+      transition: opacity .35s ease;
+    }
+
+    .au-campus-photo {
+      display: block;
+      position: absolute;
+      z-index: 0;
+      top: 0;
+      left: 50%;
+      width: 100vw;
+      max-width: none;
+      height: 100dvh;
+      object-fit: cover;
+      object-position: center 48%;
+      transform: translateX(-50%) scale(1.01);
+      filter: saturate(.92) contrast(.98) brightness(.96);
+      transition: filter .42s cubic-bezier(.2,.8,.2,1), transform .55s cubic-bezier(.2,.8,.2,1);
+      will-change: transform, filter;
+    }
+
+    /* College step runs the slower iOS curve so the search-open blur reads as depth. */
+    .au-root .au-campus-scene-college .au-campus-photo {
+      filter: blur(0px) saturate(.92) contrast(.98) brightness(.96);
+      transition: filter .6s cubic-bezier(.32,.72,0,1), transform .8s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-campus-wash {
+      position: absolute;
+      z-index: 1;
+      inset: 0;
+      background: linear-gradient(
+        180deg,
+        rgba(241,237,226,.06) 0%,
+        rgba(241,237,226,.03) 30%,
+        rgba(241,237,226,.15) 44%,
+        rgba(241,237,226,.62) 58%,
+        rgba(241,237,226,.93) 70%,
+        ${M.paper} 83%,
+        ${M.paper} 100%
+      );
+      transition: background .55s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-campus-blur {
+      display: block;
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      pointer-events: none;
+      opacity: 0;
+      background: rgba(241,237,226,.5);
+      -webkit-backdrop-filter: blur(26px) saturate(1.45);
+      backdrop-filter: blur(26px) saturate(1.45);
+      transition: opacity .55s cubic-bezier(.32,.72,0,1);
+      will-change: opacity;
+    }
+
+    .au-backdrop {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      background: transparent;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ---- search-open state ---- */
+    .au-root.is-search-open { overflow: hidden; }
+
+    .au-root.is-search-open .au-campus-blur { opacity: 1; }
+
+    .au-root.is-search-open .au-campus-scene-college .au-campus-photo {
+      filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
+      transform: translateX(-50%) scale(1.06);
+    }
+
+    .au-root.is-search-open .au-brandbar {
+      opacity: 0;
+      transform: translateY(-10px);
+      pointer-events: none;
+    }
+
+    .au-root.is-search-open .au-step {
+      margin-top: clamp(18px, 7dvh, 64px);
+      margin-bottom: 0;
+      padding-top: 0;
+    }
+
+    .au-root.is-search-open .au-step::before {
+      opacity: 0;
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+
+    .au-root.is-search-open .au-mobile-field-label { margin-top: 2px; }
+
+    .au-root.is-search-open .au-results { max-height: min(28dvh, 230px); }
+
+    /* ---- compact screens (order matters: height first, then width) ---- */
+    @media (max-height: 760px) {
+      .au-brandbar { margin-top: 2px; }
+      .au-wordmark { font-size: 36px; }
+      .au-brand-whisper { font-size: 10px; }
+      .au-step { gap: 8px; }
+      .au-step .au-headline { font-size: 29px; }
+      .au-input,
+      .au-field input { height: 50px; }
+    }
+
+    @media (max-width: 360px) {
+      .au-panel { padding-left: 18px; padding-right: 18px; }
+      .au-step .au-headline { font-size: 28px; }
+      .au-search { font-size: 15px; }
+      .au-box { height: 45px; font-size: 21px; }
+      .au-form { gap: 12px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .au-campus-photo,
+      .au-campus-wash,
+      .au-campus-blur,
+      .au-brandbar,
+      .au-step,
+      .au-step::before,
+      .au-searchwrap,
+      .au-search,
+      .au-input,
+      .au-field input,
+      .au-box,
+      .au-result,
+      .au-cta,
+      .au-ghost,
+      .au-results { transition: none !important; }
+      .au-box.err { animation: none !important; }
+      .au-root.is-search-open .au-campus-scene-college .au-campus-photo {
+        filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
+        transform: translateX(-50%);
+      }
+    }
   }
 `;
 
+/* The scene and polish layers were merged into MOBILE_AUTH_CSS above.
+   Kept as empty exports so any other module importing them keeps working —
+   delete these two lines if nothing else imports them. */
+export const AUTH_SCENE_CSS = '';
+export const AUTH_SMOOTH_CSS = '';
+
+const AuthBrand = () => (
+  <div className="au-brandbar" aria-label="huh?">
+    <span className="au-wordmark" aria-hidden="true">
+      huh<span className="au-brand-question">?</span>
+    </span>
+    <span className="au-brand-whisper">campus, chemistry, and a little curiosity.</span>
+  </div>
+);
+
+const AuthArtwork = ({ kind }) => {
+  const ink = M.ink;
+  const white = M.card;
+  const yellow = M.yellow;
+  const coral = M.coral;
+  const green = M.green;
+
+  const scenes = {
+    college: (
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          {/* Traditional academic pediment, labelled facade, columns and entrance. */}
+          <path d="M54 48 160 13 266 48Z" fill={yellow} />
+          <path d="M44 50H276" fill="none" strokeWidth="5" />
+          <path d="M62 54H258V119H62Z" fill={white} />
+          <path d="M104 58H216V76H104Z" fill={yellow} />
+          <text x="160" y="70.5" textAnchor="middle" fill={ink} stroke="none" fontFamily="Arial, sans-serif" fontSize="10" fontWeight="800" letterSpacing="1.3">COLLEGE</text>
+          {/* Five straight pillars and a centered entrance make the academic facade clear. */}
+          <path d="M77 82H94V111H77ZM111 82H128V111H111ZM145 82H162V111H145ZM179 82H196V111H179ZM213 82H230V111H213Z" fill={green} />
+          <path d="M142 91H178V119H142Z" fill={coral} />
+          <path d="M49 120H271M39 128H281M30 136H290" fill="none" strokeWidth="3.5" />
+          <path d="M244 16V4M244 5L264 11L244 17Z" fill={coral} strokeWidth="2.5" />
+        </g>
+        <circle cx="38" cy="29" r="5" fill={coral} />
+        <path d="M284 34h11M289.5 28.5v11" stroke={ink} strokeWidth="2.5" strokeLinecap="round" />
+      </svg>
+    ),
+    request: (
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          <path d="M90 15H202L235 48V127H90Z" fill={white} />
+          <path d="M202 15V48H235" fill={yellow} />
+          <path d="M111 58H186M111 70H205M111 82H177" fill="none" strokeWidth="3" />
+          <path d="M112 105 133 85 154 105V121H112Z" fill={green} />
+          <path d="M106 105 133 79 160 105" fill="none" strokeWidth="3" />
+          <path d="M126 105V121M139 105V121" fill="none" strokeWidth="2.5" />
+          <path d="M178 105h30v22h-30z" fill={coral} />
+          <path d="M184 116h18" fill="none" strokeWidth="2.5" />
+        </g>
+        <circle cx="67" cy="37" r="16" fill={yellow} stroke={ink} strokeWidth="2.5" />
+        <path d="M60 37h14M67 30v14" stroke={ink} strokeWidth="2.5" strokeLinecap="round" />
+      </svg>
+    ),
+    email: (
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          <path d="M58 42H244V125H58Z" fill={white} />
+          <path d="M61 45 151 100 241 45" fill={yellow} />
+          <path d="M61 122 119 80M241 122 183 80" fill="none" strokeWidth="2.5" />
+          <path d="M204 20h57v45h-57z" fill={green} />
+          <path d="M216 34h33M216 44h25M216 54h18" fill="none" strokeWidth="2.5" />
+        </g>
+        <circle cx="47" cy="29" r="6" fill={coral} />
+      </svg>
+    ),
+    otp: (
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          <path d="M66 31H234V118H66Z" fill={white} />
+          <path d="M68 34 150 85 232 34" fill={yellow} />
+          <path d="M68 115 119 77M232 115 181 77" fill="none" strokeWidth="2.5" />
+          <path d="M199 18 222 27V46C222 59 212 67 199 73 186 67 176 59 176 46V27Z" fill={green} />
+          <path d="M188 44 196 52 210 36" fill="none" strokeWidth="3.5" />
+        </g>
+        <circle cx="48" cy="104" r="7" fill={coral} />
+        <path d="M257 101h13M263.5 94.5v13" stroke={ink} strokeWidth="2.5" strokeLinecap="round" />
+      </svg>
+    ),
+    verify: (
+      <svg viewBox="0 0 320 150" aria-hidden="true" focusable="false">
+        <g className="art-float" stroke={ink} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round">
+          {/* Graduation cap is the most direct visual cue for student verification. */}
+          <path d="M66 56 160 20 254 56 160 93Z" fill={yellow} />
+          <path d="M99 70V97C132 118 188 118 221 97V70L160 95Z" fill={green} />
+          <path d="M254 56V91" fill="none" />
+          <circle cx="254" cy="96" r="5" fill={coral} />
+          <path d="M119 84V102C143 115 177 115 201 102V84" fill={white} />
+        </g>
+        <path d="M43 34h15M50.5 26.5v15" stroke={ink} strokeWidth="2.5" strokeLinecap="round" />
+        <circle cx="275" cy="38" r="8" fill={coral} />
+      </svg>
+    ),
+  };
+
+  return <div className="au-art" aria-hidden="true">{scenes[kind]}</div>;
+};
+
+
+/* Mobile campus scene: the photo is the whole canvas, with a wash that
+   dissolves its lower edge into the paper color. The form stays live HTML
+   above it — never baked into the image. */
+const AuthCampusScene = ({ kind = 'college', verified = false }) => (
+  <div
+    className={`au-campus-scene au-campus-scene-${kind}${verified ? ' is-verified' : ''}`}
+    aria-hidden="true"
+  >
+    <img className="au-campus-photo" src={campusPhoto} alt="" draggable="false" />
+    <div className="au-campus-wash" />
+    <div className="au-campus-blur" />
+  </div>
+);
+
 const Auth = ({ onSuccess, reverifyOnly = false }) => {
   const reduceMotion = useReducedMotion();
+  const isDesktop = useIsDesktop();
 
-  /* ── STEPS: college → email → otp ──
-     The college is chosen BEFORE the email, and the server binds the two: the
-     picked code is stored on the OTP record server-side, so a client can't ask
-     for a code against one college and then verify as another.
-     `reverifyOnly` skips all of that — a returning student's college is already
-     on their account and cannot be changed by this screen. */
+  // Auth is cream where the splash is near-black, so the browser's status bar
+  // and the strip around the app must switch with it or the transition reads as
+  // two different apps.
+  useChromeColor(M.paper);
+
   const [step, setStep] = useState(reverifyOnly ? 'otp' : 'college');
   const [colleges, setColleges] = useState([]);
   const [collegeQuery, setCollegeQuery] = useState('');
+  const [collegeSearchOpen, setCollegeSearchOpen] = useState(false);
+  const collegeSearchRef = useRef(null);
   const [college, setCollege] = useState(null);
   const [email, setEmail] = useState('');
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
@@ -12821,27 +16004,32 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
   const inputRefs = useRef([]);
   const { login, user: authUser } = useAuth();
 
-  /* ── ANNUAL RE-VERIFICATION ──
-     The product claims "Students only", which is only true because we re-check
-     each year. A student returning after the due date sees this instead of the
-     college search. Nudge, not a wall: existing chats and profile stay put,
-     and a failed check never deletes anything. */
-  const reverifyNeeded = Boolean(authUser?.reverifyRequired);
+  const openCollegeSearch = useCallback(() => {
+    if (isDesktop) return;
+    setCollegeSearchOpen(true);
+  }, [isDesktop]);
 
-  /* ── College request: "can't find my college" ──
-     Deliberately does NOT grant access. It lands in the admin queue, the
-     operator verifies the domain from the college's official site, adds it, and
-     presses Notify. The student's college email is the only evidence they
-     actually belong there. */
+  const closeCollegeSearch = useCallback(() => {
+    setCollegeSearchOpen(false);
+    collegeSearchRef.current?.blur();
+  }, []);
+
   const [requestForm, setRequestForm] = useState({
-    collegeName: '', city: '', state: '', country: '', name: '', email: '',
+    collegeName: '',
+    city: '',
+    state: '',
+    country: '',
+    name: '',
+    email: '',
   });
 
   const submitCollegeRequest = async (e) => {
     e.preventDefault();
     if (!requestForm.collegeName.trim() || !requestForm.email.trim()) return;
+
     setLoading(true);
     setError('');
+
     try {
       await api.post('/colleges/request', requestForm);
       setRequestDone(true);
@@ -12854,37 +16042,16 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     }
   };
 
-  /* Fetch the college list once. Served from the DB, so a campus added in
-     /admin appears without a client change. Failing this is non-fatal: the
-     picker shows an empty state and the student can still request their
-     college, which is exactly what they would do for a new campus anyway. */
-  /* ── Fetch the college list ──
-     Served from the DB, so a campus added in /admin appears without a client
-     change.
-
-     ⚠️ THIS USED TO BE A ONE-SHOT FETCH WITH A SILENT CATCH, and it produced the
-     exact bug the user reported: open the app while the server was
-     unreachable (a dead backend, a phone dropping wifi, a port conflict) and
-     the request failed, `colleges` became `[]`, and NOTHING ever retried it. The
-     picker then claimed "No college matches" about colleges that were listed
-     and sitting right there in the database — and the only cure was a full
-     browser refresh, which remounted the component and refetched.
-
-     So the load state is tracked explicitly, the failure is shown instead of
-     being disguised as "no results", and it retries itself when the connection
-     comes back rather than waiting for a reload. */
-  const [collegeLoadState, setCollegeLoadState] = useState('loading'); // loading | ready | error
+  const [collegeLoadState, setCollegeLoadState] = useState('loading');
 
   const loadColleges = useCallback(async () => {
     setCollegeLoadState((s) => (s === 'ready' ? s : 'loading'));
+
     try {
       const res = await api.get('/colleges');
       setColleges(res.colleges || []);
       setCollegeLoadState('ready');
     } catch {
-      // Deliberately NOT cleared to [] on failure — leaving the previous value
-      // in place means a transient blip doesn't wipe a list that already
-      // loaded. The error state surfaces the problem either way.
       setCollegeLoadState('error');
     }
   }, []);
@@ -12892,64 +16059,36 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
   useEffect(() => {
     loadColleges();
 
-    // Retry when the OS reports connectivity is back, and when the tab is
-    // refocused — both are moments a failed mount-time fetch is most likely
-    // to succeed. Cheap: /colleges is a couple of documents, no caching layer.
     const onOnline = () => loadColleges();
-    const onVisible = () => { if (document.visibilityState === 'visible') loadColleges(); };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadColleges();
+    };
+
     window.addEventListener('online', onOnline);
     document.addEventListener('visibilitychange', onVisible);
+
     return () => {
       window.removeEventListener('online', onOnline);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [loadColleges]);
 
-  /* 📍 COLLEGE SEARCH — matches how students actually type, not just how the
-     name is formally written.
-     *
-     * ⚠️ THIS USED TO BE A PLAIN SUBSTRING TEST over name + city + state, and it
-     failed on the single most common way anyone looks for their own college.
-     * "Indian Institute of Technology Bombay" does not contain the letters "IIT"
-     * anywhere, nor "IITB", nor "IIT Bombay" — so typing any of those returned
-     * "No college matches" for a campus that was sitting right there, correctly
-     * spelled, one row away. There is a "request your college" fallback directly
-     * below, so the failure mode was actively harmful: a student searching for
-     * IIT Bombay was walked into requesting a college that already existed.
-     *
-     * Nobody types a college's full legal name. They type the acronym, or the
-     * acronym plus the city, or a fragment. All of those now match:
-     *
-     *   "IIT"      → acronym prefix of IITB
-     *   "IITB"     → exact acronym
-     *   "IIT Bombay" → every word matches something (acronym prefix, then word)
-     *   "Bombay" / "Mumbai" / "Maharashtra" → as before
-     *
-     * A query matches when EVERY word in it is accounted for by SOME word in the
-     * record. Requiring all words rather than any is what keeps "IIT" from
-     * matching every college in the country once the list grows past one entry.
-     *
-     * Still no regex: accent- and punctuation-stripped substring tests only, so
-     * there is nothing here for a search box to be injected into. */
   const collegeMatches = (college, rawQuery) => {
     const norm = (s) => String(s || '')
       .toLowerCase()
-      .normalize('NFD').replace(/[̀-ͯ]/g, '')   // "Mumbai" vs "Mumbái"
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9\s]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
 
     const words = norm(college.name).split(' ').filter(Boolean);
-    /* Connectives carry no identifying information: "Indian INSTITUTE OF
-       Technology Bombay" must still give IITB, not ITOFTB. */
-    const ACRONYM_STOP = new Set(['of', 'and', 'the', 'for', 'at', 'a', 'an']);
+    const stopWords = new Set(['of', 'and', 'the', 'for', 'at', 'a', 'an']);
     const acronym = words
-      .filter((w) => !ACRONYM_STOP.has(w))
+      .filter((w) => !stopWords.has(w))
       .map((w) => w[0])
       .join('');
 
-    /* Words a query can match against: the name, the city, the state, and the
-       acronym as its own token. */
     const haystack = [
       ...words,
       norm(college.city),
@@ -12958,24 +16097,10 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
       acronym,
     ].filter(Boolean);
 
-    const terms = rawQuery
-      .split(' ')
-      .map(norm)
-      .filter(Boolean);
+    const terms = rawQuery.split(' ').map(norm).filter(Boolean);
 
-    /* An empty query matches NOTHING here, rather than everything.
-       `.every()` on an empty array is `true`, so without this a whitespace-only
-       box would return the whole list. The caller already guards on `.trim()`,
-       but a filter that silently inverts on empty input is a trap for whoever
-       wires it up next. */
     if (terms.length === 0) return false;
-
-    /* A query made ENTIRELY of connectives is not a search. "of" on its own
-       sits inside "Indian Institute OF Technology", so it would otherwise match
-       every college in the country — while "Indian Institute of Technology"
-       still has to keep working, so stopwords can only be rejected once the
-       whole query consists of them. */
-    if (terms.every((t) => ACRONYM_STOP.has(t))) return false;
+    if (terms.every((t) => stopWords.has(t))) return false;
 
     return terms.every((q) => haystack.some((h) => h.includes(q) || q.includes(h)));
   };
@@ -12984,11 +16109,29 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     ? colleges.filter((c) => collegeMatches(c, collegeQuery))
     : colleges;
 
+  // On desktop the results are always inline under the field. On mobile they
+  // only exist while the search is open, and only once something is typed — an
+  // empty list is noise, not help.
+  const showResults = !!collegeQuery.trim() && (isDesktop || collegeSearchOpen);
+  const searchActive = collegeSearchOpen && !isDesktop;
+
+  const pickCollege = (c) => {
+    setCollege(c);
+    setCollegeQuery(c.name);
+    setCollegeSearchOpen(false);
+    setError('');
+    collegeSearchRef.current?.blur();
+    triggerHaptic('light');
+    setTimeout(() => setStep('email'), 220);
+  };
+
   const [suspendedData, setSuspendedData] = useState(() => {
     try {
       const data = JSON.parse(localStorage.getItem('matchalize_suspended'));
       return data?.reason ? data : null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   });
 
   useEffect(() => {
@@ -12997,71 +16140,61 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     }
   }, [step]);
 
-  /* Re-verify kickoff: request a fresh code as soon as this screen mounts, so
-     the student lands on the code boxes with the email already sent rather than
-     having to press anything first. */
   const reverifyKicked = useRef(false);
+
   useEffect(() => {
     if (!reverifyOnly || reverifyKicked.current) return;
     reverifyKicked.current = true;
+
     api.post('/auth/reverify')
       .catch((err) => {
         setError(err.response?.data?.message || 'Could not send your verification code.');
       });
   }, [reverifyOnly]);
 
-  /* In re-verify mode the student has no college picker, so the endpoint can't
-     read collegeCode from the client. Send the stored one off the user object
-     for the display only — the server resolves the college from the session. */
   const reverifyCollege = authUser?.college || 'your college';
 
-  // THE PHANTOM HITBOX FIX: Forces mobile browsers to recalculate touch targets when keyboard closes.
-  // Deliberately NOT wired to the OTP boxes — they blur on every digit as focus
-  // advances, so scrollTo(0,0) there yanked the panel around mid-entry. The email
-  // field is the one that closes the keyboard, which is the case this fixes.
   const handleInputBlur = () => {
-    window.scrollTo(0, 0);
+    // Desktop keeps its existing reset behavior. On mobile, forcing the page to
+    // the top on blur fights keyboard dismissal and causes a visible jump.
+    if (!window.matchMedia('(max-width: 700px)').matches) window.scrollTo(0, 0);
   };
 
   const handleSendOtp = async (e) => {
     e.preventDefault();
     if (!email.trim() || !college) return;
+
     setError('');
     setLoading(true);
     triggerHaptic('medium');
 
-    // Force blur to close keyboard and fix hitboxes before making API call
-    if (document.activeElement) {
-      document.activeElement.blur();
-    }
+    if (document.activeElement) document.activeElement.blur();
 
     try {
-      // collegeCode travels with the request so the server can check the email
-      // against THAT college's domains. It's re-checked at verify time from the
-      // stored OTP record, not trusted from here.
-      await api.post('/auth/send-otp', { email: email.trim(), collegeCode: college.code });
+      await api.post('/auth/send-otp', {
+        email: email.trim(),
+        collegeCode: college.code,
+      });
       setStep('otp');
     } catch (err) {
-      const exactError = err.response?.data?.message || err.response?.data?.error || err.message;
+      const exactError = err.response?.data?.message
+        || err.response?.data?.error
+        || err.message;
 
-      if (exactError?.includes('Network Error')) {
-        setError('Something went wrong. Check your connection.');
-      } else {
-        setError(exactError || 'Failed to send the code.');
-      }
+      setError(exactError?.includes('Network Error')
+        ? 'Something went wrong. Check your connection.'
+        : exactError || 'Failed to send the code.');
+
       triggerHaptic('heavy');
     } finally {
       setLoading(false);
     }
   };
 
-  /* Re-verify confirm is a separate endpoint from sign-in verify: it re-proves
-   inbox control without touching identity, and on success just renews the date.
-   It must never be fallable-through to the sign-in path — a student past due
-   would otherwise create a second account instead. */
   const handleReverifyConfirm = useCallback(async (otpValue) => {
     setLoading(true);
     setError('');
+
     try {
       await api.post('/auth/reverify/confirm', { otp: otpValue });
       setVerified(true);
@@ -13070,7 +16203,9 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     } catch (err) {
       setError(err.response?.data?.message || 'That code was not right. Try again.');
       setOtp(['', '', '', '', '', '']);
+
       if (inputRefs.current[0]) inputRefs.current[0].focus();
+
       triggerHaptic('heavy');
       setLoading(false);
     }
@@ -13078,27 +16213,25 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
 
   const handleVerifyOtp = useCallback(async (otpValue) => {
     if (reverifyOnly) return handleReverifyConfirm(otpValue);
+
     setError('');
     setLoading(true);
 
-    // Force blur to fix hitboxes
-    if (document.activeElement) {
-      document.activeElement.blur();
-    }
+    if (document.activeElement) document.activeElement.blur();
 
     try {
-      const data = await api.post('/auth/verify-otp', { email: email.trim(), otp: otpValue });
-      // Token is set as httpOnly cookie by the server Set-Cookie header
-      // Server confirmed login — user is NOT suspended. Clear any stale suspension flag.
+      const data = await api.post('/auth/verify-otp', {
+        email: email.trim(),
+        otp: otpValue,
+      });
+
       localStorage.removeItem('matchalize_suspended');
       login(data.user);
 
-      /* Graduating year is captured AFTER the account exists, and only when the
-         user typed one. Onboarding is the screen that collects profile content,
-         so a best-effort save here (swallowing failure) is enough — the field is
-         optional and never worth blocking a verified login over. */
       if (graduatingYear && data.user?._id && !data.user.graduatingYear) {
-        api.put('/users/profile', { graduatingYear: Number(graduatingYear) })
+        api.put('/users/profile', {
+          graduatingYear: Number(graduatingYear),
+        })
           .then(() => {
             const stored = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
             stored.graduatingYear = Number(graduatingYear);
@@ -13111,42 +16244,36 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
 
       setVerified(true);
       triggerHaptic('heavy');
-
-      setTimeout(() => {
-        onSuccess();
-      }, 1200);
-
+      setTimeout(() => onSuccess(), 1200);
     } catch (err) {
-      const exactError = err.response?.data?.message || err.response?.data?.error || err.message;
+      const exactError = err.response?.data?.message
+        || err.response?.data?.error
+        || err.message;
 
-      // If this was a suspension, show the lock screen
       try {
         const susData = JSON.parse(localStorage.getItem('matchalize_suspended'));
+
         if (susData?.reason) {
-          // Clear loading before handing off — this used to return with loading
-          // stuck true, which left the step dead if the screen ever fell back.
           setLoading(false);
           setSuspendedData(susData);
           return;
         }
       } catch {}
 
-      if (exactError?.includes('Network Error')) {
-        setError('Something went wrong. Check your connection.');
-      } else {
-        setError(exactError || 'Invalid code.');
-      }
+      setError(exactError?.includes('Network Error')
+        ? 'Something went wrong. Check your connection.'
+        : exactError || 'Invalid code.');
 
       setOtp(['', '', '', '', '', '']);
+
       if (inputRefs.current[0]) inputRefs.current[0].focus();
+
       triggerHaptic('heavy');
       setLoading(false);
     }
-  }, [email, onSuccess, login, reverifyOnly, handleReverifyConfirm]);
+  }, [email, onSuccess, login, reverifyOnly, handleReverifyConfirm, graduatingYear]);
 
   const handleOtpChange = (e, index) => {
-    // Presentational only: a fresh keystroke clears the red state so the boxes
-    // don't stay angry while retyping. Delete this line to restore exact old behavior.
     if (error) setError('');
 
     const val = e.target.value;
@@ -13154,18 +16281,17 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     if (val.length > 1) {
       const pasted = val.replace(/\D/g, '').slice(0, 6).split('');
       const newOtp = [...otp];
-      // Fill from current index, not from 0
+
       pasted.forEach((char, i) => {
         if (index + i < 6) newOtp[index + i] = char;
       });
+
       setOtp(newOtp);
 
       const nextIndex = Math.min(index + pasted.length, 5);
-      inputRefs.current[nextIndex].focus();
+      inputRefs.current[nextIndex]?.focus();
 
-      if (newOtp.every(d => d !== '')) {
-        handleVerifyOtp(newOtp.join(''));
-      }
+      if (newOtp.every((d) => d !== '')) handleVerifyOtp(newOtp.join(''));
       return;
     }
 
@@ -13175,25 +16301,51 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     setOtp(newOtp);
     triggerHaptic('light');
 
-    if (val && index < 5) {
-      inputRefs.current[index + 1].focus();
-    }
-
-    if (index === 5 && val) {
-      handleVerifyOtp(newOtp.join(''));
-    }
+    if (val && index < 5) inputRefs.current[index + 1]?.focus();
+    if (index === 5 && val) handleVerifyOtp(newOtp.join(''));
   };
 
   const handleOtpKeyDown = (e, index) => {
     if (e.key === 'Backspace' && !otp[index] && index > 0) {
-      inputRefs.current[index - 1].focus();
+      inputRefs.current[index - 1]?.focus();
     }
   };
 
+  const errorBanner = (
+    <AnimatePresence>
+      {error && (
+        <motion.div
+          key="au-banner"
+          role="alert"
+          initial={reduceMotion ? false : { opacity: 0, height: 0, y: -4 }}
+          animate={{ opacity: 1, height: 'auto', y: 0 }}
+          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0, y: -4 }}
+          transition={{ duration: 0.2, ease: 'easeOut' }}
+          style={{ overflow: 'hidden' }}
+        >
+          <div className="au-banner">
+            <p>{error}</p>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+
+  const swapProps = isDesktop ? {
+    initial: reduceMotion ? false : { opacity: 0, y: 12, scale: .985, filter: 'blur(2px)' },
+    animate: { opacity: 1, y: 0, scale: 1, filter: 'blur(0px)' },
+    exit: reduceMotion
+      ? { opacity: 0 }
+      : { opacity: 0, y: -8, scale: .99, filter: 'blur(2px)' },
+    transition: { duration: .24, ease: [0.22, 1, 0.36, 1] },
+  } : {
+    initial: reduceMotion ? false : { opacity: 0, y: 6 },
+    animate: { opacity: 1, y: 0 },
+    exit: reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 },
+    transition: { duration: .18, ease: [0.22, 1, 0.36, 1] },
+  };
+
   if (suspendedData) {
-    /* The "unlock" action rides in bottomSlot instead of position:fixed over
-       the screen. Fixed meant it floated on top of content that centred itself
-       with justify-content:center, so on short viewports the two overlapped. */
     return (
       <AccountSuspendedScreen
         reason={suspendedData.reason}
@@ -13213,42 +16365,23 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     );
   }
 
-/* ── RE-VERIFY SCREEN ──
-     Shown instead of the college/email flow for a returning student whose annual
-     check is due. Copy says what happened and why it matters, without alarming
-     them — a failed check never deletes anything, and their profile and chats
-     are untouched. */
   if (reverifyOnly) {
     return (
-      <div className="au-root">
-        <style>{AUTH_CSS}</style>
-        <div className="au-fit">
-          <motion.header
-            className="au-hero"
-            initial={reduceMotion ? false : { opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-          >
-            <h1 className="au-wordmark">matchalize</h1>
-            <p className="au-tagline">Your Campus. Your Story.</p>
-          </motion.header>
+      <div className="au-root au-root-verify">
+        <style>{AUTH_CSS}{MOBILE_AUTH_CSS}</style>
+        <AuthCampusScene kind="verify" verified={verified} />
 
-          <motion.div
-            className="au-panel"
-            initial={reduceMotion ? false : { opacity: 0, y: 24 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-          >
+        <div className="au-fit">
+          <motion.div className="au-panel" {...swapProps}>
+            <AuthBrand />
             <div className="au-step">
-              <div className="au-shead">
-                <span className="au-mark yellow" aria-hidden="true" />
-                <span className="au-steplabel">Quick check</span>
-              </div>
               <h2 className="au-headline">Confirm you're still a student.</h2>
+
               <p className="au-sub">
                 We check each year that your <b>{reverifyCollege}</b> email still works.
-                That's how we keep Matchalize <b>students only</b>.
               </p>
+
+              <AuthArtwork kind="verify" />
 
               {errorBanner}
 
@@ -13256,7 +16389,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                 {otp.map((digit, index) => (
                   <input
                     key={index}
-                    className={`au-box stamp-box${error ? ' err' : ''}${verified ? ' ok' : ''}`}
+                    className={`au-box${error ? ' err' : ''}${verified ? ' ok' : ''}`}
                     type="text"
                     inputMode="numeric"
                     autoComplete={index === 0 ? 'one-time-code' : 'off'}
@@ -13272,13 +16405,8 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
               </div>
 
               {verified ? (
-                <motion.div
-                  className="au-strip"
-                  initial={reduceMotion ? false : { opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-                >
-                  <CheckCircle2 size={16} strokeWidth={2.6} /> All set
+                <motion.div className="au-strip" {...swapProps}>
+                  <CheckCircle2 size={18} strokeWidth={2.5} /> All set
                 </motion.div>
               ) : (
                 <button
@@ -13288,16 +16416,15 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                   onClick={() => {
                     triggerHaptic('light');
                     setError('');
-                    api.post('/auth/reverify').catch(() => setError('Could not resend. Try again shortly.'));
+                    api.post('/auth/reverify')
+                      .catch(() => setError('Could not resend. Try again shortly.'));
                   }}
                 >
                   Resend code
                 </button>
               )}
 
-              <p className="au-revnote">
-                Your profile and chats are safe. This just keeps the app students only.
-              </p>
+              <p className="au-revnote">Your profile and chats are safe.</p>
             </div>
           </motion.div>
         </div>
@@ -13305,293 +16432,324 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     );
   }
 
-  /* Step swap — AppShell's tab transition (x ±16 + fade, 0.2s).
-      Banner wrapper animates height so the layout never jumps. */
-  const swapProps = {
-    initial: reduceMotion ? false : { opacity: 0, x: 16 },
-    animate: { opacity: 1, x: 0 },
-    exit: reduceMotion ? { opacity: 0 } : { opacity: 0, x: -16 },
-    transition: { duration: 0.2, ease: [0.2, 0.8, 0.2, 1] },
-  };
-
-  const errorBanner = (
-    <AnimatePresence>
-      {error && (
-        <motion.div
-          key="au-banner"
-          role="alert"
-          initial={reduceMotion ? false : { opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0 }}
-          transition={{ duration: 0.2, ease: 'easeOut' }}
-          style={{ overflow: 'hidden' }}
-        >
-          <div className="au-banner"><p>{error}</p></div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
-
   return (
-    <div className="au-root">
-      <style>{AUTH_CSS}</style>
+    <div className={`au-root au-root-${step}${step === 'college' && collegeSearchOpen ? ' is-search-open' : ''}`}>
+      <style>{AUTH_CSS}{MOBILE_AUTH_CSS}</style>
+      <AuthCampusScene kind={step} verified={verified} />
 
       <div className="au-fit">
-        {/* HERO — the header's wordmark treatment, one size up */}
-        <motion.header
-          className="au-hero"
-          initial={reduceMotion ? false : { opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-        >
-          <h1 className="au-wordmark">matchalize</h1>
-          <p className="au-tagline">Your campus. Your story.</p>
-        </motion.header>
-
-        {/* PANEL — the deck's sheet object */}
-        <motion.div
-          className="au-panel"
-          initial={reduceMotion ? false : { opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-        >
+        <motion.div className="au-panel" {...swapProps}>
+          {searchActive && step === 'college' && (
+            <div className="au-backdrop" onClick={closeCollegeSearch} aria-hidden="true" />
+          )}
+          <AuthBrand />
           <AnimatePresence mode="wait" initial={false}>
             {step === 'college' ? (
-              /* ── STEP 1 — YOUR COLLEGE ──
-                 Full official name is what's stored, so a typed official name
-                 matches. City/state are searched too, because plenty of students
-                 know their city and not their campus name. Nothing is
-                 pre-filled: no institution is assumed. */
-              <motion.section key="college" className="au-step" {...swapProps}>
-                <div className="au-shead">
-                  <span className="au-mark" aria-hidden="true" />
-                  <span className="au-steplabel">Step 1 — Your college</span>
-                </div>
-                <h2 className="au-headline">Enter your college.</h2>
-                <p className="au-sub">Matchalize is <b>students only</b>.</p>
+              <motion.section
+                key="college"
+                className="au-step"
+                {...swapProps}
+                layout={isDesktop ? false : 'position'}
+                transition={{
+                  ...swapProps.transition,
+                  layout: { type: 'spring', stiffness: 300, damping: 34, mass: 0.9 },
+                }}
+              >
+                <h2 className="au-headline">
+                  So, what&rsquo;s your college, <span className="au-huh-inline">huh?</span>
+                </h2>
+
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.p
+                    key={searchActive ? 'typing' : 'idle'}
+                    className="au-sub au-mobile-sub"
+                    initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.16 }}
+                  >
+                    {searchActive
+                      ? 'Start typing. We’ll bring your campus into view.'
+                      : 'Your campus. Your people. Your next good story.'}
+                  </motion.p>
+                </AnimatePresence>
+
+                <AuthArtwork kind="college" />
 
                 {errorBanner}
 
-                <div style={{ position: 'relative' }}>
-                  <Search
-                    size={17}
-                    strokeWidth={2.6}
-                    aria-hidden="true"
-                    style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: T.ink3, pointerEvents: 'none' }}
-                  />
+                <label className="au-mobile-field-label" htmlFor="college-search">Find your campus</label>
+                <div className="au-searchwrap">
+                  <span className="au-searchicon">
+                    <Search size={20} strokeWidth={1.9} aria-hidden="true" />
+                  </span>
+
                   <input
+                    id="college-search"
+                    ref={collegeSearchRef}
                     className="au-search"
                     type="text"
                     inputMode="text"
+                    enterKeyHint="search"
                     autoComplete="off"
                     autoCapitalize="words"
                     autoCorrect="off"
                     spellCheck="false"
-                    placeholder="Indian Institute of Technology Bombay"
+                    placeholder="Search your college"
                     value={collegeQuery}
+                    onFocus={openCollegeSearch}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape' && collegeSearchOpen) {
+                        e.preventDefault();
+                        closeCollegeSearch();
+                      }
+                      if (e.key === 'Enter' && filteredColleges.length === 1) {
+                        e.preventDefault();
+                        pickCollege(filteredColleges[0]);
+                      }
+                    }}
                     onChange={(e) => setCollegeQuery(e.target.value)}
+                    aria-expanded={showResults}
+                    aria-controls="college-suggestions"
                     aria-label="Search your college"
-                    style={{ paddingLeft: 40 }}
                   />
                 </div>
 
                 {collegeLoadState === 'error' && colleges.length === 0 && (
-                  /* Distinguished from "no matches" on purpose — the earlier
-                     silent catch made a network failure look like a student
-                     typing the wrong college, which sent them down the
-                     "request this college" path for a campus already listed. */
-                  <div className="au-results">
-                    <p className="au-empty">
-                      Couldn&rsquo;t load the college list. Check your connection.
-                    </p>
+                  <div>
+                    <p className="au-empty">Couldn&rsquo;t load the college list. Check your connection.</p>
                     <button className="au-cta" type="button" onClick={loadColleges}>
                       Try again
                     </button>
                   </div>
                 )}
 
-                {collegeQuery.trim() && collegeLoadState !== 'error' && (
-                  <div className="au-results">
-                    {filteredColleges.length === 0 ? (
-                      <>
-                        <p className="au-empty">
-                          No college matches &ldquo;{collegeQuery.trim()}&rdquo;.
-                        </p>
-                        {requestDone ? (
-                          <div className="au-strip">
-                            <CheckCircle2 size={16} strokeWidth={2.6} /> Request received
-                          </div>
-                        ) : (
-                          <button
-                            className="au-cta"
-                            type="button"
-                            onClick={() => {
-                              setRequestForm((f) => ({ ...f, collegeName: collegeQuery.trim(), email }));
-                              triggerHaptic('light');
-                              setStep('request');
-                            }}
-                          >
-                            Request this college
-                          </button>
-                        )}
-                      </>
-                    ) : (
-                      filteredColleges.map((c) => (
-                        <button
-                          key={c.code}
-                          type="button"
-                          className="au-result"
-                          onClick={() => {
-                            setCollege(c);
-                            setCollegeQuery(c.name);
-                            setError('');
-                            triggerHaptic('light');
-                            setTimeout(() => setStep('email'), 120);
-                          }}
-                        >
-                          <span className="au-result-name">{c.name}</span>
-                          {(c.city || c.state) && (
-                            <span className="au-result-meta">
-                              {[c.city, c.state].filter(Boolean).join(', ')}
-                            </span>
+                <AnimatePresence>
+                  {showResults && collegeLoadState !== 'error' && (
+                    <motion.div
+                      key="results"
+                      className="au-results"
+                      id="college-suggestions"
+                      role="listbox"
+                      aria-label="College suggestions"
+                      initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 4 }}
+                      transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
+                    >
+                      {filteredColleges.length === 0 ? (
+                        <div style={{ gridColumn: '1 / -1' }}>
+                          <p className="au-empty">
+                            No college matches &ldquo;{collegeQuery.trim()}&rdquo;.
+                          </p>
+
+                          {requestDone ? (
+                            <div className="au-strip">
+                              <CheckCircle2 size={18} strokeWidth={2.5} /> Request received
+                            </div>
+                          ) : (
+                            <button
+                              className="au-cta"
+                              type="button"
+                              onClick={() => {
+                                setRequestForm((f) => ({
+                                  ...f,
+                                  collegeName: collegeQuery.trim(),
+                                  email,
+                                }));
+                                triggerHaptic('light');
+                                setCollegeSearchOpen(false);
+                                collegeSearchRef.current?.blur();
+                                setStep('request');
+                              }}
+                            >
+                              Request this college
+                            </button>
                           )}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
+                        </div>
+                      ) : (
+                        filteredColleges.slice(0, 12).map((c) => (
+                          <button
+                            key={c.code}
+                            type="button"
+                            role="option"
+                            aria-selected={college?.code === c.code}
+                            className={`au-result${college?.code === c.code ? ' chosen' : ''}`}
+                            onClick={() => pickCollege(c)}
+                          >
+                            <span className="au-result-name">{c.name}</span>
+                            {(c.city || c.state) && (
+                              <span className="au-result-meta">
+                                {[c.city, c.state].filter(Boolean).join(', ')}
+                              </span>
+                            )}
+                          </button>
+                        ))
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
                 {!collegeQuery.trim() && collegeLoadState === 'loading' && colleges.length === 0 && (
-                  <p className="au-empty">Loading colleges&hellip;</p>
-                )}
-
-                {!collegeQuery.trim() && collegeLoadState === 'ready' && colleges.length > 0 && (
-                  <p className="au-empty">
-                    {colleges.length === 1
-                      ? 'Start typing to find it.'
-                      : `${colleges.length} campuses listed — start typing.`}
-                  </p>
-                )}
-
-                {!collegeQuery.trim() && collegeLoadState === 'ready' && colleges.length === 0 && (
-                  <p className="au-empty">
-                    No campuses listed yet. Type yours below to request one.
-                  </p>
+                  <p className="au-empty">Loading colleges…</p>
                 )}
               </motion.section>
             ) : step === 'request' ? (
-              /* ── REQUEST A COLLEGE ──
-                 Does not grant access. It reaches the operator, who verifies the
-                 domain from the college's official site and adds it. The student's
-                 college email is the only evidence they belong there — so it's
-                 required, and a public address like gmail is rejected. */
               <motion.section key="request" className="au-step" {...swapProps}>
-                <div className="au-shead">
-                  <span className="au-mark yellow" aria-hidden="true" />
-                  <span className="au-steplabel">Request a college</span>
-                </div>
                 <h2 className="au-headline">Tell us your campus.</h2>
+
                 <p className="au-sub">
                   We add campuses ourselves so only real students get in. You&rsquo;ll hear back once yours is live.
                 </p>
 
+                <AuthArtwork kind="request" />
+
                 {requestDone ? (
                   <div className="au-strip">
-                    <CheckCircle2 size={16} strokeWidth={2.6} /> Request received
+                    <CheckCircle2 size={18} strokeWidth={2.5} /> Request received
                   </div>
                 ) : (
                   <form className="au-form" onSubmit={submitCollegeRequest}>
                     {errorBanner}
+
                     <div className="au-field">
                       <label htmlFor="rq-name">Full college name</label>
-                      <input id="rq-name" value={requestForm.collegeName} onChange={(e) => setRequestForm((f) => ({ ...f, collegeName: e.target.value }))} placeholder="Indian Institute of Technology Delhi" required />
+                      <input
+                        id="rq-name"
+                        value={requestForm.collegeName}
+                        onChange={(e) => setRequestForm((f) => ({ ...f, collegeName: e.target.value }))}
+                        placeholder="Indian Institute of Technology Delhi"
+                        required
+                      />
                     </div>
+
                     <div className="au-field">
                       <label htmlFor="rq-email">Your college email</label>
-                      <input id="rq-email" type="email" inputMode="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck="false" value={requestForm.email} onChange={(e) => setRequestForm((f) => ({ ...f, email: e.target.value }))} placeholder="you@college.ac.in" required />
+                      <input
+                        id="rq-email"
+                        type="email"
+                        inputMode="email"
+                        autoComplete="email"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck="false"
+                        value={requestForm.email}
+                        onChange={(e) => setRequestForm((f) => ({ ...f, email: e.target.value }))}
+                        placeholder="you@college.ac.in"
+                        required
+                      />
                     </div>
+
                     <div className="au-field">
                       <label htmlFor="rq-yourname">Your name (optional)</label>
-                      <input id="rq-yourname" value={requestForm.name} onChange={(e) => setRequestForm((f) => ({ ...f, name: e.target.value }))} placeholder="Anaya" />
+                      <input
+                        id="rq-yourname"
+                        value={requestForm.name}
+                        onChange={(e) => setRequestForm((f) => ({ ...f, name: e.target.value }))}
+                        placeholder="Anaya"
+                      />
                     </div>
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <div className="au-field" style={{ flex: 1 }}>
+
+                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                      <div className="au-field" style={{ flex: '1 1 180px' }}>
                         <label htmlFor="rq-city">City</label>
-                        <input id="rq-city" value={requestForm.city} onChange={(e) => setRequestForm((f) => ({ ...f, city: e.target.value }))} placeholder="Delhi" />
+                        <input
+                          id="rq-city"
+                          value={requestForm.city}
+                          onChange={(e) => setRequestForm((f) => ({ ...f, city: e.target.value }))}
+                          placeholder="Delhi"
+                        />
                       </div>
-                      <div className="au-field" style={{ flex: 1 }}>
+
+                      <div className="au-field" style={{ flex: '1 1 180px' }}>
                         <label htmlFor="rq-state">State</label>
-                        <input id="rq-state" value={requestForm.state} onChange={(e) => setRequestForm((f) => ({ ...f, state: e.target.value }))} placeholder="Delhi" />
+                        <input
+                          id="rq-state"
+                          value={requestForm.state}
+                          onChange={(e) => setRequestForm((f) => ({ ...f, state: e.target.value }))}
+                          placeholder="Delhi"
+                        />
                       </div>
                     </div>
-                    <button className="au-cta" type="submit" disabled={loading || !requestForm.collegeName.trim() || !requestForm.email.trim()}>
+
+                    <button
+                      className="au-cta"
+                      type="submit"
+                      disabled={loading || !requestForm.collegeName.trim() || !requestForm.email.trim()}
+                    >
                       {loading ? 'Sending…' : 'Send request'}
                     </button>
-                    <button className="au-ghost" type="button" onClick={() => { setStep('college'); setError(''); }}>
+
+                    <button
+                      className="au-ghost"
+                      type="button"
+                      onClick={() => {
+                        setStep('college');
+                        setError('');
+                      }}
+                    >
                       Back
                     </button>
                   </form>
                 )}
               </motion.section>
             ) : step === 'email' ? (
-              /* ── STEP 2 — YOUR COLLEGE EMAIL ──
-                 The domain is pre-filled from the picked college but stays
-                 EDITABLE, because a student's real address is often on a
-                 department subdomain (cse.iitb.ac.in) that isn't the one we
-                 registered. The server validates whatever is typed against the
-                 selected college using exact-or-subdomain matching, so an open
-                 field is safe — and a locked one would lock people out. */
               <motion.section key="email" className="au-step" {...swapProps}>
-                <div className="au-shead">
-                  <span className="au-mark" aria-hidden="true" />
-                  <span className="au-steplabel">Step 2 — Your email</span>
-                </div>
                 <h2 className="au-headline">Your college email.</h2>
+
                 <p className="au-sub">
                   <b>{college?.name}</b> students use an <b>@{college?.domains?.[0]}</b> address.
                 </p>
 
+                <AuthArtwork kind="email" />
+
                 <form className="au-form" onSubmit={handleSendOtp}>
                   {errorBanner}
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <input
-                      className="au-input"
-                      type="text"
-                      inputMode="email"
-                      autoComplete="email"
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck="false"
-                      placeholder="you@iitb.ac.in"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      onBlur={handleInputBlur}
-                      disabled={loading}
-                      aria-label="College email address"
-                      required
-                      style={{ flex: '1 1 200px' }}
-                    />
-                  </div>
+                  <label className="au-mobile-field-label" htmlFor="college-email">College email</label>
+                  <input
+                    id="college-email"
+                    className="au-input"
+                    type="text"
+                    inputMode="email"
+                    autoComplete="email"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck="false"
+                    placeholder="you@iitb.ac.in"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    onBlur={handleInputBlur}
+                    disabled={loading}
+                    aria-label="College email address"
+                    required
+                  />
 
                   <button className="au-cta" type="submit" disabled={loading || !email.trim()}>
                     {loading ? 'Sending…' : 'Send my code'}
                   </button>
 
-                  <button className="au-ghost" type="button" onClick={() => { setStep('college'); setError(''); }}>
+                  <button
+                    className="au-ghost"
+                    type="button"
+                    onClick={() => {
+                      setCollegeSearchOpen(false);
+                      setStep('college');
+                      setError('');
+                    }}
+                  >
                     Change college
                   </button>
                 </form>
               </motion.section>
             ) : (
-              /* ── STEP 2 — THE CODE ── */
               <motion.section key="otp" className="au-step" {...swapProps}>
-                <div className="au-shead">
-                  <span className="au-mark yellow" aria-hidden="true" />
-                  <span className="au-steplabel">Step 2 — The code</span>
-                </div>
                 <h2 className="au-headline">Enter the code.</h2>
-                <p className="au-sub">Sent to <b className="low">{email.trim()}</b></p>
+
+                <p className="au-sub">
+                  Sent to <b className="low">{email.trim()}</b>
+                </p>
+
+                <AuthArtwork kind="otp" />
 
                 {errorBanner}
 
@@ -13599,10 +16757,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                   {otp.map((digit, index) => (
                     <input
                       key={index}
-                      /* stamp-box: the QA harness (server/tests/qa/browser.mjs)
-                         drives login through input.stamp-box — keep this class
-                         or every login-dependent scene stalls 15s in startAuth. */
-                      className={`au-box stamp-box${error ? ' err' : ''}${verified ? ' ok' : ''}`}
+                      className={`au-box${error ? ' err' : ''}${verified ? ' ok' : ''}`}
                       type="text"
                       inputMode="numeric"
                       autoComplete={index === 0 ? 'one-time-code' : 'off'}
@@ -13618,34 +16773,26 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                 </div>
 
                 {verified ? (
-                  /* The 1.2s window before onSuccess() — the boxes above turn
-                     green and this strip stamps in. Watching your own code get
-                     accepted beats a panel swap. */
-                  <motion.div
-                    className="au-strip"
-                    initial={reduceMotion ? false : { opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-                  >
-                    <CheckCircle2 size={16} strokeWidth={2.6} /> Access granted
+                  <motion.div className="au-strip" {...swapProps}>
+                    <CheckCircle2 size={18} strokeWidth={2.5} /> Access granted
                   </motion.div>
                 ) : (
                   <button
                     className="au-ghost"
                     type="button"
                     disabled={loading}
-                    onClick={() => { triggerHaptic('light'); setStep('email'); setError(''); setOtp(['', '', '', '', '', '']); }}
+                    onClick={() => {
+                      triggerHaptic('light');
+                      setStep('email');
+                      setError('');
+                      setOtp(['', '', '', '', '', '']);
+                    }}
                   >
                     Wrong email? Go back
                   </button>
                 )}
 
-                {/* Graduating year: NOT proof of enrolment (anyone can type a
-                    future year) but it's the honest signal that drives the
-                    annual re-check date, and "Graduating 2027" is a real dating
-                    signal. Optional so a student who genuinely doesn't know it
-                    isn't blocked at the door. */}
-                <div className="au-field" style={{ marginTop: 4 }}>
+                <div className="au-field">
                   <label htmlFor="grad-year">Graduating year (optional)</label>
                   <input
                     id="grad-year"
@@ -13675,6 +16822,924 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
 export default Auth;
 ```
 
+### ./client/src/pages/AuthFlow.jsx
+
+```
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
+import { Search, CheckCircle2 } from 'lucide-react';
+import { api } from '../utils/api';
+import { useChromeColor } from '../utils/chrome';
+import { useIsDesktop } from '../utils/useIsDesktop';
+import { triggerHaptic } from '../utils/haptics';
+import { useAuth } from '../utils/AuthContext';
+import socket from '../utils/socket';
+import neu from '../styles/neu';
+import campusPhoto from '../assets/college-town-aesthetic-cute-college-town.jpg';
+import AccountSuspendedScreen from '../components/AccountSuspendedScreen';
+import { AUTH_CSS, MOBILE_AUTH_CSS, AUTH_SCENE_CSS, AUTH_SMOOTH_CSS } from './Auth.jsx';
+
+const M = neu;
+
+const STEP_ORDER = ['college', 'email', 'request', 'code', 'next'];
+const EASE_OUT = [0.22, 1, 0.36, 1];
+
+/* The shared scene sheet was written for `otp`/`verify` step names. Map this
+   flow's names onto those so each step still gets its own photo grade. */
+const SCENE_KIND = {
+  college: 'college',
+  email: 'email',
+  request: 'request',
+  code: 'otp',
+  next: 'verify',
+};
+
+/* Everything the four shared sheets do not know about: the animated per-step
+   surface, the two step palettes they predate, and the handful of classes this
+   markup introduces. Loaded last so it wins on ties. */
+const FLOW_FIX_CSS = `
+  /* Step palettes the shared sheets predate. Both stay on the cream language;
+     flip these to the .au-root-otp dark tokens if you want the old code screen. */
+  .au-root-code,
+  .au-root-next {
+    --paper: #F1EDE2;
+    --ink: #111211;
+    --ink2: #383832;
+    --muted: #77766F;
+    --card: #F8F5EC;
+    --accent: #779477;
+    --tint: rgba(119,148,119,.18);
+  }
+
+  /* .au-screen is the animated per-step surface, so the shared sheets' rules
+     for .au-step's direct grid children no longer match anything. Put the
+     two-column grid back on .au-screen instead. */
+  .au-root .au-step {
+    display: flex;
+    flex-direction: column;
+    /* Keyboard lift is written as an inline transform; let it ease. */
+    transition: transform .28s cubic-bezier(.32,.72,0,1);
+  }
+
+  .au-root .au-screen {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, .72fr);
+    align-content: center;
+    align-items: center;
+    gap: 19px clamp(22px, 4vw, 45px);
+    width: 100%;
+    min-width: 0;
+  }
+
+  .au-screen > .au-headline { grid-column: 1; }
+  .au-screen > .au-sub { grid-column: 1; }
+
+  .au-screen > .au-art {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .au-screen > *:not(.au-headline):not(.au-sub):not(.au-art) {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+
+  .au-huh {
+    font-family: 'Bowlby One SC', ${M.fontHeavy};
+    font-weight: 400;
+    letter-spacing: -.055em;
+    white-space: nowrap;
+    text-shadow: 1.5px 1.5px 0 ${M.yellow};
+  }
+
+  /* "change" affordance inside the picked-college strip */
+  .au-strip { flex-wrap: wrap; }
+  .au-strip > span { min-width: 0; overflow-wrap: anywhere; }
+
+  .au-strip-change {
+    align-self: auto;
+    margin-left: auto;
+    min-height: 0;
+    padding: 4px 2px;
+    background: transparent;
+    color: ${M.ink2};
+    border: 0;
+    border-bottom: 1.5px solid currentColor;
+    font: 700 11px/1 ${M.fontMono};
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .au-strip-change:active { opacity: .6; }
+
+  .au-rowsep {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .au-rowsep .au-ghost { align-self: auto; }
+  /* .au-input is width:100%; two of them in a row need to share instead. */
+  .au-rowsep .au-input { flex: 1 1 0; min-width: 0; }
+
+  /* The no-match block is one message plus one action, not one grid cell. */
+  .au-results > div { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 12px; }
+  .au-results > div .au-empty { padding: 0; }
+
+  .au-nextlist {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 0;
+  }
+
+  .au-nextrow {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    padding: 13px 2px;
+    border-bottom: 1px solid rgba(17,18,17,.1);
+    color: ${M.ink2};
+    font: 500 14px/1.5 ${M.fontBody};
+  }
+  .au-nextrow:last-child { border-bottom: 0; }
+
+  .au-nextrow > b {
+    flex: 0 0 auto;
+    color: ${M.ink};
+    font: 700 11px/1 ${M.fontMono};
+    letter-spacing: .08em;
+  }
+
+  .au-nextrow > span { min-width: 0; }
+  .au-nextrow strong { color: ${M.ink}; font-weight: 700; }
+
+  .au-verify-note {
+    margin: 0;
+    color: ${M.ink2};
+    font: 700 11px/1.6 ${M.fontMono};
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+
+  @media (max-width: 700px) {
+    .au-root.au-root-code,
+    .au-root.au-root-next {
+      --ink: ${M.ink};
+      --ink2: ${M.ink2};
+      --muted: ${M.ink2};
+      --paper: ${M.paper};
+      --card: ${M.card};
+      --accent: ${M.green};
+      --tint: rgba(91,217,138,.14);
+    }
+
+    .au-screen {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 13px;
+    }
+
+    .au-screen > .au-art { display: none !important; }
+
+    /* The lifted form leaves the keyboard's band empty; keep the photo out of
+       it rather than letting the page show through behind the keys. */
+    .au-root .au-campus-scene::after {
+      display: block;
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: var(--kb, 0px);
+      background: ${M.paper};
+      pointer-events: none;
+      transition: height .18s ease;
+    }
+  }
+`;
+
+/* Desktop-only little illustrations (mobile uses the campus photo scene). */
+function StepArt({ kind }) {
+  if (kind === 'college') {
+    return (
+      <svg viewBox="0 0 230 140" aria-hidden="true">
+        <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="34" y="58" width="104" height="56" rx="6" fill="var(--tint)" stroke="var(--ink)" strokeWidth="3" />
+          <path d="M28 58 86 26l58 32" stroke="var(--ink)" strokeWidth="3" />
+          <rect x="76" y="76" width="20" height="38" rx="3" fill="var(--accent)" stroke="var(--ink)" strokeWidth="3" />
+          <circle cx="56" cy="76" r="6" fill="var(--paper)" stroke="var(--ink)" strokeWidth="3" />
+          <circle cx="116" cy="76" r="6" fill="var(--paper)" stroke="var(--ink)" strokeWidth="3" />
+          <g className="art-float">
+            <circle cx="168" cy="62" r="26" fill="var(--card)" stroke="var(--ink)" strokeWidth="3.5" />
+            <line x1="186" y1="82" x2="206" y2="104" stroke="var(--ink)" strokeWidth="5" />
+          </g>
+        </g>
+      </svg>
+    );
+  }
+  if (kind === 'email') {
+    return (
+      <svg viewBox="0 0 230 140" aria-hidden="true">
+        <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+          <g className="art-float">
+            <rect x="48" y="42" width="134" height="86" rx="10" fill="var(--card)" stroke="var(--ink)" strokeWidth="3.5" />
+            <path d="M52 50l63 46 63-46" stroke="var(--ink)" strokeWidth="3.5" />
+          </g>
+          <circle className="art-pulse" cx="196" cy="36" r="10" fill="var(--accent)" stroke="var(--ink)" strokeWidth="3" />
+          <path d="M28 96h12M22 112h20" stroke="var(--ink)" strokeWidth="3.5" />
+        </g>
+      </svg>
+    );
+  }
+  if (kind === 'code') {
+    return (
+      <svg viewBox="0 0 230 140" aria-hidden="true">
+        <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+          <g className="art-float">
+            <rect x="40" y="44" width="44" height="58" rx="10" fill="var(--card)" stroke="var(--ink)" strokeWidth="3.5" />
+            <rect x="93" y="30" width="44" height="58" rx="10" fill="var(--accent)" stroke="var(--ink)" strokeWidth="3.5" />
+            <rect x="146" y="44" width="44" height="58" rx="10" fill="var(--card)" stroke="var(--ink)" strokeWidth="3.5" />
+          </g>
+          <circle cx="115" cy="59" r="5" fill="var(--ink)" />
+          <path d="M52 118h126" stroke="var(--ink)" strokeWidth="3.5" strokeDasharray="2 10" />
+        </g>
+      </svg>
+    );
+  }
+  if (kind === 'request') {
+    return (
+      <svg viewBox="0 0 230 140" aria-hidden="true">
+        <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+          <g className="art-float">
+            <rect x="52" y="40" width="126" height="80" rx="10" fill="var(--card)" stroke="var(--ink)" strokeWidth="3.5" />
+            <path d="M66 58h98M66 76h72M66 94h54" stroke="var(--ink)" strokeWidth="3.5" />
+          </g>
+          <circle className="art-pulse" cx="190" cy="42" r="10" fill="var(--accent)" stroke="var(--ink)" strokeWidth="3" />
+        </g>
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 230 140" aria-hidden="true">
+      <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M22 118h186" stroke="var(--ink)" strokeWidth="3.5" />
+        <path d="M40 118c22-34 54-52 92-56" stroke="var(--ink)" strokeWidth="3.5" strokeDasharray="1 11" />
+        <g className="art-float">
+          <path d="M132 74l52-30-14 56-16-12-22 8z" fill="var(--accent)" stroke="var(--ink)" strokeWidth="3.5" />
+        </g>
+        <circle className="art-pulse" cx="196" cy="34" r="9" fill="var(--paper)" stroke="var(--ink)" strokeWidth="3" />
+      </g>
+    </svg>
+  );
+}
+
+export default function AuthFlow({ onSuccess, onFinished, onAuthed, reverifyOnly = false }) {
+  const isDesktop = useIsDesktop();
+  const reduceMotion = useReducedMotion();
+
+  const [step, setStep] = useState(reverifyOnly ? 'code' : 'college');
+  const [dir, setDir] = useState(1);
+  const [suspendedData, setSuspendedData] = useState(() => {
+    try {
+      const data = JSON.parse(localStorage.getItem('matchalize_suspended'));
+      return data?.reason ? data : null;
+    } catch {
+      return null;
+    }
+  });
+
+  /* college */
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [college, setCollege] = useState(null);
+
+  /* email */
+  const [email, setEmail] = useState('');
+  const [emailErr, setEmailErr] = useState('');
+  const [sending, setSending] = useState(false);
+
+  /* code */
+  const [digits, setDigits] = useState(['', '', '', '', '', '']);
+  const [codeErr, setCodeErr] = useState('');
+  const [verifying, setVerifying] = useState(false);
+  const [verified, setVerified] = useState(false);
+
+  /* request */
+  const [requestSent, setRequestSent] = useState(false);
+  const [requestBusy, setRequestBusy] = useState(false);
+  const [requestErr, setRequestErr] = useState('');
+  const [requestForm, setRequestForm] = useState({ name: '', email: '', city: '', state: '' });
+
+  /* keyboard: how far the input needs to lift, with hard caps */
+  const [kb, setKb] = useState({ open: false, height: 0, lift: 0 });
+
+  const fieldRef = useRef(null);
+  const boxRefs = useRef([]);
+  const rootRef = useRef(null);
+
+  const { login } = useAuth() || {};
+
+  // Auth is cream where the splash is near-black, so the status-bar strip and
+  // the overscroll gutter must switch with it or the two read as different apps.
+  useChromeColor(M.paper);
+
+  /* ---------- keyboard handling (the threshold fix) ---------- */
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return undefined;
+    let raf = 0;
+
+    const measure = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const kbH = Math.round(window.innerHeight - vv.height - vv.offsetTop);
+
+        /* threshold 1: only treat it as a keyboard above 110px (ignores toolbar jitter) */
+        if (kbH <= 110) {
+          setKb((k) => (k.open || k.lift || k.height ? { open: false, height: 0, lift: 0 } : k));
+          return;
+        }
+
+        /* stop the browser's auto-pan — that's what flung the headline away.
+           The root is its own scroll container, so reset that too. */
+        if (window.scrollY > 0) window.scrollTo(0, 0);
+        const root = rootRef.current;
+        if (root && root.scrollTop) root.scrollTop = 0;
+
+        let lift = 0;
+        const el = fieldRef.current;
+        if (el && el.getBoundingClientRect) {
+          const r = el.getBoundingClientRect();
+          /* threshold 2: lift the minimum needed to clear the keyboard… */
+          const needed = Math.round(r.bottom + 14 - vv.height);
+          /* threshold 3: …but never more than 190px, so it can't fly off */
+          lift = Math.max(0, Math.min(needed, 190));
+        }
+        setKb({ open: true, height: kbH, lift });
+      });
+    };
+
+    vv.addEventListener('resize', measure);
+    vv.addEventListener('scroll', measure);
+    measure();
+    return () => {
+      vv.removeEventListener('resize', measure);
+      vv.removeEventListener('scroll', measure);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
+
+  /* ---------- navigation ---------- */
+  const go = (next) => {
+    if (next === step) return;
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    setKb({ open: false, height: 0, lift: 0 });
+    setDir(STEP_ORDER.indexOf(next) >= STEP_ORDER.indexOf(step) ? 1 : -1);
+    setStep(next);
+  };
+
+  const finish = () => {
+    const cb = onSuccess || onFinished || onAuthed;
+    if (cb) cb();
+  };
+
+  /* ---------- college search ---------- */
+  useEffect(() => {
+    if (step !== 'college') return undefined;
+    const q = query.trim();
+    if (q.length < 2) {
+      setResults([]);
+      setSearching(false);
+      return undefined;
+    }
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        /* GET /api/colleges?q= — the route matches name, city and state.
+           The server caps at 50 and applies the campus allow-list gate. */
+        const res = await api.get(`/colleges?q=${encodeURIComponent(q)}`);
+        const list = Array.isArray(res) ? res : (res?.colleges || []);
+        setResults(list.slice(0, 9));
+      } catch {
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 260);
+    return () => clearTimeout(t);
+  }, [query, step]);
+
+  const chooseCollege = (c) => {
+    triggerHaptic('light');
+    setCollege(c);
+    setQuery(c.name);
+    setTimeout(() => go('email'), 420);
+  };
+
+  /* ---------- email ---------- */
+  const submitEmail = async (e) => {
+    e && e.preventDefault();
+    if (!college) return;
+    const value = email.trim().toLowerCase();
+
+    /* Soft client check only — POST /auth/send-otp re-validates the domain
+       against the college server-side and that message wins. */
+    const domains = college.domains || [];
+    if (domains.length && !domains.some((d) => value.endsWith(`@${String(d).toLowerCase().replace(/^@/, '')}`))) {
+      setEmailErr(`hmm — that doesn't look like a ${college.name} address.`);
+      return;
+    }
+
+    setSending(true);
+    setEmailErr('');
+    try {
+      await api.post('/auth/send-otp', { email: value, collegeCode: college.code });
+      triggerHaptic('light');
+      go('code');
+    } catch (err) {
+      triggerHaptic('heavy');
+      setEmailErr(err?.message || "couldn't send the code. one more try?");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  /* ---------- college request ---------- */
+  const submitRequest = async (e) => {
+    e && e.preventDefault();
+    if (!requestForm.email.trim()) return;
+
+    setRequestBusy(true);
+    setRequestErr('');
+    try {
+      await api.post('/colleges/request', {
+        ...requestForm,
+        collegeName: query.trim() || requestForm.collegeName,
+        email: requestForm.email.trim().toLowerCase(),
+      });
+      triggerHaptic('success');
+      setRequestSent(true);
+    } catch (err) {
+      triggerHaptic('heavy');
+      setRequestErr(err?.message || "couldn't send that request. one more try?");
+    } finally {
+      setRequestBusy(false);
+    }
+  };
+
+  /* ---------- code ---------- */
+  const setDigit = (i, raw) => {
+    const ch = (raw || '').replace(/\D/g, '').slice(-1);
+    setDigits((prev) => { const n = [...prev]; n[i] = ch; return n; });
+    setCodeErr('');
+    if (ch && i < 5) boxRefs.current[i + 1]?.focus();
+  };
+
+  const onDigitKey = (i, e) => {
+    if (e.key === 'Backspace' && !digits[i] && i > 0) {
+      e.preventDefault();
+      boxRefs.current[i - 1]?.focus();
+      setDigits((prev) => { const n = [...prev]; n[i - 1] = ''; return n; });
+    }
+  };
+
+  const onDigitPaste = (e) => {
+    const text = (e.clipboardData?.getData('text') || '').replace(/\D/g, '').slice(0, 6);
+    if (!text) return;
+    e.preventDefault();
+    setDigits(Array.from({ length: 6 }, (_, i) => text[i] || ''));
+    boxRefs.current[Math.min(text.length, 5)]?.focus();
+  };
+
+  const verifyCode = async (e) => {
+    e && e.preventDefault();
+    const code = digits.join('');
+    if (code.length < 6 || verifying || verified) return;
+    setVerifying(true);
+    setCodeErr('');
+
+    try {
+      if (reverifyOnly) {
+        await api.post('/auth/reverify/confirm', { otp: code });
+        triggerHaptic('success');
+        finish();
+        return;
+      }
+
+      const res = await api.post('/auth/verify-otp', { email: email.trim().toLowerCase(), otp: code });
+      triggerHaptic('success');
+      setVerified(true);
+
+      try { localStorage.removeItem('matchalize_suspended'); } catch { /* ignore */ }
+      login?.(res.user);
+      if (socket && socket.disconnected) socket.connect();
+
+      setTimeout(() => go('next'), 900);
+    } catch (err) {
+      triggerHaptic('heavy');
+      setCodeErr(err?.message || "that code didn't match. try again?");
+      setDigits(['', '', '', '', '', '']);
+      setTimeout(() => boxRefs.current[0]?.focus(), 60);
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const resendCode = async () => {
+    if (reverifyOnly) {
+      try { await api.post('/auth/reverify'); } catch { /* quiet */ }
+      return;
+    }
+    if (!college) return;
+    try {
+      await api.post('/auth/send-otp', { email: email.trim().toLowerCase(), collegeCode: college.code });
+    } catch { /* quiet */ }
+  };
+
+  useEffect(() => {
+    if (step !== 'code') return undefined;
+    const t = setTimeout(() => boxRefs.current[0]?.focus(), 520);
+    return () => clearTimeout(t);
+  }, [step]);
+
+  /* Annual re-verification: the code is sent by the server on request. */
+  useEffect(() => {
+    if (!reverifyOnly) return undefined;
+    let cancelled = false;
+    api.post('/auth/reverify')
+      .catch((err) => {
+        if (!cancelled) setCodeErr(err?.message || 'Could not send your verification code.');
+      });
+    return () => { cancelled = true; };
+  }, [reverifyOnly]);
+
+  /* Suspension is signalled over HTTP (a 403 that api.js intercepts) and by
+     the shared socket writing localStorage — not by a bespoke socket event. */
+  useEffect(() => {
+    const onStorage = () => {
+      try {
+        const data = JSON.parse(localStorage.getItem('matchalize_suspended'));
+        if (data?.reason) setSuspendedData(data);
+      } catch { /* ignore */ }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  /* Render before the style tags: AccountSuspendedScreen injects its own
+     `as-*` sheet and must never depend on an `au-*` rule being present. */
+  if (suspendedData) {
+    return (
+      <AccountSuspendedScreen
+        reason={suspendedData.reason}
+        suspendedAt={suspendedData.suspendedAt}
+        bottomSlot={
+          <button
+            type="button"
+            onClick={() => {
+              localStorage.removeItem('matchalize_suspended');
+              setSuspendedData(null);
+            }}
+          >
+            Suspension lifted? Try logging in again
+          </button>
+        }
+      />
+    );
+  }
+
+  /* direction-aware, never abrupt */
+  const screenVariants = {
+    initial: (d) => (reduceMotion ? { opacity: 0 } : { opacity: 0, x: 34 * d, y: 12, filter: 'blur(6px)' }),
+    animate: { opacity: 1, x: 0, y: 0, filter: 'blur(0px)', transition: { duration: 0.5, ease: EASE_OUT } },
+    exit: (d) => (reduceMotion
+      ? { opacity: 0, transition: { duration: 0.16 } }
+      : { opacity: 0, x: -28 * d, y: -10, filter: 'blur(6px)', transition: { duration: 0.24, ease: [0.5, 0, 0.75, 0] } }),
+  };
+
+  const showArt = isDesktop && !reverifyOnly;
+
+  return (
+    <div
+      ref={rootRef}
+      className={`au-root au-root-${step}`}
+      style={{ '--kb': kb.open ? `${kb.height}px` : '0px' }}
+    >
+      <style>{AUTH_CSS}</style>
+      <style>{MOBILE_AUTH_CSS}</style>
+      <style>{AUTH_SCENE_CSS}</style>
+      <style>{AUTH_SMOOTH_CSS}</style>
+      <style>{FLOW_FIX_CSS}</style>
+
+      <div className={`au-campus-scene au-campus-scene-${SCENE_KIND[step] || 'college'}${verified ? ' is-verified' : ''}`}>
+        <img className="au-campus-photo" src={campusPhoto} alt="" draggable="false" />
+        <div className="au-campus-wash" />
+      </div>
+
+      <div className="au-fit">
+        <div className="au-panel">
+          <div className="au-brandbar">
+            <span className="au-wordmark">
+              huh<span className="au-brand-question">?</span>
+            </span>
+          </div>
+
+          <div
+            className="au-step"
+            style={kb.open && kb.lift > 0 ? { transform: `translateY(-${kb.lift}px)` } : undefined}
+          >
+            <AnimatePresence mode="wait" custom={dir} initial={false}>
+              <motion.div
+                key={step}
+                className="au-screen"
+                custom={dir}
+                variants={screenVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+              >
+                {step === 'college' && (
+                  <>
+                    <h1 className="au-headline">your campus, <span className="au-huh">huh?</span></h1>
+                    <p className="au-sub">search your college — <b>real students only</b>, so this part matters.</p>
+
+                    <form className="au-form" onSubmit={(e) => e.preventDefault()}>
+                      <label className="au-mobile-field-label" htmlFor="au-college-search">your college</label>
+                      <div className="au-searchwrap">
+                        <span className="au-searchicon"><Search size={18} strokeWidth={2.4} /></span>
+                        <input
+                          id="au-college-search"
+                          ref={(el) => { fieldRef.current = el; }}
+                          className="au-search"
+                          type="text"
+                          inputMode="search"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="none"
+                          spellCheck="false"
+                          placeholder="start typing your college…"
+                          value={query}
+                          onChange={(e) => { setQuery(e.target.value); setCollege(null); setRequestSent(false); }}
+                        />
+                      </div>
+
+                      {(results.length > 0 || (query.trim().length >= 2 && !college)) && (
+                        <div className="au-results" role="listbox" aria-label="College suggestions">
+                          {results.map((c) => {
+                            const chosen = college && c.code === college.code;
+                            return (
+                              <button
+                                type="button"
+                                key={c.code || c.name}
+                                role="option"
+                                aria-selected={!!chosen}
+                                className={`au-result${chosen ? ' chosen' : ''}`}
+                                onClick={() => chooseCollege(c)}
+                              >
+                                <span className="au-result-name">{c.name}</span>
+                                <span className="au-result-meta">
+                                  {[c.city, c.state].filter(Boolean).join(', ') || c.domains?.[0] || ''}
+                                </span>
+                              </button>
+                            );
+                          })}
+                          {results.length === 0 && (
+                            <div>
+                              <p className="au-empty">
+                                {searching ? 'looking…' : `no match for “${query.trim()}” — check the spelling?`}
+                              </p>
+                              {!searching && !requestSent && (
+                                <button
+                                  className="au-cta"
+                                  type="button"
+                                  onClick={() => {
+                                    setRequestForm((f) => ({ ...f, email, collegeName: query.trim() }));
+                                    go('request');
+                                  }}
+                                >
+                                  request this college
+                                </button>
+                              )}
+                              {requestSent && (
+                                <div className="au-strip">
+                                  <CheckCircle2 size={17} strokeWidth={2.4} />
+                                  <span>request received</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </form>
+                  </>
+                )}
+
+                {step === 'email' && (
+                  <>
+                    <h1 className="au-headline">college email, <span className="au-huh">huh?</span></h1>
+                    <p className="au-sub">the one your college gave you. we send a <b>6-digit code</b> there — nothing else.</p>
+
+                    {college && (
+                      <div className="au-strip">
+                        <CheckCircle2 size={17} strokeWidth={2.4} />
+                        <span>{college.name}</span>
+                        <button type="button" className="au-ghost au-strip-change" onClick={() => go('college')}>change</button>
+                      </div>
+                    )}
+
+                    <form className="au-form" onSubmit={submitEmail}>
+                      <label className="au-mobile-field-label" htmlFor="au-email">college email</label>
+                      <input
+                        id="au-email"
+                        ref={(el) => { fieldRef.current = el; }}
+                        className="au-input"
+                        type="email"
+                        inputMode="email"
+                        autoComplete="email"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck="false"
+                        placeholder={college?.domains?.[0] ? `you@${college.domains[0]}` : 'you@college.edu'}
+                        value={email}
+                        onChange={(e) => { setEmail(e.target.value); setEmailErr(''); }}
+                        disabled={sending}
+                      />
+                      {emailErr && <div className="au-banner"><p>{emailErr}</p></div>}
+                      <button className="au-cta" type="submit" disabled={sending || !email.trim()}>
+                        {sending ? 'sending…' : 'send my code'}
+                      </button>
+                      <button type="button" className="au-ghost" onClick={() => go('college')} disabled={sending}>
+                        ← wrong college? go back
+                      </button>
+                    </form>
+                  </>
+                )}
+
+                {step === 'request' && (
+                  <>
+                    <h1 className="au-headline">tell us your campus, <span className="au-huh">huh?</span></h1>
+                    <p className="au-sub">we'll add <b>{query.trim() || 'your college'}</b> and let you in once it's live.</p>
+
+                    {requestSent ? (
+                      <>
+                        <div className="au-strip">
+                          <CheckCircle2 size={17} strokeWidth={2.4} />
+                          <span>request received — we'll email you</span>
+                        </div>
+                        <button className="au-cta" type="button" onClick={() => go('college')}>
+                          back to search
+                        </button>
+                      </>
+                    ) : (
+                      <form className="au-form" onSubmit={submitRequest}>
+                        <label className="au-mobile-field-label" htmlFor="au-req-email">your email</label>
+                        <input
+                          id="au-req-email"
+                          className="au-input"
+                          type="email"
+                          inputMode="email"
+                          autoComplete="email"
+                          spellCheck="false"
+                          placeholder="you@college.edu"
+                          value={requestForm.email}
+                          onChange={(e) => setRequestForm((f) => ({ ...f, email: e.target.value }))}
+                          disabled={requestBusy}
+                        />
+
+                        <label className="au-mobile-field-label" htmlFor="au-req-name">your name</label>
+                        <input
+                          id="au-req-name"
+                          className="au-input"
+                          type="text"
+                          autoComplete="name"
+                          placeholder="what your classmates call you"
+                          value={requestForm.name}
+                          onChange={(e) => setRequestForm((f) => ({ ...f, name: e.target.value }))}
+                          disabled={requestBusy}
+                        />
+
+                        <div className="au-rowsep">
+                          <input
+                            className="au-input"
+                            type="text"
+                            autoComplete="address-level2"
+                            placeholder="city"
+                            aria-label="City"
+                            value={requestForm.city}
+                            onChange={(e) => setRequestForm((f) => ({ ...f, city: e.target.value }))}
+                            disabled={requestBusy}
+                          />
+                          <input
+                            className="au-input"
+                            type="text"
+                            autoComplete="address-level1"
+                            placeholder="state"
+                            aria-label="State"
+                            value={requestForm.state}
+                            onChange={(e) => setRequestForm((f) => ({ ...f, state: e.target.value }))}
+                            disabled={requestBusy}
+                          />
+                        </div>
+
+                        {requestErr && <div className="au-banner"><p>{requestErr}</p></div>}
+                        <button className="au-cta" type="submit" disabled={requestBusy || !requestForm.email.trim()}>
+                          {requestBusy ? 'sending…' : 'request my college'}
+                        </button>
+                        <button type="button" className="au-ghost" onClick={() => go('college')} disabled={requestBusy}>
+                          ← keep searching
+                        </button>
+                      </form>
+                    )}
+                  </>
+                )}
+
+                {step === 'code' && (
+                  <>
+                    <h1 className="au-headline">check your inbox, <span className="au-huh">huh?</span></h1>
+                    {reverifyOnly ? (
+                      <p className="au-sub">a fresh code for your annual re-verification.</p>
+                    ) : (
+                      <p className="au-sub">six digits, headed to <b className="low">{email}</b>.</p>
+                    )}
+
+                    <form className="au-form" onSubmit={verifyCode}>
+                      <div className="au-otp" ref={(el) => { fieldRef.current = el; }}>
+                        {digits.map((d, i) => (
+                          <input
+                            key={i}
+                            ref={(el) => { boxRefs.current[i] = el; }}
+                            className={`au-box${codeErr ? ' err' : ''}${verified ? ' ok' : ''}`}
+                            type="text"
+                            inputMode="numeric"
+                            aria-label={`Digit ${i + 1}`}
+                            autoComplete={i === 0 ? 'one-time-code' : 'off'}
+                            maxLength={1}
+                            value={d}
+                            onChange={(e) => setDigit(i, e.target.value)}
+                            onKeyDown={(e) => onDigitKey(i, e)}
+                            onPaste={i === 0 ? onDigitPaste : undefined}
+                            onFocus={(e) => e.target.select()}
+                            disabled={verifying || verified}
+                          />
+                        ))}
+                      </div>
+
+                      {codeErr && <div className="au-banner"><p>{codeErr}</p></div>}
+                      {verified && (
+                        <div className="au-strip"><CheckCircle2 size={17} strokeWidth={2.4} /><span>that's you — verified</span></div>
+                      )}
+
+                      <button className="au-cta" type="submit" disabled={verifying || verified || digits.join('').length < 6}>
+                        {verifying ? 'checking…' : verified ? 'verified ✓' : 'verify me'}
+                      </button>
+
+                      <div className="au-rowsep">
+                        <button type="button" className="au-ghost" onClick={resendCode}>resend code</button>
+                        {!reverifyOnly && (
+                          <button type="button" className="au-ghost" onClick={() => go('email')}>wrong email?</button>
+                        )}
+                      </div>
+                    </form>
+                  </>
+                )}
+
+                {step === 'next' && (
+                  <>
+                    <h1 className="au-headline">let's move forward, <span className="au-huh">huh?</span></h1>
+                    <p className="au-sub">you're in — <b>{college?.name || 'your campus'}</b> is locked. here's what's coming:</p>
+
+                    <div className="au-nextlist">
+                      <div className="au-nextrow"><b>01</b><span><strong>your profile</strong> — photos, vibe, the basics</span></div>
+                      <div className="au-nextrow"><b>02</b><span><strong>your people</strong> — students from your campus only</span></div>
+                      <div className="au-nextrow"><b>03</b><span><strong>your feed</strong> — what's happening around you</span></div>
+                    </div>
+
+                    <button className="au-cta" type="button" onClick={finish}>
+                      sounds good — let's go
+                    </button>
+                  </>
+                )}
+
+                {showArt && (
+                  <div className="au-art">
+                    <StepArt kind={step} />
+                  </div>
+                )}
+              </motion.div>
+            </AnimatePresence>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
 ### ./client/src/pages/Chat.jsx
 
 ```
@@ -13693,24 +17758,10 @@ import PhotoViewer from '../components/chat/PhotoViewer';
 import ReplyPreview from '../components/chat/ReplyPreview';
 import SearchOverlay from '../components/chat/SearchOverlay';
 import ReportModal from '../components/chat/ReportModal';
-import { theme as design } from '../utils/theme';
+import neu from '../styles/neu';
 import { Search, ChevronLeft, Sparkle, MapPin, Lock } from 'lucide-react';
 
-/* ==================================================================
-   ARCHIVAL THEME & TEXTURES
-================================================================== */
-const theme = {
-  paper: 'var(--paper)',
-  surface: 'var(--surface)',
-  surfaceAlt: 'var(--surface-alt)',
-  border: 'var(--line)',
-  borderDark: 'var(--line-dark)',
-  ink: 'var(--ink)',
-  inkMuted: 'var(--ink-muted)',
-  accent: 'var(--accent)',
-  crimson: 'var(--crimson)',
-  shadowWarm: 'var(--accent-12)',
-};
+const t = neu;
 
 // crypto.randomUUID fallback for non-HTTPS / LAN environments
 const genId = () =>
@@ -13777,11 +17828,11 @@ async function fetchMessages(alignmentId, cursor = null, limit = 50) {
 ================================================================== */
 const chatTheme = {
   color: {
-    paper: 'var(--paper)', surface: 'var(--surface)', surfaceAlt: 'var(--surface-alt)', border: 'var(--line)',
-    borderDark: 'var(--line-dark)', ink: 'var(--ink)', inkSoft: 'var(--ink-soft)', inkMuted: 'var(--ink-muted)',
-    accent: 'var(--accent)', crimson: 'var(--crimson)', shadowWarm: 'var(--accent-12)', shadowDark: 'var(--ink-20)',
+    paper: t.paper, surface: t.paper, surfaceAlt: t.paper, border: t.ink,
+    borderDark: t.ink, ink: t.ink, inkSoft: t.ink2, inkMuted: t.ink3,
+    accent: t.yellow, crimson: t.coral, shadowWarm: t.yellow, shadowDark: t.ink,
   },
-  font: { display: "'Playfair Display', Georgia, serif", body: "'Inter', -apple-system, sans-serif" },
+  font: { display: t.fontHeavy, body: t.fontBody },
 };
 
 function buildTornEdge(teeth = 64) {
@@ -13812,13 +17863,13 @@ const ChatStitchSeam = React.memo(() => (
 
 const ChatPhotoCorners = React.memo(() => (
   <>
-    <span aria-hidden="true" style={{ position: 'absolute', top: 0, left: 0, width: 24, height: 24, background: chatTheme.color.surface, clipPath: 'polygon(0 0, 100% 0, 0 100%)', zIndex: 3 }} />
-    <span aria-hidden="true" style={{ position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, background: chatTheme.color.surface, clipPath: 'polygon(100% 100%, 0 100%, 100% 0)', zIndex: 3 }} />
+    <span aria-hidden="true" style={{ position: 'absolute', top: 0, left: 0, width: 24, height: 24, background: t.card, clipPath: 'polygon(0 0, 100% 0, 0 100%)', zIndex: 3 }} />
+    <span aria-hidden="true" style={{ position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, background: t.card, clipPath: 'polygon(100% 100%, 0 100%, 100% 0)', zIndex: 3 }} />
   </>
 ));
 
 const ChatMountedPhoto = React.memo(({ src, alt, tilt, aspect }) => (
-  <div className="pc-dynamic-shadow" style={{ '--tilt': tilt, transform: 'rotate(var(--tilt, 0deg))', position: 'relative', width: '100%', height: aspect ? 'auto' : '200px', aspectRatio: aspect || undefined, borderRadius: '6px', border: `6px solid ${chatTheme.color.surface}`, backgroundColor: chatTheme.color.surfaceAlt, overflow: 'hidden' }}>
+  <div className="pc-dynamic-shadow" style={{ '--tilt': tilt, transform: 'rotate(var(--tilt, 0deg))', position: 'relative', width: '100%', height: aspect ? 'auto' : '200px', aspectRatio: aspect || undefined, borderRadius: '6px', border: `6px solid ${t.paper}`, backgroundColor: t.paper, overflow: 'hidden' }}>
     <img src={src} alt={alt} className="pc-photo-img" loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
     <ChatPhotoCorners />
     <div aria-hidden="true" style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at var(--lamp-pct-x, 50%) var(--lamp-pct-y, 30%), rgba(255,255,255,0.35) 0%, transparent 50%)', pointerEvents: 'none', zIndex: 4, mixBlendMode: 'soft-light' }} />
@@ -13827,16 +17878,16 @@ const ChatMountedPhoto = React.memo(({ src, alt, tilt, aspect }) => (
 
 const ChatIndexCard = ({ children, tilt, wide, tape = 'center' }) => {
   const getTapeConfig = () => {
-    const base = { position: 'absolute', top: '-10px', width: '36px', height: '16px', backgroundColor: 'var(--tape-90)', backdropFilter: 'blur(3px)', border: '1px solid var(--accent-20)', zIndex: 5 };
+    const base = { position: 'absolute', top: '-10px', width: '36px', height: '16px', backgroundColor: t.paper, backdropFilter: 'blur(3px)', border: `1px solid ${t.yellow}`, zIndex: 5 };
     if (tape === 'top-right') return { ...base, right: '16px', '--tape-rot': '4deg', transform: 'rotate(4deg)' };
     if (tape === 'top-left') return { ...base, left: '16px', '--tape-rot': '-4deg', transform: 'rotate(-4deg)' };
     return { ...base, left: '50%', '--tape-rot': '-1deg', transform: 'translateX(-50%) rotate(-1deg)' };
   };
   return (
-    <div className="pc-dynamic-shadow" style={{ '--tilt': tilt, transform: 'rotate(var(--tilt, 0deg))', backgroundColor: chatTheme.color.surface, backgroundImage: `linear-gradient(${chatTheme.color.accent}11 1px, transparent 1px)`, backgroundSize: '100% 24px', border: `1px solid ${chatTheme.color.border}`, borderRadius: '8px', padding: '24px 16px 20px', height: wide ? 'auto' : '100%', minHeight: wide ? undefined : '140px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+    <div className="pc-dynamic-shadow" style={{ '--tilt': tilt, transform: 'rotate(var(--tilt, 0deg))', backgroundColor: t.paper, backgroundImage: `linear-gradient(${t.yellow}11 1px, transparent 1px)`, backgroundSize: '100% 24px', border: `1px solid ${t.ink}`, borderRadius: t.radius.md, padding: '24px 16px 20px', height: wide ? 'auto' : '100%', minHeight: wide ? undefined : '140px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
       <span aria-hidden="true" className="pc-tape" style={getTapeConfig()} />
-      <span aria-hidden="true" className="pc-metallic-foil" style={{ fontFamily: chatTheme.font.display, fontSize: '32px', lineHeight: 0.5, opacity: 0.45, marginBottom: '8px', display: 'block', background: `linear-gradient(-135deg, var(--accent-strong) 0%, var(--accent) 30%, var(--gold) 50%, var(--accent) 70%, var(--accent-strong) 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>“</span>
-      <p style={{ fontFamily: chatTheme.font.display, fontSize: '15px', fontStyle: 'italic', color: chatTheme.color.ink, margin: '0 0 4px 0', lineHeight: 1.45, textAlign: 'center', fontWeight: 600 }}>{children}</p>
+      <span aria-hidden="true" className="pc-metallic-foil" style={{ fontFamily: t.fontHeavy, fontSize: '32px', lineHeight: 0.5, opacity: 0.45, marginBottom: '8px', display: 'block', background: `linear-gradient(-135deg, ${t.yellowDeep} 0%, ${t.yellow} 30%, ${t.yellow} 50%, ${t.yellow} 70%, ${t.yellowDeep} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>“</span>
+      <p style={{ fontFamily: t.fontHeavy, fontSize: '15px', fontStyle: 'italic', color: t.ink, margin: '0 0 4px 0', lineHeight: 1.45, textAlign: 'center', fontWeight: 600 }}>{children}</p>
     </div>
   );
 };
@@ -13846,15 +17897,15 @@ const ChatProfileView = ({ profile, onClose, unavailable }) => {
 
   if (unavailable) {
     return (
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(20,15,10,0.7)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
-        <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxHeight: '50dvh', backgroundColor: chatTheme.color.paper, borderTopLeftRadius: '24px', borderTopRightRadius: '24px', display: 'flex', flexDirection: 'column', boxShadow: '0 -12px 32px var(--wm-20)', alignItems: 'center', justifyContent: 'center', padding: '60px 24px' }}>
-          <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'var(--accent-08)', border: '2px solid var(--accent-15)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '20px' }}>
-            <Lock size={28} color={chatTheme.color.inkMuted} strokeWidth={1.5} />
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(25,25,25,0.7)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
+        <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxHeight: '50dvh', backgroundColor: t.paper, borderTopLeftRadius: t.radius.lg, borderTopRightRadius: t.radius.lg, display: 'flex', flexDirection: 'column', boxShadow: `0 -12px 32px ${t.ink}`, alignItems: 'center', justifyContent: 'center', padding: '60px 24px' }}>
+          <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'rgba(255, 212, 61, 0.1)', border: `2px solid ${t.yellow}`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '20px' }}>
+            <Lock size={28} color={t.ink3} strokeWidth={1.5} />
           </div>
-          <p style={{ fontFamily: chatTheme.font.display, fontSize: '20px', fontWeight: 700, color: chatTheme.color.ink, margin: '0 0 8px', textAlign: 'center', letterSpacing: '-0.02em' }}>
+          <p style={{ fontFamily: t.fontHeavy, fontSize: '20px', fontWeight: 700, color: t.ink, margin: '0 0 8px', textAlign: 'center', letterSpacing: '-0.02em' }}>
             This user is no longer available
           </p>
-          <p style={{ fontFamily: chatTheme.font.body, fontSize: '13px', color: chatTheme.color.inkMuted, margin: 0, textAlign: 'center', lineHeight: 1.5 }}>
+          <p style={{ fontFamily: t.fontBody, fontSize: '13px', color: t.ink3, margin: 0, textAlign: 'center', lineHeight: 1.5 }}>
             This profile is no longer accessible.
           </p>
         </motion.div>
@@ -13863,14 +17914,14 @@ const ChatProfileView = ({ profile, onClose, unavailable }) => {
   }
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(20,15,10,0.7)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
-      <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} style={{ width: '100%', maxHeight: '92vh', backgroundColor: chatTheme.color.paper, borderTopLeftRadius: '24px', borderTopRightRadius: '24px', display: 'flex', flexDirection: 'column', boxShadow: '0 -12px 32px var(--wm-20)' }} onClick={(e) => e.stopPropagation()}>
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(25,25,25,0.7)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
+      <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} style={{ width: '100%', maxHeight: '92vh', backgroundColor: t.paper, borderTopLeftRadius: t.radius.lg, borderTopRightRadius: t.radius.lg, display: 'flex', flexDirection: 'column', boxShadow: `0 -12px 32px ${t.ink}` }} onClick={(e) => e.stopPropagation()}>
         
         {/* Header */}
-        <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${chatTheme.color.borderDark}`, backgroundColor: chatTheme.color.paper, borderTopLeftRadius: '24px', borderTopRightRadius: '24px', zIndex: 10, position: 'sticky', top: 0 }}>
-          <span style={{ fontFamily: chatTheme.font.display, fontSize: '20px', fontWeight: 700, color: chatTheme.color.ink }}>View Profile</span>
+        <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${t.ink}`, backgroundColor: t.paper, borderTopLeftRadius: t.radius.lg, borderTopRightRadius: t.radius.lg, zIndex: 10, position: 'sticky', top: 0 }}>
+          <span style={{ fontFamily: t.fontHeavy, fontSize: '20px', fontWeight: 700, color: t.ink }}>View Profile</span>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }} aria-label="Close profile">
-            <Icon path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} size={24} color={chatTheme.color.inkMuted} />
+            <Icon path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} size={24} color={t.ink3} />
           </button>
         </div>
 
@@ -13879,22 +17930,22 @@ const ChatProfileView = ({ profile, onClose, unavailable }) => {
           
           {/* 1. Hero Photo Section */}
           <div style={{ width: '100%', position: 'relative' }}>
-            <div style={{ width: '100%', aspectRatio: '4/5.8', position: 'relative', backgroundColor: chatTheme.color.surfaceAlt, overflow: 'hidden' }}>
+            <div style={{ width: '100%', aspectRatio: '4/5.8', position: 'relative', backgroundColor: t.paper, overflow: 'hidden' }}>
               <img src={profile.photos?.[0] || 'https://via.placeholder.com/600x800/e8e4d9/1a1a1a?text=No+Photo'} alt={profile.name} className="pc-photo-img" loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
               <div aria-hidden="true" style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 50% 30%, rgba(255,255,255,0.2) 0%, transparent 50%), linear-gradient(to top, rgba(15,12,10,0.98) 0%, rgba(15,12,10,0.6) 40%, rgba(0,0,0,0.1) 75%, transparent 100%)', pointerEvents: 'none' }} />
               <div style={{ position: 'absolute', bottom: '38px', left: '24px', right: '24px', zIndex: 2 }}>
-                <div className="pc-fade-1" style={{ display: 'inline-block', padding: '5px 12px', background: 'var(--paper-20)', backdropFilter: 'blur(12px)', borderRadius: design.radius.sm, border: '1px solid rgba(255,255,255,0.4)', marginBottom: '12px' }}>
-                  <span style={{ fontFamily: chatTheme.font.body, fontSize: '10px', color: '#fff', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: 700 }}>Archival Subject</span>
+                <div className="pc-fade-1" style={{ display: 'inline-block', padding: '5px 12px', background: 'rgba(255, 249, 236, 0.2)', backdropFilter: 'blur(12px)', borderRadius: t.radius.sm, border: '1px solid rgba(255,255,255,0.4)', marginBottom: '12px' }}>
+                  <span style={{ fontFamily: t.fontBody, fontSize: '10px', color: '#fff', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: 700 }}>Archival Subject</span>
                 </div>
-                <h2 className="pc-fade-1" style={{ fontFamily: chatTheme.font.display, fontSize: 'clamp(30px, 7vw, 42px)', color: '#fff', margin: 0, fontWeight: 700, letterSpacing: '-0.025em', lineHeight: 1.05, textShadow: '0 4px 20px rgba(0,0,0,0.6)' }}>
+                <h2 className="pc-fade-1" style={{ fontFamily: t.fontHeavy, fontSize: 'clamp(30px, 7vw, 42px)', color: '#fff', margin: 0, fontWeight: 700, letterSpacing: '-0.025em', lineHeight: 1.05, textShadow: '0 4px 20px rgba(0,0,0,0.6)' }}>
                   {profile.name || 'Anonymous'}<span style={{ fontWeight: 400, opacity: 0.85 }}>, {profile.age || '—'}</span>
                 </h2>
-                <p className="pc-fade-2" style={{ fontFamily: chatTheme.font.body, fontSize: '11px', color: 'rgba(255,255,255,0.92)', margin: '8px 0 0 0', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: 600, display: 'flex', alignItems: 'center' }}>
-                  {profile.branch || 'General'} <Sparkle size={12} color="var(--gold)" style={{ margin: '0 8px', flexShrink: 0 }} /> {profile.year?.toUpperCase() || '—'}
+                <p className="pc-fade-2" style={{ fontFamily: t.fontBody, fontSize: '11px', color: 'rgba(255,255,255,0.92)', margin: '8px 0 0 0', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: 600, display: 'flex', alignItems: 'center' }}>
+                  {profile.branch || 'General'} <Sparkle size={12} color={t.yellow} style={{ margin: '0 8px', flexShrink: 0 }} /> {profile.year?.toUpperCase() || '—'}
                 </p>
               </div>
             </div>
-            <div aria-hidden="true" style={{ width: '100%', height: '24px', backgroundColor: chatTheme.color.paper, clipPath: CHAT_TORN_EDGE_CLIP, marginTop: '-14px', position: 'relative', zIndex: 3 }} />
+            <div aria-hidden="true" style={{ width: '100%', height: '24px', backgroundColor: t.paper, clipPath: CHAT_TORN_EDGE_CLIP, marginTop: '-14px', position: 'relative', zIndex: 3 }} />
           </div>
 
           <div style={{ padding: '24px 24px 0 24px' }}>
@@ -13902,9 +17953,9 @@ const ChatProfileView = ({ profile, onClose, unavailable }) => {
             {/* 2. Vitals */}
             <ChatSectionLabel>Vitals</ChatSectionLabel>
             <div style={{ display: 'flex', gap: '8px', marginBottom: '24px', flexWrap: 'wrap' }}>
-              {profile.gender && <span className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${chatTheme.color.border}`, borderRadius: design.radius.sm, backgroundColor: chatTheme.color.surface, color: chatTheme.color.ink, fontFamily: chatTheme.font.body, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px' }}>{profile.gender}</span>}
-              {profile.pronouns && <span className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${chatTheme.color.border}`, borderRadius: design.radius.sm, backgroundColor: chatTheme.color.surface, color: chatTheme.color.ink, fontFamily: chatTheme.font.body, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px' }}>{profile.pronouns}</span>}
-              {profile.hostel && <span className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${chatTheme.color.border}`, borderRadius: design.radius.sm, backgroundColor: chatTheme.color.surface, color: chatTheme.color.ink, fontFamily: chatTheme.font.body, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px', display: 'inline-flex', alignItems: 'center' }}><MapPin size={12} style={{ marginRight: 4 }} /> {profile.hostel}</span>}
+              {profile.gender && <span className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${t.ink}`, borderRadius: t.radius.sm, backgroundColor: t.card, color: t.ink, fontFamily: t.fontBody, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px' }}>{profile.gender}</span>}
+              {profile.pronouns && <span className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${t.ink}`, borderRadius: t.radius.sm, backgroundColor: t.card, color: t.ink, fontFamily: t.fontBody, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px' }}>{profile.pronouns}</span>}
+              {profile.hostel && <span className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${t.ink}`, borderRadius: t.radius.sm, backgroundColor: t.card, color: t.ink, fontFamily: t.fontBody, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px', display: 'inline-flex', alignItems: 'center' }}><MapPin size={12} style={{ marginRight: 4 }} /> {profile.hostel}</span>}
             </div>
 
             <ChatStitchSeam />
@@ -13914,7 +17965,7 @@ const ChatProfileView = ({ profile, onClose, unavailable }) => {
               <ChatSectionLabel>Seeking</ChatSectionLabel>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 {(profile.intent && profile.intent.length > 0 ? profile.intent : ['Long-term', 'Connection', 'Growth']).map((item, i) => (
-                  <span key={i} className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${chatTheme.color.ink}`, borderRadius: design.radius.sm, backgroundColor: chatTheme.color.ink, color: chatTheme.color.paper, fontFamily: chatTheme.font.body, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px' }}>
+                  <span key={i} className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${t.ink}`, borderRadius: t.radius.sm, backgroundColor: t.ink, color: t.paper, fontFamily: t.fontBody, fontSize: '11px', fontWeight: 600, letterSpacing: '0.2px' }}>
                     {item}
                   </span>
                 ))}
@@ -13927,7 +17978,7 @@ const ChatProfileView = ({ profile, onClose, unavailable }) => {
                 <ChatSectionLabel>Recorded Curiosities</ChatSectionLabel>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                   {profile.interests.map((interest, i) => (
-                    <span key={i} className="pc-pill" style={{ padding: '6px 12px', border: `1px solid var(--tape-70)`, borderRadius: design.radius.sm, backgroundColor: chatTheme.color.surfaceAlt, color: chatTheme.color.ink, fontFamily: chatTheme.font.body, fontSize: '11px', fontWeight: 500 }}>
+                    <span key={i} className="pc-pill" style={{ padding: '6px 12px', border: `1px solid ${t.ink}`, borderRadius: t.radius.sm, backgroundColor: t.paper, color: t.ink, fontFamily: t.fontBody, fontSize: '11px', fontWeight: 500 }}>
                       {interest}
                     </span>
                   ))}
@@ -13975,12 +18026,12 @@ const ChatProfileView = ({ profile, onClose, unavailable }) => {
           .pc-fade-2 { animation: pcFadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both; }
           .pc-scroll::-webkit-scrollbar { width: 4px; }
           .pc-scroll::-webkit-scrollbar-track { background: transparent; }
-          .pc-scroll::-webkit-scrollbar-thumb { background: ${chatTheme.color.borderDark}; border-radius: 4px; }
+          .pc-scroll::-webkit-scrollbar-thumb { background: ${t.ink}; border-radius: 4px; }
           .pc-sweep { animation: pcRadarSweep 1.6s cubic-bezier(0.22, 1, 0.36, 1) forwards; transform-origin: 44px 44px; }
           .pc-hint-pulse { animation: pcHintPulse 2.8s ease-in-out infinite; }
           .pc-dynamic-shadow { will-change: transform; transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.25s ease; }
           .pc-dynamic-shadow:active { transform: scale3d(0.98, 0.98, 1) translate3d(0, 0, 0) !important; transition: transform 0.1s cubic-bezier(0, 0, 0.2, 1) !important; }
-          .pc-metallic-foil { background: linear-gradient(-135deg, var(--accent-strong) 0%, var(--accent) 30%, var(--gold) 50%, var(--accent) 70%, var(--accent-strong) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+          .pc-metallic-foil { background: linear-gradient(-135deg, ${t.yellowDeep} 0%, ${t.yellow} 30%, ${t.yellow} 50%, ${t.yellow} 70%, ${t.yellowDeep} 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
           .pc-pill { transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.25s ease; display: inline-flex; align-items: center; will-change: transform; }
           .pc-tape { transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1); will-change: transform; }
           .pc-photo-img { transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1); will-change: transform; }
@@ -14420,7 +18471,7 @@ const Chat = ({ match, onBack }) => {
 
       {/* ARCHIVAL HEADER WITH ONLINE STATUS */}
       <div style={styles.header}>
-        <button style={styles.backBtn} onPointerDown={(e) => { e.preventDefault(); triggerHaptic('light'); onBack(); }} onClick={() => { triggerHaptic('light'); onBack(); }} aria-label="Go back to letters"><ChevronLeft size={24} color={theme.ink} /></button>
+        <button style={styles.backBtn} onPointerDown={(e) => { e.preventDefault(); triggerHaptic('light'); onBack(); }} onClick={() => { triggerHaptic('light'); onBack(); }} aria-label="Go back to letters"><ChevronLeft size={24} color={t.ink} /></button>
 
         <div style={styles.headerLeft} onClick={() => setShowProfile(true)}>
           <div style={{ position: 'relative' }}>
@@ -14445,12 +18496,12 @@ const Chat = ({ match, onBack }) => {
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button style={styles.iconBtn} onClick={() => setShowSearch(true)} title="Search" aria-label="Search messages">
-            <Search size={20} color={theme.ink} />
+            <Search size={20} color={t.ink} />
           </button>
 
           <div style={{ position: 'relative' }}>
             <button style={styles.iconBtn} onClick={() => setShowHeaderMenu(!showHeaderMenu)} aria-label="Open chat options">
-              <Icon path={<><circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" /></>} size={20} color={theme.ink} />
+              <Icon path={<><circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" /></>} size={20} color={t.ink} />
             </button>
             
             <AnimatePresence>
@@ -14463,16 +18514,16 @@ const Chat = ({ match, onBack }) => {
                     <Icon path={<><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>} size={16} />
                     View Profile
                   </button>
-                  <button style={{...styles.dropdownItem, color: theme.crimson}} onClick={() => { handleReport(); setShowHeaderMenu(false); }}>
-                    <Icon path={<><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" /></>} size={16} color={theme.crimson} />
+                  <button style={{...styles.dropdownItem, color: t.red}} onClick={() => { handleReport(); setShowHeaderMenu(false); }}>
+                    <Icon path={<><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" /></>} size={16} color={t.red} />
                     Report User
                   </button>
-                  <button style={{...styles.dropdownItem, color: theme.crimson}} onClick={handleBlock}>
-                    <Icon path={<><circle cx="12" cy="12" r="10" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /></>} size={16} color={theme.crimson} />
+                  <button style={{...styles.dropdownItem, color: t.red}} onClick={handleBlock}>
+                    <Icon path={<><circle cx="12" cy="12" r="10" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /></>} size={16} color={t.red} />
                     Block User
                   </button>
-                  <button style={{...styles.dropdownItem, color: theme.crimson}} onClick={handleUnmatch}>
-                    <Icon path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} size={16} color={theme.crimson} />
+                  <button style={{...styles.dropdownItem, color: t.red}} onClick={handleUnmatch}>
+                    <Icon path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} size={16} color={t.red} />
                     Unmatch
                   </button>
                 </motion.div>
@@ -14492,13 +18543,13 @@ const Chat = ({ match, onBack }) => {
 
       {otherUnavailable && (
         <div style={{
-          background: 'var(--accent-06)',
-          borderBottom: '1px solid var(--accent-12)',
+          background: 'rgba(255, 212, 61, 0.06)',
+          borderBottom: `1px solid ${t.yellow}`,
           padding: '10px 24px',
           textAlign: 'center',
           position: 'relative', zIndex: 5,
         }}>
-          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 600, color: 'var(--ink-muted)', margin: 0 }}>
+          <p style={{ fontFamily: t.fontBody, fontSize: '13px', fontWeight: 600, color: t.ink2, margin: 0 }}>
             This user can no longer receive messages
           </p>
         </div>
@@ -14514,9 +18565,9 @@ const Chat = ({ match, onBack }) => {
         <style>{`
           .archival-scrollbar::-webkit-scrollbar { width: 4px; }
           .archival-scrollbar::-webkit-scrollbar-track { background: transparent; }
-          .archival-scrollbar::-webkit-scrollbar-thumb { background: ${theme.borderDark}; border-radius: 4px; }
+          .archival-scrollbar::-webkit-scrollbar-thumb { background: ${t.ink}; border-radius: 4px; }
           @keyframes blink { 0% { opacity: 0.2; } 20% { opacity: 1; } 100% { opacity: 0.2; } }
-          @keyframes highlightBg { 0% { background-color:'var(--accent-20)'; } 100% { background-color: transparent; } }
+          @keyframes highlightBg { 0% { background-color: ${t.yellow}; } 100% { background-color: transparent; } }
           .highlight-pulse { animation: highlightBg 2s ease-out forwards; }
           
           /* Interactive Button Tactile Physics */
@@ -14525,18 +18576,18 @@ const Chat = ({ match, onBack }) => {
           .tactile-btn:active { transform: scale3d(0.96, 0.96, 1) translate3d(0, 0, 0) !important; transition: transform 0.08s cubic-bezier(0, 0, 0.2, 1) !important; }
         `}</style>
         
-        {loading ? (
-          <div style={{ padding: '60px 20px', textAlign: 'center', color: theme.inkMuted, fontFamily: "'Inter', sans-serif", fontSize: '13px' }}>
-            Opening chat...
-          </div>
-        ) : error ? (
-          <div style={{ padding: '60px 20px', textAlign: 'center', color: theme.crimson, fontFamily: "'Inter', sans-serif", fontSize: '13px' }}>
-            {error}
-          </div>
-        ) : (
+{loading ? (
+            <div style={{ padding: '60px 20px', textAlign: 'center', color: t.ink3, fontFamily: t.fontBody, fontSize: '13px' }}>
+              Opening chat...
+            </div>
+          ) : error ? (
+            <div style={{ padding: '60px 20px', textAlign: 'center', color: t.red, fontFamily: t.fontBody, fontSize: '13px' }}>
+              {error}
+            </div>
+          ) : (
           <>
             {loadingMore && (
-              <div style={{ padding: '20px', textAlign: 'center', color: theme.inkMuted, fontFamily: "'Inter', sans-serif", fontSize: '12px' }}>
+              <div style={{ padding: '20px', textAlign: 'center', color: t.ink3, fontFamily: t.fontBody, fontSize: '12px' }}>
                 Loading older messages...
               </div>
             )}
@@ -14550,7 +18601,7 @@ const Chat = ({ match, onBack }) => {
                     src={m.mediaUrl || m.image}
                     alt="Opening letter"
                     onClick={() => handleImageClick(m.mediaUrl || m.image)}
-                    style={{ width: '100%', borderRadius: design?.radius?.md || '8px', margin: '8px 0', cursor: 'zoom-in', display: 'block' }}
+                    style={{ width: '100%', borderRadius: t.radius.md, margin: '8px 0', cursor: 'zoom-in', display: 'block' }}
                   />
                 )}
                 <div style={styles.openingLetterText}>{m.text}</div>
@@ -14615,7 +18666,7 @@ const Chat = ({ match, onBack }) => {
             style={styles.scrollButton}
             aria-label="Scroll to bottom"
           >
-            <Icon path={<polyline points="6 9 12 15 18 9" />} size={20} color={theme.accent} />
+            <Icon path={<polyline points="6 9 12 15 18 9" />} size={20} color={t.yellow} />
           </motion.button>
         )}
       </AnimatePresence>
@@ -14637,7 +18688,7 @@ const Chat = ({ match, onBack }) => {
           title="Attach"
           aria-label="Attach photo or file"
         >
-          <Icon path={<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />} size={22} color={theme.accent} />
+          <Icon path={<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />} size={22} color={t.yellow} />
         </button>
         
         <div style={styles.inputWrapper}>
@@ -14673,14 +18724,14 @@ const Chat = ({ match, onBack }) => {
             <Icon 
               path={<><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></>} 
               size={22} 
-              color={recording ? theme.crimson : theme.accent}
+              color={recording ? t.red : t.yellow}
             />
           </button>
         )}
       </div>
       ) : (
       <div style={{...styles.inputBar, justifyContent: 'center', padding: '12px 16px'}}>
-        <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', color: theme.inkMuted, fontStyle: 'italic' }}>
+        <span style={{ fontFamily: t.fontBody, fontSize: '13px', color: t.ink3, fontStyle: 'italic' }}>
           This conversation has ended
         </span>
       </div>
@@ -14739,10 +18790,10 @@ const Chat = ({ match, onBack }) => {
         {showActionSheet && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={styles.sheetBackdrop} onClick={() => { setShowActionSheet(false); setPendingFile(null); }}>
             <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} style={styles.sheet} onClick={(e) => e.stopPropagation()}>
-              <div style={{ padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.border}` }}>
-                <span style={{ fontFamily: "'Playfair Display', serif", fontSize: '18px', fontWeight: '700', color: theme.ink }}>Attach Media</span>
+              <div style={{ padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${t.ink}` }}>
+                <span style={{ fontFamily: t.fontHeavy, fontSize: '18px', fontWeight: '700', color: t.ink }}>Attach Media</span>
                 <button onClick={() => { setShowActionSheet(false); setPendingFile(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-                  <Icon path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} size={20} color={theme.inkMuted} />
+                  <Icon path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} size={20} color={t.ink3} />
                 </button>
               </div>
               <div style={{ padding: '16px 24px 24px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -14772,31 +18823,31 @@ const Chat = ({ match, onBack }) => {
    STYLES
 ================================================================== */
 const styles = {
-  page: { position: 'fixed', inset: 0, backgroundColor: theme.paper, display: 'flex', flexDirection: 'column', zIndex: 50, overflow: 'hidden' },
-  paperGrain: { position: 'absolute', inset: 0, backgroundImage: `url("${design?.texture?.grain || ''}")`, mixBlendMode: 'multiply', opacity: 0.85, pointerEvents: 'none', zIndex: 1 },
+  page: { position: 'fixed', inset: 0, backgroundColor: t.paper, display: 'flex', flexDirection: 'column', zIndex: 50, overflow: 'hidden' },
+  paperGrain: { position: 'absolute', inset: 0, backgroundImage: `url("${t.grain || ''}")`, mixBlendMode: 'multiply', opacity: 0.85, pointerEvents: 'none', zIndex: 1 },
   
-  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '64px', boxSizing: 'border-box', padding: '0 24px', backgroundColor: theme.surface, borderBottom: `2px solid ${theme.borderDark}`, position: 'relative', zIndex: 10, contain: 'layout style' },
-  backBtn: { background: theme.surface, border: `1px solid ${theme.border}`, color: theme.ink, borderRadius: design?.radius?.md || '8px', padding: '10px', marginRight: '4px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'transform 0.15s ease', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation', minWidth: '44px', minHeight: '44px' },
+  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '64px', boxSizing: 'border-box', padding: '0 24px', backgroundColor: t.paper, borderBottom: `2px solid ${t.ink}`, position: 'relative', zIndex: 10, contain: 'layout style' },
+  backBtn: { background: t.paper, border: `2px solid ${t.ink}`, color: t.ink, borderRadius: t.radius.md, padding: '10px', marginRight: '4px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'transform 0.15s ease', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation', minWidth: '44px', minHeight: '44px' },
   headerLeft: { display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', flex: 1 },
-  headerAvatar: { width: '44px', height: '44px', borderRadius: '12px', objectFit: 'cover', border: `2px solid ${theme.borderDark}` },
-  onlineDot: { position: 'absolute', bottom: '2px', right: '2px', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: 'var(--success)', border: `2px solid ${theme.surface}` },
+  headerAvatar: { width: '44px', height: '44px', borderRadius: '12px', objectFit: 'cover', border: `2px solid ${t.ink}` },
+  onlineDot: { position: 'absolute', bottom: '2px', right: '2px', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: t.green, border: `2px solid ${t.paper}` },
   headerInfo: { display: 'flex', flexDirection: 'column' },
-  headerName: { fontFamily: "'Playfair Display', serif", fontSize: '18px', fontWeight: '700', color: theme.ink, lineHeight: 1.2 },
-  headerStatus: { fontFamily: "'Inter', sans-serif", fontSize: '11px', color: theme.inkMuted, marginTop: '2px', letterSpacing: '0.5px' },
-  iconBtn: { background: 'none', border: 'none', padding: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: design?.radius?.md || '8px' },
-  dropdownMenu: { position: 'absolute', top: '100%', right: 0, backgroundColor: theme.surface, border: `1px solid ${theme.border}`, borderRadius: '12px', zIndex: 100, overflow: 'hidden', minWidth: '180px', marginTop: '8px' },
-  dropdownItem: { display: 'flex', alignItems: 'center', gap: '12px', width: '100%', padding: '14px 16px', background: 'none', border: 'none', fontFamily: "'Inter', sans-serif", fontSize: '14px', fontWeight: '500', color: theme.ink, cursor: 'pointer', textAlign: 'left' },
-  tornEdgeBottom: { position: 'absolute', bottom: '-12px', left: 0, right: 0, height: '12px', backgroundColor: theme.surface, clipPath: 'polygon(0 0, 2% 60%, 4% 20%, 6% 80%, 8% 40%, 10% 90%, 12% 30%, 14% 70%, 16% 50%, 18% 100%, 20% 20%, 22% 80%, 24% 40%, 26% 90%, 28% 30%, 30% 70%, 32% 50%, 34% 100%, 36% 20%, 38% 80%, 40% 40%, 42% 90%, 44% 30%, 46% 70%, 48% 50%, 50% 100%, 52% 20%, 54% 80%, 56% 40%, 58% 90%, 60% 30%, 62% 70%, 64% 50%, 66% 100%, 68% 20%, 70% 80%, 72% 40%, 74% 90%, 76% 30%, 78% 70%, 80% 50%, 82% 100%, 84% 20%, 86% 80%, 88% 40%, 90% 90%, 92% 30%, 94% 70%, 96% 50%, 98% 100%, 100% 0)', zIndex: 11 },
+  headerName: { fontFamily: t.fontHeavy, fontSize: '18px', fontWeight: '700', color: t.ink, lineHeight: 1.2 },
+  headerStatus: { fontFamily: t.fontBody, fontSize: '11px', color: t.ink3, marginTop: '2px', letterSpacing: '0.5px' },
+  iconBtn: { background: 'none', border: 'none', padding: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: t.radius.md },
+  dropdownMenu: { position: 'absolute', top: '100%', right: 0, backgroundColor: t.card, border: `2px solid ${t.ink}`, borderRadius: t.radius.md, zIndex: 100, overflow: 'hidden', minWidth: '180px', marginTop: '8px' },
+  dropdownItem: { display: 'flex', alignItems: 'center', gap: '12px', width: '100%', padding: '14px 16px', background: 'none', border: 'none', fontFamily: t.fontBody, fontSize: '14px', fontWeight: '500', color: t.ink, cursor: 'pointer', textAlign: 'left' },
+  tornEdgeBottom: { position: 'absolute', bottom: '-12px', left: 0, right: 0, height: '12px', backgroundColor: t.paper, clipPath: 'polygon(0 0, 2% 60%, 4% 20%, 6% 80%, 8% 40%, 10% 90%, 12% 30%, 14% 70%, 16% 50%, 18% 100%, 20% 20%, 22% 80%, 24% 40%, 26% 90%, 28% 30%, 30% 70%, 32% 50%, 34% 100%, 36% 20%, 38% 80%, 40% 40%, 42% 90%, 44% 30%, 46% 70%, 48% 50%, 50% 100%, 52% 20%, 54% 80%, 56% 40%, 58% 90%, 60% 30%, 62% 70%, 64% 50%, 66% 100%, 68% 20%, 70% 80%, 72% 40%, 74% 90%, 76% 30%, 78% 70%, 80% 50%, 82% 100%, 84% 20%, 86% 80%, 88% 40%, 90% 90%, 92% 30%, 94% 70%, 96% 50%, 98% 100%, 100% 0)', zIndex: 11 },
 
   messages: { flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '24px 28px', position: 'relative', zIndex: 2, contain: 'content', willChange: 'scroll-position' },
   dateSeparator: { display: 'flex', justifyContent: 'center', margin: '24px 0 16px' },
-  dateText: { fontFamily: "'Inter', sans-serif", fontSize: '10px', fontWeight: '700', color: theme.inkMuted, backgroundColor: theme.surfaceAlt, padding: '5px 14px', borderRadius: design?.radius?.sm || '4px', border: `1px solid ${theme.border}`, textTransform: 'uppercase', letterSpacing: '1px' },
-  openingLetterCard: { margin: '8px 16px 16px', padding: '16px 20px', background: 'linear-gradient(135deg, var(--paper) 0%, var(--surface-alt) 100%)', border: `1px solid ${theme.border}`, borderRadius: '12px', textAlign: 'center' },
-  openingLetterLabel: { fontFamily: "'Playfair Display', Georgia, serif", fontSize: '11px', fontWeight: 700, letterSpacing: '2px', textTransform: 'uppercase', color: theme.accent, marginBottom: '8px' },
-  openingLetterText: { fontFamily: "'Inter', sans-serif", fontSize: '15px', lineHeight: '1.5', color: theme.ink, fontStyle: 'italic' },
-  openingLetterDate: { fontFamily: "'Inter', sans-serif", fontSize: '11px', color: theme.inkMuted, marginTop: '8px' },
-  typing: { color: theme.inkMuted, padding: '0 16px 6px', display: 'flex', alignItems: 'center', gap: '4px' },
-  typingDot: { display: 'inline-block', width: '6px', height: '6px', backgroundColor: theme.accent, borderRadius: '50%', animation: 'blink 1.4s infinite both' },
+  dateText: { fontFamily: t.fontBody, fontSize: '10px', fontWeight: '700', color: t.ink3, backgroundColor: t.paper, padding: '5px 14px', borderRadius: t.radius.sm, border: `1px solid ${t.ink}`, textTransform: 'uppercase', letterSpacing: '1px' },
+  openingLetterCard: { margin: '8px 16px 16px', padding: '16px 20px', background: `linear-gradient(135deg, ${t.paper} 0%, ${t.paper} 100%)`, border: `1px solid ${t.ink}`, borderRadius: '12px', textAlign: 'center' },
+  openingLetterLabel: { fontFamily: t.fontHeavy, fontSize: '11px', fontWeight: 700, letterSpacing: '2px', textTransform: 'uppercase', color: t.yellow, marginBottom: '8px' },
+  openingLetterText: { fontFamily: t.fontBody, fontSize: '15px', lineHeight: '1.5', color: t.ink, fontStyle: 'italic' },
+  openingLetterDate: { fontFamily: t.fontBody, fontSize: '11px', color: t.ink3, marginTop: '8px' },
+  typing: { color: t.ink3, padding: '0 16px 6px', display: 'flex', alignItems: 'center', gap: '4px' },
+  typingDot: { display: 'inline-block', width: '6px', height: '6px', backgroundColor: t.yellow, borderRadius: '50%', animation: 'blink 1.4s infinite both' },
   
   scrollButton: {
     position: 'absolute',
@@ -14804,9 +18855,9 @@ const styles = {
     right: '24px',
     width: '44px',
     height: '44px',
-    borderRadius: design?.radius?.md || '8px',
-    backgroundColor: theme.surface,
-    border: `2px solid ${theme.borderDark}`,
+    borderRadius: t.radius.md,
+    backgroundColor: t.card,
+    border: `2px solid ${t.ink}`,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -14814,15 +18865,15 @@ const styles = {
     zIndex: 20,
   },
   
-inputBar: { display: 'flex', alignItems: 'center', gap: '12px', padding: '16px 24px', paddingBottom: 'max(16px, env(safe-area-inset-bottom))', borderTop: `2px solid ${theme.borderDark}`, backgroundColor: theme.surface, position: 'relative', zIndex: 10, contain: 'layout style' },
-  washiTape: { position: 'absolute', top: '-8px', left: '50%', transform: 'translateX(-50%) rotate(-1deg)', width: '60px', height: '16px', backgroundColor: 'var(--tape-90)', backdropFilter: 'blur(2px)', border: '1px solid var(--accent-20)', zIndex: 11 },
-  attachBtn: { background: theme.surfaceAlt, border: `1.5px solid ${theme.border}`, borderRadius: design?.radius?.md || '8px', width: '44px', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 },
-  inputWrapper: { flex: 1, backgroundColor: theme.surfaceAlt, border: `1.5px solid ${theme.border}`, borderRadius: '24px', padding: '0 20px', display: 'flex', alignItems: 'center' },
-  sendBtn: { width: '44px', height: '44px', borderRadius: design?.radius?.md || '8px', backgroundColor: theme.crimson, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 },
+  inputBar: { display: 'flex', alignItems: 'center', gap: '12px', padding: '16px 24px', paddingBottom: 'max(16px, env(safe-area-inset-bottom))', borderTop: `2px solid ${t.ink}`, backgroundColor: t.paper, position: 'relative', zIndex: 10, contain: 'layout style' },
+  washiTape: { position: 'absolute', top: '-8px', left: '50%', transform: 'translateX(-50%) rotate(-1deg)', width: '60px', height: '16px', backgroundColor: t.paper, backdropFilter: 'blur(2px)', border: `1px solid ${t.yellow}`, zIndex: 11 },
+  attachBtn: { background: t.card, border: `2px solid ${t.ink}`, borderRadius: t.radius.md, width: '44px', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 },
+  inputWrapper: { flex: 1, backgroundColor: t.card, border: `2px solid ${t.ink}`, borderRadius: '24px', padding: '0 20px', display: 'flex', alignItems: 'center' },
+  sendBtn: { width: '44px', height: '44px', borderRadius: t.radius.md, backgroundColor: t.coral, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 },
 
-  sheetBackdrop: { position: 'fixed', inset: 0, backgroundColor: 'rgba(20,15,10,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-end', zIndex: 120 },
-  sheet: { backgroundColor: theme.paper, backgroundImage: `url("${design?.texture?.grain || ''}")`, width: '100%', borderTopLeftRadius: '24px', borderTopRightRadius: '24px', boxShadow: '0 -12px 32px var(--wm-20)' },
-  sheetBtn: { display: 'flex', alignItems: 'center', gap: '12px', width: '100%', background: theme.surface, border: `1.5px solid ${theme.borderDark}`, color: theme.ink, fontFamily: "'Inter', sans-serif", fontWeight: '600', padding: '16px', borderRadius: '12px', fontSize: '14px', cursor: 'pointer' },
+  sheetBackdrop: { position: 'fixed', inset: 0, backgroundColor: 'rgba(25,25,25,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-end', zIndex: 120 },
+  sheet: { backgroundColor: t.paper, backgroundImage: `url("${t.grain || ''}")`, width: '100%', borderTopLeftRadius: t.radius.lg, borderTopRightRadius: t.radius.lg, boxShadow: `0 -12px 32px ${t.ink}` },
+  sheetBtn: { display: 'flex', alignItems: 'center', gap: '12px', width: '100%', background: t.card, border: `2px solid ${t.ink}`, color: t.ink, fontFamily: t.fontBody, fontWeight: '600', padding: '16px', borderRadius: t.radius.md, fontSize: '14px', cursor: 'pointer' },
 };
 
 export default Chat;
@@ -14831,7 +18882,9 @@ export default Chat;
 ### ./client/src/pages/Discover.jsx
 
 ```
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import neu from '../styles/neu';
 import { motion, AnimatePresence } from 'framer-motion';
 import ProfileCard from '../components/ProfileCard';
 import { closeAllPopouts } from '../components/PopoutItem';
@@ -14845,7 +18898,12 @@ import ShadowbanBanner from '../components/ShadowbanBanner';
 import LearnMoreSheet from '../components/LearnMoreSheet';
 import { triggerHaptic } from '../utils/haptics';
 import { toast } from '../utils/toast';
-import { discoverStore, initDiscoverStore, saveDiscoverStore, resetDiscoverStore } from '../utils/discoverStore';
+import {
+  discoverStore,
+  initDiscoverStore,
+  saveDiscoverStore,
+  resetDiscoverStore,
+} from '../utils/discoverStore';
 import { useIsDesktop } from '../utils/useIsDesktop';
 import {
   syncLocationIfPermitted,
@@ -14859,60 +18917,67 @@ import LocationNotice from '../components/LocationNotice';
 import DiscoverRebuildOverlay from '../components/DiscoverRebuildOverlay';
 import { RotateCw, Compass, AlertTriangle, X, Undo2, Heart } from 'lucide-react';
 
-/* Locked tokens — neubrutalism, same family as ProfileCard */
+/* Neubrutalist design tokens inspired by the supplied reference; preserve neu token compatibility. */
 const t = {
-  desk: '#131313',
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  pink: '#FFA3C6',
-  red: '#E5484D',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
+  ...neu,
+  ink: '#171414',
+  ink2: '#393130',
+  ink3: '#6E6160',
+  paper: '#FFF9F4',
+  card: '#FFFCF8',
+  desk: '#FFF9F4',
+  yellow: '#FFE76A',
+  coral: '#FF7399',
+  green: '#B8F0C7',
+  pink: '#C8A7FF',
+  red: '#D9485D',
+  hair: '#171414',
+  line: 'rgba(23, 20, 20, .22)',
+  fontHeavy: "'Barlow Condensed', sans-serif",
+  fontBody: "'Space Grotesk', sans-serif",
+  fontMono: "'IBM Plex Mono', monospace",
 };
 
 const slideVariants = {
-  enter: (direction) => ({
+  enter: (direction = 'up') => ({
     opacity: 0,
-    scale: 0.92,
-    filter: 'blur(12px)',
-    zIndex: 2,
+    y: direction === 'down' ? -34 : 34,
+    scale: 0.985,
+    zIndex: 1,
   }),
   center: {
     opacity: 1,
+    y: 0,
     scale: 1,
-    filter: 'blur(0px)',
     zIndex: 2,
+    transition: {
+      type: 'spring',
+      stiffness: 280,
+      damping: 27,
+      mass: 0.85,
+    },
   },
-  exit: (direction) => ({
+  exit: (direction = 'up') => ({
     opacity: 0,
-    scale: 0.95,
-    filter: 'blur(8px)',
+    y: direction === 'down' ? 42 : -42,
+    scale: 0.985,
     zIndex: 1,
+    transition: {
+      duration: 0.19,
+      ease: [0.22, 1, 0.36, 1],
+    },
   }),
 };
 
 const springTransition = {
   type: 'spring',
-  stiffness: 220,
-  damping: 18,
-  mass: 1,
+  stiffness: 280,
+  damping: 27,
+  mass: 0.85,
 };
 
-/* How many times the gate will re-read `/auth/me` on its own before handing
-   recovery to the online/visibility listeners. See the backoff effect below. */
 const MAX_GATE_RETRIES = 2;
 
-/* `onGoToProfile` — raised by the gate toast's action button. Navigating is the
-   PARENT's job: Discover doesn't own the tab bar, and routing from here would
-   mean reaching into AppShell's state. */
 const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
   const isDesktop = useIsDesktop();
   const [profiles, setProfiles] = useState([]);
@@ -14921,259 +18986,139 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [fetchingMore, setFetchingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  /* Nobody eligible is left in the system. Distinct from hasMore=false: that
-     only means "this page is the last one for now", which the prefetcher
-     resolves on its own. This means there is genuinely nothing behind it, and
-     paging further would loop the user over people they have already seen. */
   const [deckExhausted, setDeckExhausted] = useState(false);
-  /* Set when the server re-decided the deck order mid-browse (new session,
-     expired session, or window extension). Drives the brief "showing newer
-     profiles" line — deliberately NOT a button. See the decision that no
-     dating app exposes a user-triggered re-roll. */
   const [rebuiltAt, setRebuiltAt] = useState(0);
   const [slideDirection, setSlideDirection] = useState('up');
-  const [undoNonce, setUndoNonce] = useState(0);   /* bump to re-arm the 5s undo */
-  const [merging, setMerging] = useState(false); /* subtle Updating pill during the background reconcile */
+  const [undoNonce, setUndoNonce] = useState(0);
+  const [merging, setMerging] = useState(false);
   const [locationDenied, setLocationDenied] = useState(false);
   const [showAlignmentModal, setShowAlignmentModal] = useState(false);
   const [alignedProfile, setAlignedProfile] = useState(null);
 
   const actionPendingRef = useRef(false);
-
-  /* How many cards the server has actually served this viewer, so the next page
-     request can number its impressions by true deck position. A ref rather than
-     state: it changes on every fetch and nothing renders from it, and putting it
-     in state would make `fetchProfiles` depend on itself. */
   const servedRef = useRef(0);
-  /* Holds the dismiss timer for the "Showing newer profiles" notice. A ref, not
-     state: the timer identity must survive re-renders without itself causing
-     one. */
   const rebuiltTimer = useRef(null);
   const { user: myUser } = useAuth();
 
-  /* 📍 WHAT THE SERVER IS ACTUALLY RANKING BY.
-   *
-   * `myUser.locationSource` is a stored preference: 'gps' means a reading was
-   * saved once, possibly weeks ago. The ranking pipeline uses a reading only if
-   * it is still inside the 30-day TTL, so the preference and the behaviour can
-   * disagree — and when they do, the stored preference is the one that lies.
-   *
-   * This reads the server's own answer, which is derived from the same
-   * `isFreshLocation` the pipeline uses. Until it arrives `active` is null and
-   * neither notice renders, so there is no flash of a claim we have not checked
-   * yet — the wrong first impression is worse than a half-second of silence. */
   const [locationRead, setLocationRead] = useState(null);
+
   useEffect(() => {
     if (!myUser?._id) return;
     let alive = true;
+
     api.get('/users/location')
-      .then((r) => { if (alive) setLocationRead(r ?? null); })
-      .catch(() => { /* Offline or restarting. The notice is an optimisation;
-                         failing to read it must never hide the deck. */ });
-    return () => { alive = false; };
+      .then((r) => {
+        if (alive) setLocationRead(r ?? null);
+      })
+      .catch(() => {});
+
+    return () => {
+      alive = false;
+    };
   }, [myUser?._id]);
+
   const [showLearnMore, setShowLearnMore] = useState(false);
   const shadowbanScore = myUser?.shadowbanScore || 0;
-
   const config = useAppConfig();
 
-  /* 📍 REBUILD STATE FOR A LOCATION CHANGE.
-   *
-   * One flag, not two. A separate `rebuilding` flag was here and was never read
-   * by anything — set, then dead. `rebuildOverlay` alone is enough: it is the
-   * only rebuild state any consumer needs, and `profiles` already goes to `[]`
-   * during a rebuild so there is nothing to interact with. */
   const [rebuildOverlay, setRebuildOverlay] = useState(false);
   const rebuildOverlayTimer = useRef(null);
 
-  /* The viewer's own profile — the ONLY thing in Discover that needs it, since
-     the deck cards are other people's profiles.
-
-     `myProfileState` exists so a real 0% is distinguishable from a failed read.
-     These used to be the same thing (`myProfile === null` → score 0), which let
-     the gate toast announce "You're at 0%" after a single dropped request —
-     a number we never fetched, stated as fact. State is separate now:
-       loading → we don't know yet
-       ready   → we have a score, however small
-       error   → the read failed; the gate still shows, but the copy doesn't lie */
   const [myProfile, setMyProfile] = useState(null);
-  const [myProfileState, setMyProfileState] = useState('loading'); // loading | ready | error
+  const [myProfileState, setMyProfileState] = useState('loading');
   const myProfileScore = myProfile?.profileScore ?? 0;
-
-  /* The single gate decision, derived once and handed to both the card and the
-     action handler. Two things consume it, so it must not be recomputed
-     independently in each — the card needs it to know not to play its seal
-     animation, and the handler needs it to know not to send.
-
-     Fail-closed and deliberately unchanged: an unreadable profile is treated as
-     not-verified, because the alternative is silently leaving the deck fully
-     interactive for anyone we can't score. Only the COPY became honest about
-     uncertainty; the gate itself still refuses to open on a guess. */
   const deckGated = !canInteract(myProfileScore, config);
 
   const loadMyProfile = useCallback(async () => {
-    // Only surface 'loading' again if we'd already failed — flipping back to
-    // loading on every retry would make the deck flicker through an error state
-    // we already recovered from.
     setMyProfileState((s) => (s === 'error' ? 'loading' : s));
+
     try {
       const me = await api.get('/auth/me');
       setMyProfile(me);
       setMyProfileState('ready');
       return me;
     } catch {
-      // Deliberately NOT nulled on failure, same reasoning as the college list
-      // in Auth.jsx: a blip after a good read should not wipe a score we already
-      // have. The error state is what tells the toast not to quote a number.
       setMyProfileState('error');
       return null;
     }
   }, []);
 
-  useEffect(() => { loadMyProfile(); }, [loadMyProfile]);
+  useEffect(() => {
+    loadMyProfile();
+  }, [loadMyProfile]);
 
-  /* Recover from a failed read instead of stranding the deck at "0%" until the
-     tab remounts. Both events mean "the network situation probably changed":
-     `online` for a dropped connection, `visibilitychange` for a phone that
-     went to sleep mid-request. Same shape as the college retry in Auth.jsx. */
   useEffect(() => {
     const onOnline = () => loadMyProfile();
-    const onVisible = () => { if (document.visibilityState === 'visible') loadMyProfile(); };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadMyProfile();
+    };
+
     window.addEventListener('online', onOnline);
     document.addEventListener('visibilitychange', onVisible);
+
     return () => {
       window.removeEventListener('online', onOnline);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [loadMyProfile]);
 
-  /* Bounded backoff for the initial failure, so a server that isn't up yet
-     doesn't leave the deck permanently at "unknown" until someone toggles the
-     tab. The cap is load-bearing, not decoration: `loadMyProfile` flips state
-     back to 'error' on every failure, so an uncapped effect would re-arm itself
-     forever and poll a dead server every 2.5s for the life of the tab. After
-     MAX_GATE_RETRIES the online/visibility listeners above own recovery. */
   const gateRetries = useRef(0);
+
   useEffect(() => {
     if (myProfileState !== 'error') return undefined;
     if (gateRetries.current >= MAX_GATE_RETRIES) return undefined;
+
     gateRetries.current += 1;
-    const t = setTimeout(() => loadMyProfile(), 2500);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => loadMyProfile(), 2500);
+
+    return () => clearTimeout(timer);
   }, [myProfileState, loadMyProfile]);
 
-  /* A successful read earns the retries back — otherwise a user whose network
-     dropped once during onboarding would burn through the budget and lose the
-     self-healing the backoff exists to provide. */
   useEffect(() => {
     if (myProfileState === 'ready') gateRetries.current = 0;
   }, [myProfileState]);
 
-  /* Guards against StrictMode's double mount and the Profile→Discover
-     remount: a second call while one is in flight awaits the same request
-     instead of starting a parallel one (which the server answered 500s to). */
   const deckFetchInFlight = useRef(null);
 
   const fetchProfiles = useCallback(async (append = false) => {
     if (deckFetchInFlight.current) return deckFetchInFlight.current;
+
     const run = (async () => {
-    if (!append) { setLoading(true); setError(null); resetDiscoverStore(); }
-    else setFetchingMore(true);
-
-    try {
-      // The feed is platform-wide and person-ranked. There is no campus
-      // narrowing: campus is verification and a card badge only, so nothing
-      // about it is sent. Distance comes from each person's own location on the
-      // server, falling back to their campus coordinates server-side when they
-      // have no fresh reading — the client never decides that.
-      //
-      // `served` is the count of cards already shown to this viewer this
-      // session. The server needs it to number each impression by its real
-      // position in the deck; without it every page would restart at 0 and
-      // "how deep did they get" would be meaningless. Sent on append only —
-      // a fresh (non-append) load starts a new deck, so it starts at 0 too.
-      const servedCount = append ? servedRef.current : 0;
-      const q = `/discover?limit=10&served=${servedCount}`;
-      const data = await api.get(q);
-      /* 🃏 SHUFFLE THE INCOMING BATCH ONLY — never the accumulated list.
-
-         The server's order is meaningful: distance band, then intent, then
-         quality, and then two rules that deliberately STEP reserved cards
-         through the window rather than front-loading them (the 20% own-college
-         cap and the newcomer reserve). Those steps land on a regular stride, so
-         the same college and the same newcomers recur at the same offsets in
-         every batch. A user learns the shape of the feed without noticing they
-         are learning it.
-
-         Shuffling the batch hides that stride while changing nothing else:
-
-         ⚠️ Membership is untouched. The same ten people are shown in the same
-         batch, so this cannot introduce a repeat, cannot change the cap, and
-         cannot change who is eligible. Only the order within the page moves.
-
-         ⚠️ Only the INCOMING batch, never `prev`. Shuffling the accumulated list
-         would shift every index below the insertion point, so `currentIndex`
-         would point at a different person mid-swipe and going back a card would
-         show something that was never on screen.
-
-         ⚠️ Once per fetch, not per render. Shuffling in a render path would
-         reshuffle on every state change and cards would visibly jump.
-
-         The impression log keeps the server's served order, not this visual one.
-         That is deliberate: exposure VOLUME stays exact, and "which card did
-         they see first" is not a question worth making the client report a
-         position for. See the note on DeckImpression for the drift. */
-      const newProfiles = shuffle(data.users || []);
-      servedRef.current = Number.isFinite(data.served) ? data.served : servedCount + newProfiles.length;
-      if (append) {
-        /* 🛑 AN EMPTY PAGE ENDS THE FETCHING, regardless of what `hasMore` says.
-         *
-         * A response carrying no cards cannot advance anything, so asking again
-         * would return no cards too — the request loop. If the server ever
-         * reported "more available" alongside an empty page, this is what stops
-         * the client acting on it.
-         *
-         * The server also refuses to set `hasMore` on an empty page, so this is a
-         * second layer rather than the primary defence: if either side is ever
-         * changed without the other, the deck still stops rather than spinning.
-         *
-         * ⚠️ `setDeckExhausted` MUST BE SET BEFORE THE `return`. This early exit
-         * was originally written without it, which quietly undid a fix from
-         * earlier in the session: `deckExhausted` gates the Refresh button on the
-         * caught-up screen, so leaving it false put a Refresh button back on a
-         * screen that had genuinely run out — a button that looks actionable and
-         * does nothing, since the server only ever returns nothing again. Stopping
-         * the request loop and hiding the dead button are the same fix; missing
-         * one line here resurrected the bug the other one removed. */
-        if (newProfiles.length === 0) {
-          setHasMore(false);
-          setDeckExhausted(!!data.deckExhausted);
-          discoverStore.hasMore = false;
-          saveDiscoverStore();
-          return;
-        }
-        setProfiles((prev) => {
-          const next = [...prev, ...newProfiles];
-          discoverStore.profiles = next;
-          discoverStore.hasMore = data.hasMore;
-          saveDiscoverStore();
-          return next;
-        });
+      if (!append) {
+        setLoading(true);
+        setError(null);
+        resetDiscoverStore();
+      } else {
+        setFetchingMore(true);
       }
-      else {
-        /* A non-append request is a "start me a deck" request, but it can
-           arrive when this viewer already HAS a live deck — StrictMode
-           double-invokes this effect in development, and returning to Discover
-           from Profile re-runs it too. The server cursor is mid-deck at that
-           point, so the response legitimately holds only what is left AFTER the
-           cards already on screen, which on a small pool is nothing.
 
-           Replacing the list with an empty array would then blank a perfectly
-           good deck and flash "You're all caught up" at someone who has four
-           perfectly good cards. An empty response must never destroy a
-           populated deck; the caught-up screen is for decks that were ALREADY
-           empty. */
-        if (newProfiles.length > 0) {
+      try {
+        const servedCount = append ? servedRef.current : 0;
+        const q = `/discover?limit=10&served=${servedCount}`;
+        const data = await api.get(q);
+        const newProfiles = shuffle(data.users || []);
+
+        servedRef.current = Number.isFinite(data.served)
+          ? data.served
+          : servedCount + newProfiles.length;
+
+        if (append) {
+          if (newProfiles.length === 0) {
+            setHasMore(false);
+            setDeckExhausted(!!data.deckExhausted);
+            discoverStore.hasMore = false;
+            saveDiscoverStore();
+            return;
+          }
+
+          setProfiles((prev) => {
+            const next = [...prev, ...newProfiles];
+            discoverStore.profiles = next;
+            discoverStore.hasMore = data.hasMore;
+            saveDiscoverStore();
+            return next;
+          });
+        } else if (newProfiles.length > 0) {
           setProfiles(newProfiles);
           setCurrentIndex(0);
           discoverStore.profiles = newProfiles;
@@ -15181,66 +19126,56 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
           discoverStore.hasMore = data.hasMore;
           saveDiscoverStore();
         }
-      }
 
-      /* ⚠️ UNCONDITIONAL, and deliberately outside the branches above.
-       * `hasMore` and `deckExhausted` are a matched pair describing the END of
-       * the deck, so they must be set the same way for every response — empty
-       * page, full page, append or not. They used to be set inside the branch
-       * bodies as well as here, so the branch values were immediately overwritten
-       * by these: harmless, but it meant the state that actually took effect was
-       * the duplicate rather than the one a reader would expect to be reading. */
-      setHasMore(data.hasMore);
-      setDeckExhausted(!!data.deckExhausted);
+        setHasMore(data.hasMore);
+        setDeckExhausted(!!data.deckExhausted);
 
-      /* Only surface the notice when this request actually re-decided the
-         order. On the very first page load the deck was always new, so showing
-         "showing newer profiles" then would be noise on every cold start. */
-      if (data.rebuiltWindow && append) setRebuiltAt(Date.now());
-      /* Auto-dismiss the notice. Without this the render-time `Date.now()` check
-         never re-evaluates on its own, so the line would stay pinned forever —
-         a timestamp comparison only changes the DOM when something causes a
-         re-render, and nothing else would. */
-      if (data.rebuiltWindow && append) {
-        clearTimeout(rebuiltTimer.current);
-        rebuiltTimer.current = setTimeout(() => setRebuiltAt(0), 4000);
+        if (data.rebuiltWindow && append) {
+          setRebuiltAt(Date.now());
+          clearTimeout(rebuiltTimer.current);
+          rebuiltTimer.current = setTimeout(() => setRebuiltAt(0), 4000);
+        }
+      } catch (err) {
+        console.error('Failed to fetch deck profiles:', err);
+        if (!append) setError(err.message || 'Something went wrong');
+      } finally {
+        setLoading(false);
+        setFetchingMore(false);
       }
-    } catch (err) {
-      console.error('Failed to fetch deck profiles:', err);
-      if (!append) setError(err.message || 'Something went wrong');
-    } finally {
-      setLoading(false);
-      setFetchingMore(false);
-    }
     })();
+
     deckFetchInFlight.current = run;
-    try { await run; } finally { deckFetchInFlight.current = null; }
+
+    try {
+      await run;
+    } finally {
+      deckFetchInFlight.current = null;
+    }
+
     return run;
   }, []);
 
-
-  /* 📍 Refresh the stored position and, if the server decides the move mattered,
-     drop the saved session so the next deck request rebuilds around the new
-     position. Both this and the auto-check below are one-shot reads: nothing is
-     watched, and nothing here can break the deck if it fails. */
   const refreshLocation = useCallback(async () => {
     const res = await syncLocationIfPermitted();
-    /* ⚠️ `toast` is an OBJECT with .success/.error/.info — not a bare function.
-       Calling `toast(...)` throws "toast is not a function" on tap. */
+
     if (!res.ok) {
       if (res.reason === 'denied') setLocationDenied(true);
+
       toast.error(
-        res.reason === 'denied' ? 'Location permission was denied. Enable it in browser settings.'
-        : res.reason === 'insecure-context' ? 'Location only works on a secure connection.'
-        : "Couldn't get a location reading. Try again, or check phone GPS settings.",
+        res.reason === 'denied'
+          ? 'Location permission was denied. Enable it in browser settings.'
+          : res.reason === 'insecure-context'
+            ? 'Location only works on a secure connection.'
+            : "Couldn't get a location reading. Try again, or check phone GPS settings.",
       );
       return;
     }
-    if (!res.moved) { toast.info('Your location is already current.'); return; }
 
-    /* The server has already discarded the session. Forget the cached deck too,
-       or the client would keep rendering the old ordering until something
-       happened to trigger a refetch. */
+    if (!res.moved) {
+      toast.info('Your location is already current.');
+      return;
+    }
+
     resetDiscoverStore();
     setProfiles([]);
     setCurrentIndex(0);
@@ -15248,108 +19183,60 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
     setDeckExhausted(false);
     setRebuiltAt(Date.now());
     servedRef.current = 0;
+
     await fetchProfiles(false);
     toast.success('Location updated. Showing people near you.');
   }, [fetchProfiles]);
 
-  /* 📍 REBUILD THE DECK WHEN THE ANCHOR LOCATION CHANGES.
-   *
-   * Called from LocationNotice once the server confirms the viewer moved. The
-   * server has already discarded the saved session by then, so this only has to
-   * drop the CLIENT's copy — `resetDiscoverStore()` — and pull a fresh page.
-   * Without that, `initDiscoverStore` repaints the pre-move deck from
-   * localStorage and returns early without ever asking the server, so the user
-   * swipes the old city before the new one arrives. That is the bug this
-   * function exists to close.
-   *
-   * The 250ms gate exists because a rebuild is not slow: measured deck fetches
-   * run 44–280ms, around 110ms typical. A full-screen message shown for 110ms
-   * reads as a glitch rather than as feedback. Fast rebuilds stay silent; only a
-   * genuinely slow one earns the screen. */
   const rebuildDeckForLocation = useCallback(async () => {
     clearTimeout(rebuiltTimer.current);
     clearTimeout(rebuildOverlayTimer.current);
-    /* Redundant on its own — `fetchProfiles(false)` clears the store too — but
-       stated here so the reason this function exists is visible where it is
-       decided rather than two frames away inside the fetcher. */
     resetDiscoverStore();
     setProfiles([]);
     setCurrentIndex(0);
     setHasMore(true);
     setDeckExhausted(false);
     servedRef.current = 0;
-    rebuildOverlayTimer.current = setTimeout(() => setRebuildOverlay(true), 250);
+
+    rebuildOverlayTimer.current = setTimeout(
+      () => setRebuildOverlay(true),
+      250,
+    );
+
     try {
       await fetchProfiles(false);
     } finally {
-      /* The timer is cleared as well as the flag set false, otherwise the
-         pending timeout fires afterwards and re-shows an overlay on a deck that
-         has already finished rebuilding. */
       clearTimeout(rebuildOverlayTimer.current);
       setRebuildOverlay(false);
     }
   }, [fetchProfiles]);
 
-  /* 📍 Hide the refresh-location button when the OS already said no — tapping
-     it again would do exactly nothing, which reads as a bug. If the browser
-     doesn't expose the permission API, leave the button as-is.
-
-     ⚠️ ONLY `denied` HIDES THE BUTTON.
-     `prompt` means the grant lapsed rather than being refused, and someone in
-     that state is exactly who should be able to tap "refresh" — they chose yes
-     once and would very likely choose yes again. Treating `prompt` as denied
-     would leave them with no button and no explanation, having never declined
-     anything.
-
-     The mid-session `onchange` subscription lives with the automatic check
-     below, which is the effect that owns location lifecycle on this screen;
-     two subscriptions to the same PermissionStatus would double-fire. */
   useEffect(() => {
     if (!navigator?.permissions?.query) return;
     let alive = true;
+
     navigator.permissions.query({ name: 'geolocation' })
       .then((r) => {
         if (!alive) return;
         setLocationDenied(r.state === GEO_PERMISSION.DENIED);
       })
       .catch(() => {});
-    return () => { alive = false; };
+
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  /* 📍 THE AUTOMATIC CHECK. Runs once per app open, silently.
-     A one-shot permission prompt is all this ever is — see the rules at the top of
-     utils/locationSync.js. No prompt appears here: if the user already granted
-     location, the browser returns a cached or fresh reading without asking again,
-     and if they did not, the read fails quietly and nothing changes.
-
-The `moved` branch clears the cached deck and rebuilds. That is the case the
-      whole feature exists for: someone who travelled while the app was closed
-      would otherwise spend half an hour looking at a deck ordered around a place
-      they are no longer at.
-
-      ── WHY THE EPHEMERAL RELEASE HAPPENS HERE AND NOT ON THE FIRST FAILURE ──
-      A lapsed one-time grant is released at the START of a visit, not the
-      moment it lapses. Chrome expires "allow this time" after five minutes in a
-      background tab, so reacting to the lapse would fire the location toast at
-      someone who merely switched tabs for six minutes. At launch it means the
-      user genuinely started a new visit without the permission they had before,
-      which is exactly what "this time" was meant to cover. */
   useEffect(() => {
     let alive = true;
 
-    /* 📍 A POSITION FROM AN EXPIRED ONE-TIME GRANT DOES NOT SURVIVE THE LAUNCH.
-     *
-     * Runs BEFORE the refresh, because the refresh may succeed with a fresh
-     * reading and then this would have nothing to release. It only fires when the
-     * browser reports `prompt` — a refusal reports `denied` and is left alone,
-     * because refusing is a decision and this is an expiry. */
     (async () => {
       try {
-        /* Only one refresh, and only after any release has settled. Two calls
-           would ask the browser twice on every launch and race their own writes. */
         await releaseEphemeralLocation();
         const res = await syncLocationIfPermitted();
+
         if (!alive || !res.ok || !res.moved) return;
+
         resetDiscoverStore();
         setProfiles([]);
         setCurrentIndex(0);
@@ -15357,93 +19244,58 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
         setDeckExhausted(false);
         servedRef.current = 0;
       } catch {
-        /* Never let location maintenance break the deck. */
+        // Location maintenance must not interrupt Discover.
       }
     })();
 
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  /* 📍 CATCH A GRANT THAT EXPIRES MID-SESSION.
-   *
-   * Chrome's five-minute background rule means the permission can lapse while
-   * the app is still open — the user switches tabs, comes back, and their stored
-   * position is now uncovered. Nothing above would notice, because the refresh
-   * already ran.
-   *
-   * The position is NOT released here. That would be the nagging case the launch
-   * check exists to avoid: the user gets a toast for tabbing away. Recording it
-   * as `needsRelease` is enough — the next launch releases it, and the notice
-   * below re-evaluates on the next render because the server's `active` flag is
-   * what mounts it. */
   useEffect(() => watchGeolocationPermission((state) => {
-    /* A lapse is NOT a refusal, so it must not hide the refresh button — that is
-       the one control someone who tapped "allow this time" can use to get their
-       position back. Only `denied` disables the control. */
     setLocationDenied(state === GEO_PERMISSION.DENIED);
   }), []);
 
-  /* Clear the rebuild-notice timer on unmount. Without this, navigating away
-     mid-window leaves a live timeout that calls setState on a dead component.
-     Harmless today, but a source of confusing warnings the moment this page is
-     mounted twice — which the deck's own remount behaviour already does. */
   useEffect(() => () => {
     clearTimeout(rebuiltTimer.current);
     clearTimeout(rebuildOverlayTimer.current);
   }, []);
 
-  /* ── DECK HYDRATION + REFRESH ──
-     The cache exists so leaving the tab and coming back lands you on the SAME
-     card, at the SAME index, with no spinner — that behaviour is load-bearing
-     (the gate sends you to Profile and back).
-
-     It was also serving that snapshot FOREVER: on a cache hit this returned
-     before `fetchProfiles` ever ran, so a card you had edited stayed frozen at
-     whatever it looked like when it was cached. Two accounts editing each other
-     is the normal loop, so that read as "my save didn't work".
-
-     So: paint the cache immediately, then reconcile with the server behind it.
-
-     MERGE, not replace. `GET /discover` is randomised per request (a
-     `randomSeed` range query around a fresh `Math.random()`), so replacing the
-     list would reshuffle the deck and throw away the position we just restored.
-     Patching by `_id` keeps order and index untouched while every card in the
-     fresh batch becomes current. Cards the batch doesn't cover keep their
-     cached copy rather than vanishing — a gap would shift everything below it. */
   const refreshMerged = useCallback(async () => {
     setMerging(true);
+
     try {
-      const q = '/discover?limit=20';
-      const data = await api.get(q);
+      const data = await api.get('/discover?limit=20');
       const fresh = data.users || [];
       if (fresh.length === 0) return;
+
       const byId = new Map(fresh.map((p) => [String(p._id), p]));
+
       setProfiles((prev) => {
         if (prev.length === 0) return prev;
         let changed = false;
+
         const next = prev.map((p) => {
           const f = byId.get(String(p._id));
-          /* Keep `hybridScore`, which the deck computes per VIEWER. The merge
-             response is viewer-specific too, so it does carry one — but the
-             `profile-updated` broadcast cannot, and clobbering it with
-             undefined would collapse every card to the bottom of the sort. */
           if (!f) return p;
           changed = true;
+
           return {
             ...f,
             hybridScore: f.hybridScore ?? p.hybridScore,
             distanceBand: f.distanceBand ?? p.distanceBand,
           };
         });
+
         if (!changed) return prev;
+
         discoverStore.profiles = next;
         saveDiscoverStore();
         return next;
       });
     } catch {
-      // Silent by design. This is a background reconciliation behind an
-      // already-usable deck; failing it must not surface an error over cards
-      // that are on screen and readable.
+      // Keep the cached deck usable if reconciliation fails.
     } finally {
       setMerging(false);
     }
@@ -15452,7 +19304,9 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
   useEffect(() => {
     const userId = myUser?._id;
     if (!userId) return;
+
     const restored = initDiscoverStore(userId);
+
     if (restored && discoverStore.profiles.length > 0) {
       setProfiles(discoverStore.profiles);
       setCurrentIndex(discoverStore.currentIndex);
@@ -15460,50 +19314,41 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
       setLoading(false);
       return;
     }
+
     fetchProfiles(false);
   }, [myUser?._id, fetchProfiles, refreshMerged]);
 
-  /* ── LIVE EDITS ──
-     `profile-updated` fires from the server whenever anyone saves a profile, so
-     a card repaints in place the moment its owner edits it — no refetch, no
-     index movement. Ids we aren't showing are ignored, which is the whole of
-     the client-side half of the broadcast.
-     Merged rather than replaced for the same reason as `refreshMerged`: the
-     broadcast carries no viewer-relative score, so replacing the card outright
-     would knock its `hybridScore` to undefined. */
   useEffect(() => {
     const onProfileUpdated = (card) => {
       if (!card?._id) return;
+
       setProfiles((prev) => {
-        const idx = prev.findIndex((p) => String(p._id) === String(card._id));
+        const idx = prev.findIndex(
+          (p) => String(p._id) === String(card._id),
+        );
         if (idx === -1) return prev;
+
         const next = [...prev];
         next[idx] = {
           ...card,
           hybridScore: card.hybridScore ?? prev[idx].hybridScore,
           distanceBand: card.distanceBand ?? prev[idx].distanceBand,
         };
+
         discoverStore.profiles = next;
         saveDiscoverStore();
         return next;
       });
     };
+
     socket.on('profile-updated', onProfileUpdated);
-
-    /* G9 — the inbound-align handling moved to Header.jsx, which is mounted on
-       every tab, so the bell badge bumps instantly no matter where you are. The
-       in-app toast and its heavy haptic were dropped here: the phone push
-       already names the sender, and a toast per align was just noise while
-       swiping. */
-
-    return () => {
-      socket.off('profile-updated', onProfileUpdated);
-    };
+    return () => socket.off('profile-updated', onProfileUpdated);
   }, []);
 
   const handleNextProfile = useCallback((direction = 'up', isAction = false) => {
     if (direction === 'down') {
       if (currentIndex <= 0) return;
+
       const next = Math.max(0, currentIndex - 1);
       setCurrentIndex(next);
       discoverStore.currentIndex = next;
@@ -15513,11 +19358,11 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
     }
 
     if (currentIndex >= profiles.length) return;
-
     setSlideDirection(direction);
 
     if (!isAction) {
       const passedProfile = profiles[currentIndex];
+
       if (passedProfile) {
         api.post(`/discover/pass/${passedProfile._id}`).catch(console.error);
         triggerHaptic('light');
@@ -15530,65 +19375,35 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
     discoverStore.profiles = profiles;
     saveDiscoverStore();
 
-    /* Prefetch at 6 remaining, not 4.
-       The server now hands out a fixed, already-decided order, so the page
-       boundary is predictable: the next page is always the next 10 ids in that
-       order, not a fresh shuffle of whatever happens to be eligible. Waiting
-       until 4 remain still stalls visibly on a full page of 10 — the user is
-       looking at their last two cards while the request runs. Fetching at 6
-       overlaps the wait with cards they are still swiping. */
-    if (profiles.length - currentIndex <= 6 && hasMore && !deckExhausted && !fetchingMore) {
+    if (
+      profiles.length - currentIndex <= 6
+      && hasMore
+      && !deckExhausted
+      && !fetchingMore
+    ) {
       fetchProfiles(true);
     }
-  }, [currentIndex, profiles, hasMore, deckExhausted, fetchingMore, fetchProfiles]);
+  }, [
+    currentIndex, profiles, hasMore, deckExhausted, fetchingMore, fetchProfiles,
+  ]);
 
-  /* ══════════════════════════════════════════════════════════════════════
-     🚪 THE GATE — deck-wide, before any action reaches the network.
-
-     One rule, no per-action exceptions: whatever the user tapped, they get the
-     same toast and the same route to Profile. There is deliberately NO pending
-     action and no replay — they finish, come back to the SAME card (the deck
-     and index are restored from discoverStore), and choose what to do next.
-
-     `pass` is deliberately NOT gated. It's a way to leave, not a way to
-     interact — gating it would trap someone on a card they didn't choose.
-     ══════════════════════════════════════════════════════════════════════ */
   const handleAction = useCallback(async (action, payload = {}) => {
     if (actionPendingRef.current) return;
     if (currentIndex >= profiles.length) return;
 
     const profile = profiles[currentIndex];
-    const target = profile || {};
+    if (!profile) return;
 
     if (action !== 'pass' && deckGated) {
       triggerHaptic('medium');
-      // Close the popout FIRST. The toast renders at z-index 9999, just above
-      // the popout overlay's 9998, so if the popout were left open the toast
-      // would sit on top of a blurred scrim and read as "something appeared
-      // behind the modal" — which is exactly what it looked like before.
       closeAllPopouts();
 
       const need = readLadder(config).interact;
-
-      /* Re-read the score here rather than quoting the mount-time snapshot.
-         This costs one round-trip on the tap that hits the gate, and buys two
-         things the cached value couldn't give us:
-           1. the number in the copy is one we actually fetched, so it can't be
-              stale — the user may have finished onboarding in another tab, or
-              the mount-time fetch may have died and recovered since;
-           2. if it fails, we find out NOW instead of asserting "0%".
-         The gate DECISION still uses the cached value, so an intercepted tap is
-         never conditional on this succeeding; it only decides what we say.
-
-         Resolved before handing to toast: `toast.info` stores `message` verbatim
-         and ArchivalToast renders it as text, so a Promise would surface as
-         "[object Promise]". */
       const fresh = await loadMyProfile();
+
       toast.info(
         fresh && Number.isFinite(fresh.profileScore)
           ? `Profile strength: ${fresh.profileScore}%. You need ${need}% to interact.`
-          /* A genuine 0% and a dropped request must not read the same. With no
-             number in hand we say nothing about one. */
           : `Finish your profile to interact — you need ${need}%.`,
         { label: 'Profile', onClick: () => onGoToProfile?.() },
       );
@@ -15596,103 +19411,126 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
     }
 
     actionPendingRef.current = true;
+
     try {
       if (action === 'align') {
         triggerHaptic('heavy');
         const response = await api.post(`/discover/align/${profile._id}`, payload);
+
         if (response.matched) {
-          setAlignedProfile({ ...response.user, alignmentId: response.alignmentId });
+          setAlignedProfile({
+            ...response.user,
+            alignmentId: response.alignmentId,
+          });
           setShowAlignmentModal(true);
         }
-      }
-      else if (action === 'pass') {
+      } else if (action === 'pass') {
         triggerHaptic('medium');
         await api.post(`/discover/pass/${profile._id}`);
-        /* Bump the undo nonce so DeckActions opens its 5s window. Only on a
-           real pass — liking or messaging someone shouldn't offer an undo. */
         setUndoNonce((n) => n + 1);
       }
 
       handleNextProfile('up', true);
-
     } catch (err) {
-      /* Server-side gate (403 GATED) reached when the client didn't know we were
-         locked — e.g. the score dropped mid-session, or our local copy was
-         stale. Recover the same way as a normal tap: open the sheet and replay
-         the action once it resolves. */
       if (err.code === 'GATED') {
-        setPendingAction({ action: payload?.note ? 'letter' : action, payload });
+        toast.info(
+          `Finish your profile to interact — you need ${readLadder(config).interact}%.`,
+          { label: 'Profile', onClick: () => onGoToProfile?.() },
+        );
         return;
       }
       console.error('Action failed:', err);
     } finally {
       actionPendingRef.current = false;
     }
-  }, [currentIndex, profiles, handleNextProfile, deckGated]);
+  }, [
+    currentIndex,
+    profiles,
+    handleNextProfile,
+    deckGated,
+    config,
+    loadMyProfile,
+    onGoToProfile,
+  ]);
 
-  /* Desktop: preload the next hero image so swipes feel instant. */
   useEffect(() => {
     if (!isDesktop) return;
     const next = profiles[currentIndex + 1]?.photos?.[0];
     if (!next) return;
+
     const img = new Image();
     img.decoding = 'async';
     img.src = next;
   }, [isDesktop, profiles, currentIndex]);
 
-  /* Desktop: keyboard deck controls. Ignored while typing or in modals. */
   useEffect(() => {
     if (!isDesktop) return;
+
     const onKey = (e) => {
       const tag = (e.target?.tagName || '').toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return;
+      if (
+        tag === 'input'
+        || tag === 'textarea'
+        || e.target?.isContentEditable
+      ) return;
+
       if (showAlignmentModal) {
-        if (e.key === 'Escape') { setShowAlignmentModal(false); setAlignedProfile(null); }
+        if (e.key === 'Escape') {
+          setShowAlignmentModal(false);
+          setAlignedProfile(null);
+        }
         return;
       }
+
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+
       const k = e.key;
-      if (k === 'ArrowRight' || k === 'l' || k === 'L') { e.preventDefault(); triggerHaptic('heavy'); handleAction('align', {}); }
-      else if (k === 'ArrowLeft' || k === 'p' || k === 'P') { e.preventDefault(); triggerHaptic('medium'); handleAction('pass'); }
-      else if (k === 'ArrowDown' || k === 'b' || k === 'B') { e.preventDefault(); triggerHaptic('light'); handleNextProfile('down'); }
+
+      if (k === 'ArrowRight' || k === 'l' || k === 'L') {
+        e.preventDefault();
+        triggerHaptic('heavy');
+        handleAction('align', {});
+      } else if (k === 'ArrowLeft' || k === 'p' || k === 'P') {
+        e.preventDefault();
+        triggerHaptic('medium');
+        handleAction('pass');
+      } else if (k === 'ArrowDown' || k === 'b' || k === 'B') {
+        e.preventDefault();
+        triggerHaptic('light');
+        handleNextProfile('down');
+      }
     };
+
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [isDesktop, showAlignmentModal, handleAction, handleNextProfile]);
 
-  /* 📍 THE REBUILD OVERLAY LIVES INSIDE THE RETURNED TREE, NOT ABOVE IT.
-   *
-   * It used to sit here, one line above this `if`. That is a bare JSX
-   * expression statement: JavaScript builds the element and immediately discards
-   * it. Nothing throws, the build is green, lint is green — and React never sees
-   * the component at all, so the "Updating your feed" screen silently never
-   * appeared.
-   *
-   * The trap is that "before the early return" sounds like it renders first. It
-   * does not. Everything before an early `return` is dead code by definition;
-   * the only two placements that actually render are INSIDE a returned branch
-   * or in the final returned tree. Hence the two copies below. */
   if (loading) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '12px', backgroundColor: t.desk }}>
+      <div style={styles.loadingRoot}>
         <ProfileCardSkeleton />
         <DiscoverRebuildOverlay show={rebuildOverlay} />
+        <style>{DECK_CSS}</style>
       </div>
     );
   }
 
   if (error && !loading) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '24px', backgroundColor: t.desk }}>
+      <div style={styles.stateRoot}>
         <style>{DECK_CSS}</style>
         <div style={styles.stateCard}>
           <div style={{ ...styles.stateTile, background: t.coral }}>
-            <AlertTriangle size={22} strokeWidth={2.6} color={t.ink} />
+            <AlertTriangle size={22} strokeWidth={2.2} color={t.ink} />
           </div>
           <h3 style={styles.stateTitle}>The deck hit a snag</h3>
           <p style={styles.stateBody}>{error}</p>
-          <button onClick={() => fetchProfiles(false)} className="slam-btn" style={styles.slamBtn}>
-            <RotateCw size={14} strokeWidth={3} /> Try again
+          <button
+            onClick={() => fetchProfiles(false)}
+            className="slam-btn"
+            style={styles.slamBtn}
+          >
+            <RotateCw size={14} strokeWidth={2.5} /> Try again
           </button>
         </div>
       </div>
@@ -15701,32 +19539,29 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
 
   if (!profiles || profiles.length === 0 || currentIndex >= profiles.length) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '24px', backgroundColor: t.desk }}>
+      <div style={styles.stateRoot}>
         <style>{DECK_CSS}</style>
         <div style={styles.stateCard}>
           <div style={{ ...styles.stateTile, background: t.yellow }}>
-            <Compass size={22} strokeWidth={2.6} color={t.ink} />
+            <Compass size={22} strokeWidth={2.2} color={t.ink} />
           </div>
+
           <h3 style={styles.stateTitle}>You're all caught up</h3>
           <p style={styles.stateBody}>
             {deckExhausted
               ? "You've seen everyone who fits right now. New people join all the time — check back later."
               : "You've reviewed everyone for now. Check back later — new people land all the time."}
           </p>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
-            {/* No "Show everyone" button. It existed to escape a campus-narrowed
-                deck; there is no narrowed deck to escape. */}
-            {/* Refresh is only honest when there is something to re-fetch.
-                Once deckExhausted is true the server has confirmed nobody
-                eligible is left ANYWHERE, so tapping this would re-request the
-                same exhausted pool and appear broken. Hiding it is the truthful
-                state; showing it would be a button that lies about the system. */}
-            {!deckExhausted && (
-              <button onClick={() => fetchProfiles(false)} className="slam-btn" style={styles.slamBtn}>
-                <RotateCw size={14} strokeWidth={3} /> Refresh
-              </button>
-            )}
-          </div>
+
+          {!deckExhausted && (
+            <button
+              onClick={() => fetchProfiles(false)}
+              className="slam-btn"
+              style={styles.slamBtn}
+            >
+              <RotateCw size={14} strokeWidth={2.5} /> Refresh
+            </button>
+          )}
         </div>
       </div>
     );
@@ -15736,49 +19571,17 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
     <div style={{ ...styles.viewportRoot, ...(isDesktop ? styles.viewportRootDesktop : null) }}>
       <style>{DECK_CSS}</style>
 
-      <ShadowbanBanner score={shadowbanScore} onLearnMore={() => setShowLearnMore(true)} />
-      {showLearnMore && <LearnMoreSheet onClose={() => setShowLearnMore(false)} />}
+      <ShadowbanBanner
+        score={shadowbanScore}
+        onLearnMore={() => setShowLearnMore(true)}
+      />
+      {showLearnMore && (
+        <LearnMoreSheet onClose={() => setShowLearnMore(false)} />
+      )}
 
-      {/* 📍 CAMPUS-FALLBACK NOTICE.
-
-          The feed ranks by distance from the viewer's own stored reading. When
-          that reading is missing or stale the pipeline substitutes their COLLEGE
-          coordinates silently, so without this the user is looking at a
-          campus-ranked feed believing it is location-ranked.
-
-          How it behaves now — it shows on entry and gets out of the way. It
-          appears on every app open and every tab switch (throttled to 3 minutes
-          within a session), collapses to two lines, and auto-hides after 5s.
-          Expanding it holds until dismissed.
-
-          The previous shape was permanently pinned and undismissable. That was
-          deliberate — a banner people swipe away is how someone stops noticing
-          their feed stopped changing — but a permanent bar over the feed is
-          wallpaper, and wallpaper is ignored. Nothing was decided from it. Now
-          the same information arrives with an expiry, which is the difference
-          between a notice and furniture.
-
-          Persistent ONLY when the browser has locked location: a denied
-          permission is never re-prompted by the browser, so that copy is the
-          only actionable instruction the user can get.
-
-          The college name is read off `myUser`, so no extra request is needed
-          to render it.
-
-          ⚠️ MOUNTED ON THE SERVER'S `active`, NOT ON `locationSource`.
-          `locationSource === 'gps'` only says a reading was stored at some
-          point. A reading older than the 30-day TTL is ignored by the ranking
-          pipeline and the deck falls back to the campus, so the one case where
-          this notice is most needed was the one case it could not appear in —
-          the UI said location was on while the feed was campus-ordered.
-          `GET /users/location` already computes the honest answer
-          (`active: hasCoords && isFreshLocation(user)`), so this reads it rather
-          than re-deriving a TTL in the browser where it would drift. */}
       {myUser && locationRead && (
         <LocationNotice
           college={myUser.college}
-          /* The warning and the confirmation are different messages for
-             different states, and only one is ever correct at a time. */
           variant={locationRead.active ? 'active' : 'fallback'}
           onLocationChanged={async (moved) => {
             if (!moved) return;
@@ -15787,11 +19590,6 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
         />
       )}
 
-      {/* Quiet notice that the order was re-decided mid-browse — a new session
-          after being away, or the deck window running out and refilling.
-          Auto-dismisses. Deliberately a LINE, not a button: no major dating app
-          lets you re-roll the deck on demand, and a button here would appear to
-          offer something the server cannot actually do differently. */}
       <AnimatePresence>
         {rebuiltAt > 0 && Date.now() - rebuiltAt < 4000 && (
           <motion.div
@@ -15801,44 +19599,29 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
             exit={{ opacity: 0 }}
             transition={{ duration: 0.25 }}
             role="status"
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: '50%',
-              transform: 'translateX(-50%)',
-              zIndex: 40,
-              pointerEvents: 'none',
-              padding: '6px 12px',
-              borderRadius: 999,
-              background: t.card,
-              border: `1px solid ${t.line}`,
-              color: t.ink2,
-              fontFamily: t.fontBody,
-              fontSize: 12,
-              whiteSpace: 'nowrap',
-            }}
+            style={styles.rebuiltNotice}
           >
             Showing newer profiles
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* The second copy of the rebuild overlay, mirroring the one in the
-          `if (loading)` branch. It is `position: fixed`, so it covers the
-          viewport identically from either nesting depth — this one is the
-          safety net for a rebuild whose fetch resolved without `loading` ever
-          visibly flipping. */}
       <DiscoverRebuildOverlay show={rebuildOverlay} />
 
       {merging && !loading && (
-        <div aria-live="polite" style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 30, pointerEvents: 'none', padding: '4px 10px', background: t.card, border: `1px solid ${t.hair}`, borderRadius: 999, color: t.ink3, fontFamily: t.fontBody, fontSize: 11, whiteSpace: 'nowrap' }}>
+        <div aria-live="polite" style={styles.mergingNotice}>
           Updating…
         </div>
       )}
 
-      <div style={{ ...styles.stageContainer, ...(isDesktop ? styles.stageContainerDesktopNoPad : null) }}>
-        {/* Desktop: constrained deck column floating on the desk. Mobile: full-bleed. */}
-        <div style={isDesktop ? styles.deckColumnDesktop : { position: 'relative', width: '100%', height: '100%' }}>
+      <div
+        className={isDesktop ? 'discover-desktop-stage' : 'discover-mobile-stage'}
+        style={{
+          ...styles.stageContainer,
+          ...(isDesktop ? styles.stageContainerDesktopNoPad : null),
+        }}
+      >
+        <div style={isDesktop ? styles.deckColumnDesktop : styles.deckColumnMobile}>
           <AnimatePresence custom={slideDirection}>
             {profiles[currentIndex] && (
               <motion.div
@@ -15849,11 +19632,7 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
                 animate="center"
                 exit="exit"
                 transition={springTransition}
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  display: 'flex', flexDirection: 'column',
-                }}
+                style={styles.cardMotionLayer}
               >
                 <ProfileCard
                   profile={profiles[currentIndex]}
@@ -15866,9 +19645,6 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
           </AnimatePresence>
         </div>
 
-        {/* Deck-scoped actions — ONE instance, sibling of the card stack.
-            Fixed to the viewport, so these stay level with the Header bell
-            and never remount (or re-arm) as cards animate through. */}
         {!isDesktop && (
           <DeckActions
             onPass={() => handleAction('pass')}
@@ -15883,7 +19659,12 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
       </div>
 
       {isDesktop && (
-        <div style={styles.desktopActionBar} role="toolbar" aria-label="Discovery actions">
+        <div
+          className="discover-desktop-actions"
+          style={styles.desktopActionBar}
+          role="toolbar"
+          aria-label="Discovery actions"
+        >
           <button
             className="deck-action-btn"
             title="Previous profile (↓ or B)"
@@ -15892,8 +19673,9 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
             onClick={() => handleNextProfile('down')}
             style={{ ...styles.deckBtn, background: t.paper, color: t.ink }}
           >
-            <Undo2 size={19} strokeWidth={2.8} />
+            <Undo2 size={19} strokeWidth={2.2} />
           </button>
+
           <button
             className="deck-action-btn"
             title="Pass (← or P)"
@@ -15901,21 +19683,30 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
             onClick={() => handleAction('pass')}
             style={{ ...styles.deckBtn, background: t.card, color: t.ink }}
           >
-            <X size={21} strokeWidth={3} />
+            <X size={21} strokeWidth={2.4} />
           </button>
-          {/* ✨ ALIGN — the one affirmative action. Replaced the flower and the
-              telegram, which were two buttons for one gesture and forced a
-              choice about emphasis before a choice about the person. */}
+
           <button
-            className="deck-action-btn"
-            title="Align (→ or L) — or click any photo or prompt"
-            aria-label="Align"
+            className="deck-action-btn deck-align-btn"
+            title="Align with this profile (→ or L)"
+            aria-label="Align with this profile"
             onClick={() => handleAction('align', {})}
-            style={{ ...styles.deckBtn, background: t.yellow, color: t.ink }}
+            style={{
+              ...styles.deckBtn,
+              width: 104,
+              background: t.yellow,
+              color: t.ink,
+              borderColor: t.yellow,
+            }}
           >
-            Align
+            ALIGN <span aria-hidden="true">↗</span>
           </button>
-          <div aria-hidden="true" style={styles.deckHints}>
+
+          <div
+            className="deck-hints-desktop"
+            aria-hidden="true"
+            style={styles.deckHints}
+          >
             <span><kbd className="deck-kbd">←</kbd> pass</span>
             <span><kbd className="deck-kbd">→</kbd> align</span>
             <span><kbd className="deck-kbd">↓</kbd> back</span>
@@ -15927,49 +19718,80 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
         {showAlignmentModal && alignedProfile && (
           <>
             <motion.div
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
               transition={{ duration: 0.25 }}
-              style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(12,12,14,0.62)', zIndex: 99998 }}
-              onClick={() => { setShowAlignmentModal(false); setAlignedProfile(null); }}
+              style={styles.modalScrim}
+              onClick={() => {
+                setShowAlignmentModal(false);
+                setAlignedProfile(null);
+              }}
             />
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.94, opacity: 0, y: 16 }} transition={{ type: 'spring', damping: 22, stiffness: 300 }}
-              style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '90%', maxWidth: 340, backgroundColor: t.paper, border: `2px solid ${t.ink}`, borderRadius: 22, boxShadow: `8px 8px 0 ${t.ink}`, padding: '30px 24px 24px', textAlign: 'center', zIndex: 99999, overflow: 'hidden' }}
-            >
-              {/* candy confetti — straight, tiny, celebratory */}
-              <span aria-hidden="true" style={{ position: 'absolute', top: 18, left: 20, width: 14, height: 14, borderRadius: 999, background: t.yellow, border: `1.5px solid ${t.ink}` }} />
-              <span aria-hidden="true" style={{ position: 'absolute', top: 26, right: 24, width: 11, height: 11, borderRadius: 3, background: t.coral, border: `1.5px solid ${t.ink}` }} />
-              <span aria-hidden="true" style={{ position: 'absolute', bottom: 78, left: 28, width: 10, height: 10, borderRadius: 3, background: t.green, border: `1.5px solid ${t.ink}` }} />
-              <span aria-hidden="true" style={{ position: 'absolute', bottom: 88, right: 30, width: 13, height: 13, borderRadius: 999, background: t.pink, border: `1.5px solid ${t.ink}` }} />
 
-              {/* the match badge — candy tile, pop-in */}
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.94, opacity: 0, y: 16 }}
+              transition={{
+                type: 'spring',
+                damping: 22,
+                stiffness: 300,
+              }}
+              style={styles.matchModal}
+            >
+              <span aria-hidden="true" style={styles.confettiAmber} />
+              <span aria-hidden="true" style={styles.confettiCoral} />
+              <span aria-hidden="true" style={styles.confettiSage} />
+              <span aria-hidden="true" style={styles.confettiConcrete} />
+
               <motion.div
                 initial={{ scale: 0.5, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
-                transition={{ delay: 0.1, type: 'spring', damping: 14, stiffness: 280 }}
-                style={{ width: 92, height: 92, margin: '0 auto 18px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: t.yellow, border: `2px solid ${t.ink}`, borderRadius: 24, boxShadow: `5px 5px 0 ${t.ink}` }}
+                transition={{
+                  delay: 0.1,
+                  type: 'spring',
+                  damping: 14,
+                  stiffness: 280,
+                }}
+                style={styles.matchIcon}
               >
-                <Heart size={40} strokeWidth={2.4} color={t.ink} fill={t.ink} />
+                <Heart size={40} strokeWidth={2.2} color={t.ink} fill={t.ink} />
               </motion.div>
 
-              <h2 style={{ fontFamily: t.fontHeavy, fontSize: 27, fontWeight: 400, color: t.ink, margin: '0 0 8px 0', letterSpacing: '-.01em', textTransform: 'uppercase' }}>
+              <h2 style={styles.matchTitle}>
                 Aligned<span style={{ color: t.coral }}>!</span>
               </h2>
-              <p style={{ fontFamily: t.fontBody, fontSize: 14, fontWeight: 500, color: t.ink2, margin: '0 0 24px 0', lineHeight: 1.6 }}>
+
+              <p style={styles.matchBody}>
                 You and {alignedProfile.name} found common ground. The chat is now open.
               </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+
+              <div style={styles.matchActions}>
                 <button
                   className="slam-btn"
-                  onClick={() => { triggerHaptic('heavy'); setShowAlignmentModal(false); if (onOpenChat && alignedProfile) { onOpenChat({ _id: alignedProfile.alignmentId, user: alignedProfile }); } setAlignedProfile(null); }}
-                  style={{ width: '100%', padding: '15px', background: t.yellow, color: t.ink, border: `2px solid ${t.ink}`, borderRadius: 12, boxShadow: `4px 4px 0 ${t.ink}`, fontFamily: t.fontMono, fontSize: 12, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', cursor: 'pointer' }}
+                  onClick={() => {
+                    triggerHaptic('heavy');
+                    setShowAlignmentModal(false);
+                    if (onOpenChat && alignedProfile) {
+                      onOpenChat({
+                        _id: alignedProfile.alignmentId,
+                        user: alignedProfile,
+                      });
+                    }
+                    setAlignedProfile(null);
+                  }}
+                  style={styles.openChatButton}
                 >
                   Open chat
                 </button>
+
                 <button
-                  onClick={() => { setShowAlignmentModal(false); setAlignedProfile(null); }}
-                  style={{ width: '100%', padding: '15px', background: 'transparent', color: t.ink, border: `2px solid ${t.ink}`, borderRadius: 12, fontFamily: t.fontMono, fontSize: 12, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', cursor: 'pointer' }}
+                  onClick={() => {
+                    setShowAlignmentModal(false);
+                    setAlignedProfile(null);
+                  }}
+                  style={styles.keepBrowsingButton}
                 >
                   Keep browsing
                 </button>
@@ -15978,100 +19800,540 @@ The `moved` branch clears the cached deck and rebuilds. That is the case the
           </>
         )}
       </AnimatePresence>
-
-      {/* The gate is a TOAST, not a sheet — see handleAction. It renders at
-          z-index 9999 (ArchivalToast), just above the popout overlay's 9998,
-          and handleAction closes the popout first so it never appears behind a
-          blurred scrim. */}
     </div>
   );
 };
 
-/* ── deck styles: borders, hard shadows, slam presses ── */
 const DECK_CSS = `
-  .slam-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-    font-family: ${t.fontMono}; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
-    cursor: pointer; transition: transform .08s steps(2), box-shadow .08s steps(2), background .08s steps(2);
-    -webkit-tap-highlight-color: transparent; }
-  .slam-btn:active { transform: translate(4px, 4px) !important; box-shadow: 0 0 0 ${t.ink} !important; }
-  .deck-action-btn { transition: transform .08s steps(2), box-shadow .08s steps(2); will-change: transform; }
-  .deck-action-btn:active { transform: translate(4px, 4px) !important; box-shadow: 0 0 0 ${t.ink} !important; }
-  .deck-action-btn:disabled { opacity: .35; cursor: default; transform: none !important; box-shadow: none !important; }
-  @media (hover: hover) {
-    .deck-action-btn:hover:not(:disabled) { transform: translate(-1px, -1px);
-      box-shadow: 5px 5px 0 ${t.ink}; }
-    .slam-btn:hover { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 ${t.ink}; }
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+  /* Keep the iOS safe-area/status-bar backdrop in warm cream, not a full-bleed pink band. */
+  html, body, #root { background-color: #FFF9F4 !important; }
+
+  .slam-btn,
+  .deck-action-btn {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    transition: transform .14s ease, box-shadow .14s ease, background-color .14s ease, border-color .14s ease, opacity .14s ease;
+    border: 2px solid #171414;
+    border-radius: 16px;
+    box-shadow: 4px 4px 0 #171414;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 
-  kbd.deck-kbd { font-family: ${t.fontMono}; font-size: 10px; font-weight: 700;
-    background: ${t.paper}; border: 1.5px solid ${t.ink}; border-radius: 5px; padding: 2px 6px; color: ${t.ink2}; }
+  .slam-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    min-height: 48px;
+    padding: 13px 20px;
+    font-family: ${t.fontMono};
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    cursor: pointer;
+    color: ${t.ink};
+  }
+
+  .deck-action-btn {
+    flex-shrink: 0;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .deck-action-btn:disabled {
+    opacity: .34;
+    cursor: not-allowed;
+    box-shadow: none !important;
+    transform: none !important;
+  }
+
+  .deck-action-btn:focus-visible,
+  .slam-btn:focus-visible {
+    outline: 3px solid ${t.pink};
+    outline-offset: 4px;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .deck-action-btn:hover:not(:disabled),
+    .slam-btn:hover {
+      transform: translate(-2px, -2px);
+      box-shadow: 6px 6px 0 #171414;
+      filter: saturate(1.04);
+    }
+  }
+
+  .deck-action-btn:active:not(:disabled),
+  .slam-btn:active {
+    transform: translate(3px, 3px) !important;
+    box-shadow: 1px 1px 0 #171414 !important;
+  }
+
+  kbd.deck-kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 23px;
+    min-height: 22px;
+    padding: 2px 5px;
+    border: 2px solid #171414;
+    border-radius: 7px;
+    background: ${t.paper};
+    color: ${t.ink};
+    box-shadow: 2px 2px 0 #171414;
+    font: 600 10px ${t.fontMono};
+  }
+
+  .discover-mobile-stage,
+  .discover-desktop-stage {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  .deck-action-btn.deck-align-btn {
+    background: ${t.yellow};
+  }
+
+  @media (max-width: 760px) {
+    .deck-hints-desktop { display: none !important; }
+    .discover-mobile-stage { padding: 0 !important; }
+  }
+
+  @media (max-height: 680px) and (min-width: 761px) {
+    .discover-desktop-stage { padding-top: 8px !important; padding-bottom: 4px !important; }
+    .discover-desktop-actions { padding-top: 6px !important; padding-bottom: 8px !important; }
+  }
+
+  @media (max-width: 380px) {
+    .discover-desktop-actions { gap: 8px; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
-    .slam-btn, .deck-action-btn { transition: none; }
+    .slam-btn, .deck-action-btn { transition: none !important; }
   }
 `;
 
 const styles = {
-  viewportRoot: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', backgroundColor: t.desk, position: 'relative', overflow: 'hidden', userSelect: 'none', WebkitUserSelect: 'none' },
-  viewportRootDesktop: { alignItems: 'center' },
-  stageContainer: { flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', position: 'relative', zIndex: 2,
-    /* Bottom padding reserves the strip the global Align bar occupies. Without
-       it the bar is absolutely positioned at the viewport's bottom edge and
-       lands ON the card — covering the lower photo and, on a short card, the
-       bio. Desktop overrides this and carries its own bar. */
-    padding: '0 0 62px' },
-  stageContainerDesktop: { width: '100%', maxWidth: 560, padding: '20px 20px 12px', margin: '0 auto', },
-  /* The mobile Align bar is hidden on desktop, so the reserved strip is not. */
-  stageContainerDesktopNoPad: { width: '100%', maxWidth: 560, padding: '20px 20px 12px', margin: '0 auto' },
-  deckColumnDesktop: {
-    position: 'relative', width: '100%', height: '100%', minHeight: 0,
-    backgroundColor: t.desk, border: `2px solid ${t.ink}`, borderRadius: 22,
+  loadingRoot: {
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    padding: 12,
+    boxSizing: 'border-box',
+    background: '#FFF9F4',
+    position: 'relative',
+  },
+
+  stateRoot: {
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    padding: 20,
+    boxSizing: 'border-box',
+    background: '#FFF9F4',
+    position: 'relative',
+  },
+
+  viewportRoot: {
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    background: '#FFF9F4',
+    position: 'relative',
+    overflow: 'hidden',
+    userSelect: 'none',
+    WebkitUserSelect: 'none',
+  },
+
+  viewportRootDesktop: {
+    alignItems: 'center',
+    width: '100%',
+  },
+
+  stageContainer: {
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+    display: 'flex',
+    alignItems: 'stretch',
+    justifyContent: 'center',
+    width: '100%',
+    position: 'relative',
+    zIndex: 2,
+    padding: '0 0 8px',
+    boxSizing: 'border-box',
+  },
+
+  stageContainerDesktop: {
+    width: '100%',
+    maxWidth: 580,
+    padding: '14px 20px 8px',
+    margin: '0 auto',
+    boxSizing: 'border-box',
+  },
+
+  stageContainerDesktopNoPad: {
+    width: '100%',
+    maxWidth: 580,
+    padding: '14px 20px 8px',
+    margin: '0 auto',
+    boxSizing: 'border-box',
+  },
+
+  deckColumnMobile: {
+    position: 'relative',
+    width: '100%',
+    height: '100%',
+    minHeight: 0,
+    minWidth: 0,
     overflow: 'hidden',
   },
+
+  deckColumnDesktop: {
+    position: 'relative',
+    width: '100%',
+    height: '100%',
+    minHeight: 0,
+    minWidth: 0,
+    background: '#FFF9F4',
+    border: '2px solid #171414',
+    borderRadius: 22,
+    boxShadow: '7px 7px 0 #171414',
+    overflow: 'hidden',
+    isolation: 'isolate',
+  },
+
+  cardMotionLayer: {
+    position: 'absolute',
+    inset: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+    minWidth: 0,
+    willChange: 'transform, opacity',
+    backfaceVisibility: 'hidden',
+  },
+
   desktopActionBar: {
-    position: 'relative', zIndex: 3, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    gap: 12, padding: '12px 20px 18px', width: '100%', maxWidth: 560, margin: '0 auto',
+    position: 'relative',
+    zIndex: 3,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    padding: '10px 20px 16px',
+    width: '100%',
+    maxWidth: 580,
+    margin: '0 auto',
+    boxSizing: 'border-box',
+    flexShrink: 0,
   },
+
   deckBtn: {
-    width: 54, height: 54, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    cursor: 'pointer', border: `2px solid ${t.ink}`, boxShadow: `4px 4px 0 ${t.ink}`,
+    width: 52,
+    height: 52,
+    minWidth: 52,
+    borderRadius: 16,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    border: `2px solid ${t.ink}`,
+    boxShadow: '4px 4px 0 #171414',
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
+    fontFamily: t.fontMono,
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '.08em',
   },
+
   deckHints: {
-    display: 'flex', alignItems: 'center', gap: 10, marginLeft: 8,
-    fontFamily: t.fontMono, fontSize: 10, color: t.ink3, whiteSpace: 'nowrap',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    marginLeft: 8,
+    fontFamily: t.fontMono,
+    fontSize: 9,
+    color: t.ink3,
+    whiteSpace: 'nowrap',
   },
-  /* error / empty state card */
+
   stateCard: {
-    width: '100%', maxWidth: 330, backgroundColor: t.paper,
-    border: `2px solid ${t.ink}`, borderRadius: 20, boxShadow: `8px 8px 0 ${t.ink}`,
-    padding: '30px 24px 26px', textAlign: 'center',
-    display: 'flex', flexDirection: 'column', alignItems: 'center',
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: t.paper,
+    border: `2px solid ${t.ink}`,
+    borderRadius: 22,
+    boxShadow: '6px 6px 0 #171414',
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
+    padding: '30px 24px 26px',
+    textAlign: 'left',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
   },
+
   stateTile: {
-    width: 56, height: 56, borderRadius: 16, border: `2px solid ${t.ink}`,
-    boxShadow: `4px 4px 0 ${t.ink}`,
-    display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 18,
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    border: `2px solid ${t.ink}`,
+    boxShadow: '3px 3px 0 #171414',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
   },
+
   stateTitle: {
-    fontFamily: t.fontHeavy, fontSize: 21, fontWeight: 400, color: t.ink,
-    letterSpacing: '-.01em', textTransform: 'uppercase', margin: '0 0 8px 0',
+    fontFamily: t.fontHeavy,
+    fontSize: 28,
+    lineHeight: .95,
+    fontWeight: 800,
+    color: t.ink,
+    letterSpacing: '-.015em',
+    textTransform: 'uppercase',
+    margin: '0 0 10px',
   },
+
   stateBody: {
-    fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 500, lineHeight: 1.6,
-    maxWidth: 260, marginBottom: 22, color: t.ink2,
+    fontFamily: t.fontBody,
+    fontSize: 13,
+    fontWeight: 500,
+    lineHeight: 1.7,
+    maxWidth: 270,
+    margin: '0 0 24px',
+    color: t.ink2,
   },
+
   slamBtn: {
-    padding: '13px 24px', background: t.yellow, color: t.ink,
-    border: `2px solid ${t.ink}`, borderRadius: 12, boxShadow: `4px 4px 0 ${t.ink}`,
+    padding: '13px 22px',
+    background: t.coral,
+    color: '#171414',
+    border: `2px solid ${t.ink}`,
+    borderRadius: 13,
+    boxShadow: '4px 4px 0 #171414',
+  },
+
+  rebuiltNotice: {
+    position: 'absolute',
+    top: 8,
+    left: 12,
+    right: 12,
+    width: 'fit-content',
+    maxWidth: 'calc(100% - 24px)',
+    marginInline: 'auto',
+    boxSizing: 'border-box',
+    zIndex: 40,
+    pointerEvents: 'none',
+    padding: '8px 14px',
+    borderRadius: 12,
+    background: '#FFF9F4',
+    border: `2px solid ${t.ink}`,
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
+    color: t.ink,
+    fontFamily: t.fontMono,
+    fontSize: 9,
+    lineHeight: 1.4,
+    letterSpacing: '.06em',
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    overflowWrap: 'anywhere',
+  },
+
+  mergingNotice: {
+    position: 'absolute',
+    top: 8,
+    left: 12,
+    right: 12,
+    width: 'fit-content',
+    maxWidth: 'calc(100% - 24px)',
+    marginInline: 'auto',
+    boxSizing: 'border-box',
+    zIndex: 30,
+    pointerEvents: 'none',
+    padding: '6px 10px',
+    background: '#FFF9F4',
+    border: `2px solid ${t.ink}`,
+    borderRadius: 12,
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
+    color: t.ink,
+    fontFamily: t.fontMono,
+    fontSize: 9,
+    lineHeight: 1.4,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    overflowWrap: 'anywhere',
+  },
+
+  modalScrim: {
+    position: 'fixed',
+    inset: 0,
+    backgroundColor: 'rgba(23, 20, 20, .62)',
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
+    zIndex: 99998,
+  },
+
+  matchModal: {
+    position: 'fixed',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: '90%',
+    maxWidth: 340,
+    backgroundColor: t.paper,
+    border: `2px solid ${t.ink}`,
+    borderRadius: 24,
+    boxShadow: '8px 8px 0 #171414',
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
+    padding: '30px 24px 24px',
+    textAlign: 'left',
+    zIndex: 99999,
+    overflow: 'hidden',
+  },
+
+  confettiAmber: {
+    position: 'absolute',
+    top: 18,
+    left: 20,
+    width: 12,
+    height: 12,
+    borderRadius: 0,
+    background: t.yellow,
+    border: `2px solid ${t.ink}`,
+  },
+
+  confettiCoral: {
+    position: 'absolute',
+    top: 26,
+    right: 24,
+    width: 10,
+    height: 10,
+    borderRadius: 0,
+    background: t.coral,
+    border: `2px solid ${t.ink}`,
+  },
+
+  confettiSage: {
+    position: 'absolute',
+    bottom: 78,
+    left: 28,
+    width: 10,
+    height: 10,
+    borderRadius: 0,
+    background: t.green,
+    border: `2px solid ${t.ink}`,
+  },
+
+  confettiConcrete: {
+    position: 'absolute',
+    bottom: 88,
+    right: 30,
+    width: 12,
+    height: 12,
+    borderRadius: 0,
+    background: t.pink,
+    border: `2px solid ${t.ink}`,
+  },
+
+  matchIcon: {
+    width: 72,
+    height: 72,
+    margin: '0 0 20px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: t.yellow,
+    border: `2px solid ${t.ink}`,
+    borderRadius: 15,
+    boxShadow: '4px 4px 0 #171414',
+  },
+
+  matchTitle: {
+    fontFamily: t.fontHeavy,
+    fontSize: 34,
+    lineHeight: .9,
+    fontWeight: 800,
+    color: t.ink,
+    margin: '0 0 10px',
+    letterSpacing: '-.015em',
+    textTransform: 'uppercase',
+  },
+
+  matchBody: {
+    fontFamily: t.fontBody,
+    fontSize: 13,
+    fontWeight: 500,
+    color: t.ink2,
+    margin: '0 0 24px',
+    lineHeight: 1.7,
+  },
+
+  matchActions: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+  },
+
+  openChatButton: {
+    width: '100%',
+    padding: 15,
+    background: t.coral,
+    color: '#171414',
+    border: `2px solid ${t.ink}`,
+    borderRadius: 13,
+    boxShadow: '4px 4px 0 #171414',
+    fontFamily: t.fontMono,
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: '.12em',
+    textTransform: 'uppercase',
+    cursor: 'pointer',
+  },
+
+  keepBrowsingButton: {
+    width: '100%',
+    padding: 15,
+    background: 'transparent',
+    color: t.ink,
+    border: `2px solid ${t.ink}`,
+    borderRadius: 13,
+    fontFamily: t.fontMono,
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: '.12em',
+    textTransform: 'uppercase',
+    cursor: 'pointer',
   },
 };
 
 export default Discover;
+
 ```
 
 ### ./client/src/pages/Matches.jsx
 
 ```
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import neu from '../styles/neu';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '../utils/api';
@@ -16083,24 +20345,8 @@ import { Heart, MoreVertical, Search, X } from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
 import { DECK_CONTENT_TOP } from '../utils/deckChrome';
 
-/* ── Locked tokens — neubrutalism, same family as ProfileCard / NavBar / Discover ── */
-const t = {
-  desk: '#131313',
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  pink: '#FFA3C6',
-  red: '#E5484D',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
 
 const MATCHES_CSS = `
   .match-card { will-change: transform;
@@ -16496,6 +20742,7 @@ export default Matches;
 ### ./client/src/pages/Onboarding.jsx
 
 ```
+
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { Camera, LogOut, ChevronRight, ChevronLeft, Check, MoreVertical, X } from 'lucide-react';
@@ -16505,333 +20752,1426 @@ import { triggerHaptic } from '../utils/haptics';
 import { readLocationOnce, LOCATION_UNAVAILABLE } from '../utils/geolocation';
 import { useAuth } from '../utils/AuthContext';
 import { useAppConfig } from '../utils/AppConfigContext';
-
-/**
- * 📝 ONBOARDING — seven screens, one question each, publish at 45.
- *
- * Design: neobrutalism — ink borders, hard offset shadows on BUTTONS ONLY,
- * straight edges (no tilt anywhere), directional slide transitions.
- * Photo step shows a local preview instantly and compresses before upload.
- *
- * ⚠️ THE 18-40 GATE IS NOT NEGOTIABLE. /users/setup re-derives age
- * server-side from `dob`; the client computes it only for the preview.
- */
+import neu from '../styles/neu';
 
 const T = {
-  bg: '#F4EFE3',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  yellow: '#FFD43D',
-  yellowDeep: '#FFC91F',
-  green: '#5BD98A',
-  orange: '#FF6B4A',
-  red: '#E5484D',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
+  ...neu,
+  ink: '#111211',
+  ink2: '#383832',
+  ink3: '#77766F',
+  paper: '#F1EDE2',
+  paper2: '#E8E2D6',
+  card: '#F8F5EC',
+  yellow: '#E0A15E',
+  yellowDeep: '#CB8848',
+  orange: '#C96F68',
+  green: '#779477',
+  red: '#A84F4A',
+  concrete: '#A3A3A1',
+  fontHeavy: "'Barlow Condensed', sans-serif",
+  fontBody: "'Space Grotesk', sans-serif",
+  fontMono: "'IBM Plex Mono', monospace",
 };
 
 const STEPS = [
   {
-    key: 'name', title: 'What shall we call you?',
-    hint: 'First names work best.',
+    key: 'name',
+    title: 'What do your friends call you?',
+    hint: 'First name is plenty. Make yourself at home.',
   },
   {
-    key: 'dob', title: "When's your birthday?",
-    hint: 'You must be 18 or older to join.',
-    foot: 'Others only ever see your age.',
+    key: 'dob',
+    title: "When's your birthday?",
+    hint: 'You need to be 18–40 to join. Only your age is shown.',
+    foot: 'Your birthday stays private.',
   },
   {
-    key: 'photo', title: 'Add a photo',
-    hint: "It's the first thing people see. One is enough for now.",
-  },
-  { key: 'gender', title: 'How do you identify?' },
-  {
-    key: 'interestedIn', title: 'Who do you want to meet?',
-    hint: 'Pick as many as apply.',
-  },
-  { key: 'year', title: 'Undergrad or postgrad?' },
-  {
-    key: 'intent', title: 'What are you here for?',
-    hint: 'This shapes who appears in your deck.',
+    key: 'photo',
+    title: 'Give them a face to remember.',
+    hint: 'Choose a photo that feels like you. You can change it later.',
   },
   {
-    /* 📍 Deliberately LAST and optional. It only ever adds a ranking signal; the
-       deck works without it, and declining is not recorded as a refusal — the
-       field is simply absent from the setup payload and the server leaves
-       location off. */
-    key: 'location', title: 'Show people near you?',
-    hint: 'Optional. You can change this anytime in Settings.',
-    foot: 'Nothing is tracked in the background. We check once when you open the app.',
+    key: 'gender',
+    title: 'How do you identify?',
+    hint: 'Choose what feels right to you.',
+  },
+  {
+    key: 'interestedIn',
+    title: 'Who would you like to meet?',
+    hint: 'Choose every option that fits.',
+  },
+  {
+    key: 'year',
+    title: 'What chapter are you in?',
+    hint: 'Undergrad or postgrad?',
+  },
+  {
+    key: 'intent',
+    title: 'What are you hoping to find?',
+    hint: 'No wrong answers. This helps shape your deck.',
+  },
+  {
+    key: 'location',
+    title: "Who's in your orbit?",
+    hint: 'Find people nearby, beyond your campus.',
+    foot: 'Your location is never shown to other people.',
     optional: true,
   },
 ];
 
-const FOOT_DEFAULT = 'You can change this anytime in Settings.';
-
-/* ⚠️ NO INTENT CAP. There was `MAX_INTENTS = 2` here and it is gone, matching
-   the removal in server/config/appData.js. Interests still cap at 10, but that
-   limit lives in the shared app config rather than here, because nothing needs
-   to hardcode it to get this right. */
-
 const CSS = `
-  /* Root is the scroller (html/body are locked in index.css): centered when
-     content fits, scrollable when it doesn't. Dot-grid on cream = the floor
-     everything sits on. */
-  .ob-root { height: 100vh; height: 100dvh; width: 100%; display: flex;
-    flex-direction: column; overflow-y: auto; overflow-x: hidden;
-    overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
-    background-color: ${T.bg};
-    background-image: radial-gradient(rgba(25,25,25,.10) 1.2px, transparent 1.3px);
-    background-size: 22px 22px;
-    box-sizing: border-box; position: relative;
-    --card: ${T.card}; --ink: ${T.ink}; --ink2: ${T.ink2}; --ink3: ${T.ink3};
-    --yellow: ${T.yellow}; --yellowDeep: ${T.yellowDeep}; --green: ${T.green};
-    --orange: ${T.orange}; --red: ${T.red};
-    --heavy: ${T.fontHeavy}; --body: ${T.fontBody}; --mono: ${T.fontMono}; }
-  .ob-root * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
-  .ob-root ::selection { background: ${T.yellow}; color: ${T.ink}; }
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
-  /* ── fixed header — identical on every step: back left, ⋮ right ── */
-  .ob-head { position: sticky; top: 0; z-index: 50; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: space-between;
-    padding: max(12px, env(safe-area-inset-top)) 14px 12px;
-    background-color: ${T.bg};
-    background-image: radial-gradient(rgba(25,25,25,.10) 1.2px, transparent 1.3px);
-    background-size: 22px 22px;
-    border-bottom: 2.5px solid ${T.ink}; }
-  .ob-headspacer { width: 46px; flex-shrink: 0; }
+  .ob-root {
+    --page: ${T.paper};
+    --main: ${T.ink};
+    --sub: ${T.ink2};
+    --surface: ${T.card};
+    --line: rgba(17,18,17,.13);
+    --accent: ${T.orange};
+    --tint: rgba(201,111,104,.15);
+    --heavy: ${T.fontHeavy};
+    --body: ${T.fontBody};
+    --mono: ${T.fontMono};
 
-  .ob-hbtn { width: 46px; height: 46px; flex-shrink: 0; display: flex; align-items: center;
-    justify-content: center; cursor: pointer; border: 2.5px solid var(--ink);
-    border-radius: 999px; background: var(--card); color: var(--ink);
-    box-shadow: 3px 3px 0 var(--ink);
-    transition: transform .1s ease, box-shadow .1s ease, background .15s ease; }
-  .ob-hbtn:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink);
-    background: var(--yellow); }
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+    isolation: isolate;
+    position: relative;
+    background-color: var(--page);
+    color: var(--main);
+    font-family: var(--body);
+    -webkit-font-smoothing: antialiased;
+    transition: background-color .45s ease, color .35s ease;
+  }
 
-  /* logout lives behind the ⋮ — invisible until asked for */
-  .ob-scrim { position: fixed; inset: 0; z-index: 90; cursor: default; }
-  .ob-menu { position: absolute; top: calc(100% + 8px); right: 0; z-index: 100;
-    min-width: 190px; padding: 6px; background: var(--card);
-    border: 2.5px solid var(--ink); border-radius: 14px;
-    box-shadow: 5px 5px 0 var(--ink); overflow: hidden; }
-  .ob-menuitem { display: flex; align-items: center; gap: 9px; width: 100%;
-    padding: 13px; background: none; border: none; cursor: pointer; text-align: left;
-    border-radius: 9px; font-family: var(--body); font-size: 14.5px; font-weight: 700;
-    color: var(--red); transition: background .12s ease; }
-  .ob-menuitem:active { background: rgba(229,72,77,.12); }
+  .ob-root *,
+  .ob-root *::before,
+  .ob-root *::after {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
 
-  /* ── body ── */
-  .ob-fit { margin: auto; width: 100%; max-width: 440px;
-    padding: 14px 22px calc(32px + env(safe-area-inset-bottom));
-    display: flex; flex-direction: column; gap: 20px; }
+  .ob-root::before {
+    content: '';
+    position: fixed;
+    z-index: -1;
+    pointer-events: none;
+    width: min(65vw, 550px);
+    aspect-ratio: 1;
+    right: -25%;
+    top: 2%;
+    border-radius: 50%;
+    background: var(--tint);
+    filter: blur(80px);
+    opacity: .8;
+    transition: background .45s ease;
+  }
 
-  .ob-title { font-family: var(--heavy); font-size: clamp(30px, 9vw, 41px); font-weight: 400;
-    line-height: 1.1; letter-spacing: -.01em; color: var(--ink); margin: 0; width: fit-content;
-    max-width: 100%; padding: 2px 8px 5px 0;
-    background-image: linear-gradient(180deg, transparent 60%, var(--yellow) 60%);
-    -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+  .ob-root ::selection {
+    background: var(--accent);
+    color: ${T.ink};
+  }
 
-  .ob-hint { font-family: var(--body); font-size: 15px; font-weight: 500;
-    color: var(--ink2); margin: -8px 0 0; line-height: 1.55; }
+  .ob-root-name {
+    --page: #111211;
+    --main: #F1EDE2;
+    --sub: rgba(241,237,226,.76);
+    --surface: #20211F;
+    --line: rgba(241,237,226,.16);
+    --accent: #C96F68;
+    --tint: rgba(201,111,104,.15);
+  }
 
-  .ob-field { display: flex; flex-direction: column; gap: 16px; }
+  .ob-root-dob {
+    --page: #F1EDE2;
+    --main: #111211;
+    --sub: #5F5E57;
+    --surface: #F8F5EC;
+    --line: rgba(17,18,17,.13);
+    --accent: #E0A15E;
+    --tint: rgba(224,161,94,.22);
+  }
 
-  .ob-input { width: 100%; height: 62px; padding: 0 18px; background: var(--card);
-    border: 2.5px solid var(--ink); border-radius: 16px;
-    font-family: var(--body); font-size: 18px; font-weight: 600; color: var(--ink);
-    outline: none; -webkit-appearance: none; appearance: none;
-    box-shadow: 4px 4px 0 var(--ink);
-    transition: transform .12s ease, box-shadow .12s ease, background .15s ease; }
-  .ob-input::placeholder { color: var(--ink3); font-weight: 500; }
-  .ob-input:focus { background: #FFFBEA; transform: translate(-2px, -2px);
-    box-shadow: 6px 6px 0 var(--ink); }
-  .ob-dob { font-family: var(--mono); font-size: 20px; font-weight: 700; }
-  .ob-slash { font-family: var(--mono); font-size: 22px; font-weight: 700;
-    color: var(--ink); flex-shrink: 0; }
+  .ob-root-photo {
+    --page: #E1E7D9;
+    --main: #111211;
+    --sub: #50574C;
+    --surface: #F1EDE2;
+    --line: rgba(17,18,17,.13);
+    --accent: #779477;
+    --tint: rgba(119,148,119,.22);
+  }
 
-  /* age sticker — green when in band, red-shadowed when not */
-  .ob-age { align-self: flex-start; font-family: var(--mono); font-size: 14px; font-weight: 700;
-    padding: 9px 16px; background: var(--card); color: var(--red);
-    border: 2.5px solid var(--ink); border-radius: 999px; box-shadow: 3px 3px 0 var(--red); }
-  .ob-age.ok { background: var(--green); color: var(--ink); box-shadow: 3px 3px 0 var(--ink); }
+  .ob-root-gender {
+    --page: #F0DCD3;
+    --main: #111211;
+    --sub: #5F514D;
+    --surface: #F8F5EC;
+    --line: rgba(17,18,17,.13);
+    --accent: #C96F68;
+    --tint: rgba(201,111,104,.18);
+  }
 
-  .ob-chips { display: flex; flex-wrap: wrap; gap: 12px; }
-  /* 📍 Location step. Reads as an explanation plus one decision, not a form
-     field — the copy is what earns the permission, so it gets real space. */
-  .ob-location { display: flex; flex-direction: column; gap: 16px;
-    align-items: flex-start; max-width: 460px; }
-  .ob-location-copy { margin: 0; font-family: ${T.fontBody}; font-size: 15px;
-    line-height: 1.55; color: ${T.ink2}; }
-  .ob-location-ok { margin: 0; display: flex; align-items: center; gap: 8px;
-    font-family: ${T.fontBody}; font-size: 15px; font-weight: 600; color: ${T.ink}; }
-  .ob-loc-btn { appearance: none; border: 0; cursor: pointer; display: block;
-    width: 100%; font-family: ${T.fontHeavy}; font-size: 15px; letter-spacing: .01em;
-    padding: 13px 22px; border-radius: 999px;
-    background: ${T.yellow}; color: ${T.ink};
-    box-shadow: 0 2px 0 ${T.yellowDeep}; }
-  .ob-loc-btn:disabled { opacity: .55; cursor: default; }
-  /* The fallback is a real choice, so it gets the same target size and a
-     visible border — it must not read as a footnote under the primary button,
-     or the "required" step becomes a trap with a quiet exit. */
-  .ob-loc-alt { appearance: none; cursor: pointer; display: block; width: 100%;
-    font-family: ${T.fontBody}; font-size: 14px; font-weight: 600;
-    padding: 12px 22px; border-radius: 999px;
-    background: transparent; color: ${T.ink2};
-    border: 2px solid ${T.ink3}; }
-  .ob-loc-alt:disabled { opacity: .55; cursor: default; }
-  .ob-loc-alt:active { background: ${T.paper2}; }
-  .ob-loc-note { margin: 0; font-family: ${T.fontMono}; font-size: 12px;
-    color: ${T.ink3}; }
-  .ob-chip { padding: 14px 22px; min-height: 54px; border-radius: 999px;
-    border: 2.5px solid var(--ink); background: var(--card); color: var(--ink); cursor: pointer;
-    font-family: var(--body); font-size: 16px; font-weight: 700;
-    display: inline-flex; align-items: center; gap: 8px;
-    box-shadow: 3px 3px 0 var(--ink);
-    transition: transform .1s ease, box-shadow .1s ease, background .15s ease; }
-  .ob-chip:active:not(:disabled) { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink); }
-  .ob-chip.on { background: var(--yellow); }
-  .ob-chip:disabled { opacity: .4; cursor: not-allowed; }
+  .ob-root-interestedin {
+    --page: #F1EDE2;
+    --main: #111211;
+    --sub: #55554E;
+    --surface: #F8F5EC;
+    --line: rgba(17,18,17,.13);
+    --accent: #779477;
+    --tint: rgba(119,148,119,.18);
+  }
 
-  /* ── photo area — NO shadow, NO press effect. The zone itself stays quiet;
-     only the real buttons on top of it (cross / add) react to clicks. ── */
-  .ob-photo { width: 100%; aspect-ratio: 4 / 5; max-height: 46vh; max-height: 46dvh;
-    border-radius: 22px; border: 2.5px dashed var(--ink3); background: var(--card);
-    overflow: hidden; position: relative; display: flex; align-items: center;
-    justify-content: center; padding: 0; cursor: pointer; }
-  .ob-photo.filled { border-style: solid; border-color: var(--ink); cursor: default; }
-  .ob-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .ob-photoempty { display: flex; flex-direction: column; align-items: center; gap: 16px;
-    color: var(--ink2); font-family: var(--body); font-size: 14.5px; font-weight: 600;
-    padding: 20px; text-align: center; }
-  .ob-cam { width: 66px; height: 66px; display: flex; align-items: center; justify-content: center;
-    background: var(--orange); border: 2.5px solid var(--ink); border-radius: 999px;
-    box-shadow: 3px 3px 0 var(--ink); color: var(--ink); }
+  .ob-root-year {
+    --page: #E0A15E;
+    --main: #111211;
+    --sub: #493728;
+    --surface: #F8F5EC;
+    --line: rgba(17,18,17,.15);
+    --accent: #C96F68;
+    --tint: rgba(241,237,226,.25);
+  }
 
-  /* invisible full-area hit zone so tap-to-change stays a real <button> */
-  .ob-photohit { position: absolute; inset: 0; z-index: 1; background: transparent;
-    border: none; padding: 0; margin: 0; cursor: pointer; -webkit-appearance: none; appearance: none; }
+  .ob-root-intent {
+    --page: #111211;
+    --main: #F1EDE2;
+    --sub: rgba(241,237,226,.76);
+    --surface: #20211F;
+    --line: rgba(241,237,226,.16);
+    --accent: #779477;
+    --tint: rgba(119,148,119,.17);
+  }
 
-  /* the cross — a real button, so it keeps the press effect */
-  .ob-photox { position: absolute; top: 12px; right: 12px; z-index: 3;
-    width: 40px; height: 40px; border-radius: 999px; background: var(--card);
-    border: 2.5px solid var(--ink); box-shadow: 3px 3px 0 var(--ink);
-    display: flex; align-items: center; justify-content: center;
-    cursor: pointer; color: var(--ink);
-    transition: transform .1s ease, box-shadow .1s ease, background .15s ease; }
-  .ob-photox:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink);
-    background: var(--red); color: #fff; }
+  .ob-root-location {
+    --page: #E1E7D9;
+    --main: #111211;
+    --sub: #50574C;
+    --surface: #F8F5EC;
+    --line: rgba(17,18,17,.13);
+    --accent: #779477;
+    --tint: rgba(119,148,119,.2);
+  }
 
-  /* uploading pill — sits over the local preview while the compressed
-     file is in flight */
-  .ob-uploading { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
-    z-index: 3; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
-    padding: 9px 16px; background: var(--yellow); border: 2.5px solid var(--ink);
-    border-radius: 999px; box-shadow: 3px 3px 0 var(--ink);
-    font-family: var(--body); font-size: 13px; font-weight: 800; color: var(--ink); }
-  .ob-spin { width: 12px; height: 12px; border-radius: 999px;
-    border: 2.5px solid var(--ink); border-top-color: transparent;
-    animation: obspin .7s linear infinite; }
-  @keyframes obspin { to { transform: rotate(360deg); } }
+  .ob-head {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding:
+      max(12px, env(safe-area-inset-top))
+      clamp(17px, 4vw, 36px)
+      12px;
+    background: var(--page);
+    border-bottom: 1px solid var(--line);
+    transition: background-color .4s ease, border-color .4s ease;
+  }
 
-  .ob-cta { width: 100%; height: 64px; border: 2.5px solid var(--ink); border-radius: 999px;
-    background: var(--yellow); color: var(--ink); cursor: pointer; font-family: var(--body);
-    font-size: 17px; font-weight: 800; letter-spacing: .01em; flex-shrink: 0;
-    display: inline-flex; align-items: center; justify-content: center; gap: 10px;
-    box-shadow: 5px 5px 0 var(--ink);
-    transition: transform .1s ease, box-shadow .1s ease, opacity .15s ease, background .15s ease; }
-  .ob-cta:active:not(:disabled) { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--ink); }
-  .ob-cta:disabled { opacity: .45; cursor: default; }
-  .ob-cta svg { transition: transform .15s ease; }
+  .ob-headspacer {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+  }
 
-  .ob-foot { font-family: var(--mono); font-size: 12px; font-weight: 400;
-    color: var(--ink3); text-align: center; margin: 0; line-height: 1.6; }
+  .ob-hbtn {
+    width: 46px;
+    height: 46px;
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--main);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: 0 3px 0 rgba(17,18,17,.05);
+    transition: transform .16s ease, background .16s ease;
+  }
 
-  .ob-banner { background: var(--card); border-radius: 14px; padding: 13px 15px;
-    border: 2.5px solid var(--ink); box-shadow: 4px 4px 0 var(--red); }
-  .ob-banner p { margin: 0; font-family: var(--body); font-size: 14px;
-    font-weight: 600; color: var(--ink); line-height: 1.5; }
+  .ob-hbtn:active {
+    transform: scale(.93);
+    background: var(--tint);
+  }
 
-  .ob-root input, .ob-root textarea, .ob-root select { -webkit-user-select: auto; user-select: auto; }
-  .ob-root img { pointer-events: none; }
+  .ob-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+  }
 
-  .ob-input:focus-visible, .ob-chip:focus-visible, .ob-cta:focus-visible,
-  .ob-photo:focus-visible, .ob-photohit:focus-visible, .ob-photox:focus-visible,
-  .ob-hbtn:focus-visible, .ob-menuitem:focus-visible {
-    outline: 3px solid var(--ink); outline-offset: 3px; }
+  .ob-menu {
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    z-index: 100;
+    min-width: 180px;
+    padding: 6px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: 0 12px 32px rgba(17,18,17,.13);
+    overflow: hidden;
+    transform-origin: top right;
+  }
+
+  .ob-menuitem {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 46px;
+    padding: 12px;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    text-align: left;
+    border-radius: 11px;
+    font-family: var(--body);
+    font-size: 14px;
+    font-weight: 600;
+    color: ${T.red};
+    transition: background .15s ease;
+  }
+
+  .ob-menuitem:active {
+    background: rgba(168,79,74,.1);
+  }
+
+  .ob-fit {
+    width: 100%;
+    max-width: 1040px;
+    min-height: calc(100dvh - 70px);
+    flex: 1 0 auto;
+    margin: 0 auto;
+    padding:
+      clamp(30px, 6vh, 68px)
+      clamp(22px, 5vw, 58px)
+      0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: clamp(20px, 3vh, 32px);
+  }
+
+  .ob-screen {
+    --screen-accent: var(--accent);
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(200px, .78fr);
+    grid-template-areas:
+      "title art"
+      "hint art"
+      "field field";
+    column-gap: clamp(24px, 4vw, 48px);
+    row-gap: 19px;
+    align-items: center;
+    align-content: center;
+    isolation: isolate;
+  }
+
+  .ob-screen-photo {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "title"
+      "hint"
+      "field";
+  }
+
+  .ob-title {
+    grid-area: title;
+    width: fit-content;
+    max-width: 100%;
+    margin: 0;
+    color: var(--main);
+    font-family: var(--heavy);
+    font-size: clamp(56px, 7.2vw, 92px);
+    font-weight: 800;
+    line-height: .86;
+    letter-spacing: -.035em;
+    text-transform: uppercase;
+    overflow-wrap: anywhere;
+    text-wrap: balance;
+    transition: color .3s ease;
+  }
+
+  .ob-title::after {
+    content: '';
+    display: block;
+    width: clamp(55px, 8vw, 82px);
+    height: 7px;
+    margin-top: 17px;
+    border-radius: 999px;
+    background: var(--screen-accent);
+    transition: background-color .3s ease;
+  }
+
+  .ob-hint {
+    grid-area: hint;
+    align-self: start;
+    max-width: 480px;
+    margin: 0;
+    color: var(--sub);
+    font-family: var(--body);
+    font-size: 15px;
+    font-weight: 400;
+    line-height: 1.8;
+    transition: color .3s ease;
+  }
+
+  .ob-art {
+    grid-area: art;
+    position: relative;
+    align-self: center;
+    justify-self: stretch;
+    width: 100%;
+    min-width: 0;
+    aspect-ratio: 1.32 / 1;
+    max-height: 300px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--tint);
+    border: 1px solid var(--line);
+    border-radius: 34px 34px 12px 34px;
+    transition: background .35s ease, border-color .35s ease;
+  }
+
+  .ob-art::before {
+    content: '';
+    position: absolute;
+    width: 125px;
+    height: 125px;
+    right: -47px;
+    top: -54px;
+    border: 1px solid var(--screen-accent);
+    border-radius: 50%;
+    opacity: .4;
+    pointer-events: none;
+  }
+
+  .ob-art::after {
+    content: '';
+    position: absolute;
+    width: 70px;
+    height: 70px;
+    bottom: -35px;
+    left: -22px;
+    background: var(--screen-accent);
+    border-radius: 24px;
+    opacity: .13;
+    transform: rotate(-18deg);
+    pointer-events: none;
+  }
+
+  .ob-art svg {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+
+  .ob-art .art-float {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: ob-float 4s ease-in-out infinite;
+  }
+
+  .ob-art .art-float-late {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: ob-float 4.7s ease-in-out -1.7s infinite;
+  }
+
+  .ob-art .art-pulse {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: ob-pulse 3.5s ease-in-out infinite;
+  }
+
+  @keyframes ob-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+
+  @keyframes ob-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.035); }
+  }
+
+  .ob-field {
+    grid-area: field;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 17px;
+    width: 100%;
+    min-width: 0;
+    padding-top: 5px;
+  }
+
+  .ob-input {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    height: 74px;
+    padding: 0 22px;
+    background: var(--surface);
+    color: var(--main);
+    border: 1.5px solid var(--line);
+    border-radius: 18px;
+    font-family: var(--body);
+    font-size: 21px;
+    font-weight: 500;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+    transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+  }
+
+  .ob-input::placeholder {
+    color: var(--ink3);
+    font-weight: 400;
+  }
+
+  .ob-root-name .ob-input::placeholder,
+  .ob-root-intent .ob-input::placeholder {
+    color: rgba(241,237,226,.48);
+  }
+
+  .ob-input:focus,
+  .ob-input:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--screen-accent);
+  }
+
+  .ob-dob {
+    height: 70px;
+    padding: 0 6px;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: clamp(17px, 2.4vw, 23px);
+    font-weight: 600;
+  }
+
+  .ob-slash {
+    color: var(--sub);
+    font-family: var(--mono);
+    font-size: 20px;
+    font-weight: 400;
+    flex-shrink: 0;
+  }
+
+  .ob-age {
+    align-self: flex-start;
+    padding: 10px 15px;
+    color: ${T.red};
+    background: #F0DCD3;
+    border: 1px solid rgba(168,79,74,.2);
+    border-radius: 13px;
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .ob-age.ok {
+    color: #405B40;
+    background: #E3E9DC;
+    border-color: rgba(119,148,119,.35);
+  }
+
+  .ob-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 13px;
+  }
+
+  .ob-chip {
+    min-height: 66px;
+    padding: 17px 25px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 11px;
+    background: var(--surface);
+    color: var(--main);
+    border: 1.5px solid var(--line);
+    border-radius: 16px;
+    cursor: pointer;
+    font-family: var(--body);
+    font-size: 18px;
+    font-weight: 600;
+    box-shadow: 0 3px 0 rgba(17,18,17,.035);
+    transition: background .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
+  }
+
+  .ob-chip:nth-child(3n + 2) {
+    border-radius: 23px 15px 21px 15px;
+  }
+
+  .ob-chip.on {
+    background: var(--screen-accent);
+    color: ${T.ink};
+    border-color: transparent;
+    box-shadow: 0 3px 0 rgba(17,18,17,.09);
+  }
+
+  .ob-chip:active:not(:disabled) {
+    transform: scale(.96);
+  }
+
+  .ob-chip:disabled {
+    opacity: .4;
+    cursor: not-allowed;
+  }
+
+  .ob-photo {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: min(100%, 480px);
+    aspect-ratio: 4 / 5;
+    max-height: 555px;
+    min-height: 0;
+    padding: 0;
+    overflow: hidden;
+    cursor: pointer;
+    background:
+      radial-gradient(circle at 20% 20%, rgba(224,161,94,.2), transparent 34%),
+      radial-gradient(circle at 85% 80%, rgba(119,148,119,.23), transparent 35%),
+      var(--surface);
+    border: 1.5px dashed var(--line);
+    border-radius: 25px;
+    transition: border-color .16s ease, background .16s ease;
+  }
+
+  .ob-photo.filled {
+    border-style: solid;
+    cursor: default;
+    background: var(--surface);
+  }
+
+  .ob-photo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .ob-photoempty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 17px;
+    padding: 20px;
+    color: var(--sub);
+    font-family: var(--body);
+    font-size: 16px;
+    font-weight: 600;
+    text-align: center;
+  }
+
+  .ob-cam {
+    width: 82px;
+    height: 82px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--screen-accent);
+    border: 1px solid var(--line);
+    border-radius: 24px 24px 24px 9px;
+    color: ${T.ink};
+    transform: rotate(-4deg);
+    box-shadow: 0 5px 0 rgba(17,18,17,.06);
+  }
+
+  .ob-photohit {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    appearance: none;
+  }
+
+  .ob-photox {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 3;
+    width: 46px;
+    height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(248,245,236,.96);
+    color: ${T.ink};
+    border: 1px solid rgba(17,18,17,.12);
+    border-radius: 14px;
+    cursor: pointer;
+    transition: transform .15s ease, background .15s ease;
+  }
+
+  .ob-photox:active {
+    transform: scale(.92);
+    background: #F0DCD3;
+    color: ${T.red};
+  }
+
+  .ob-uploading {
+    position: absolute;
+    left: 50%;
+    bottom: 16px;
+    z-index: 3;
+    transform: translateX(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+    padding: 11px 16px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: 0 5px 16px rgba(17,18,17,.1);
+    font-family: var(--body);
+    font-size: 13px;
+    font-weight: 600;
+    color: ${T.ink};
+  }
+
+  .ob-spin {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid var(--screen-accent);
+    border-top-color: transparent;
+    animation: obspin .7s linear infinite;
+  }
+
+  @keyframes obspin {
+    to { transform: rotate(360deg); }
+  }
+
+  .ob-location {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    max-width: 560px;
+  }
+
+  .ob-location-copy {
+    margin: 0;
+    color: var(--sub);
+    font-family: var(--body);
+    font-size: 15px;
+    line-height: 1.8;
+  }
+
+  .ob-location-ok {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 0;
+    color: var(--main);
+    font-family: var(--body);
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.7;
+  }
+
+  .ob-location-ok svg {
+    flex-shrink: 0;
+    margin-top: 4px;
+    color: ${T.green};
+  }
+
+  .ob-loc-btn {
+    width: 100%;
+    min-height: 59px;
+    padding: 14px 20px;
+    background: var(--screen-accent);
+    color: ${T.ink};
+    border: 1px solid var(--line);
+    border-radius: 17px;
+    cursor: pointer;
+    font-family: var(--body);
+    font-size: 15px;
+    font-weight: 700;
+    box-shadow: 0 3px 0 rgba(17,18,17,.07);
+    transition: transform .15s ease, filter .15s ease;
+  }
+
+  .ob-loc-btn:active:not(:disabled) {
+    transform: translateY(2px);
+  }
+
+  .ob-loc-btn:disabled,
+  .ob-loc-alt:disabled {
+    opacity: .55;
+    cursor: default;
+  }
+
+  .ob-loc-alt {
+    width: 100%;
+    min-height: 56px;
+    padding: 13px 20px;
+    background: var(--surface);
+    color: var(--main);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    cursor: pointer;
+    font-family: var(--body);
+    font-size: 14px;
+    font-weight: 600;
+    transition: background .15s ease, border-color .15s ease;
+  }
+
+  .ob-loc-alt:active {
+    background: var(--tint);
+  }
+
+  .ob-loc-note {
+    margin: 0;
+    color: var(--sub);
+    font-family: var(--body);
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  .ob-actions {
+    position: static;
+    inset: auto;
+    width: 100%;
+    margin: 10px 0 0;
+    padding: 0 0 max(24px, env(safe-area-inset-bottom));
+    background: transparent;
+    transition: background .35s ease;
+  }
+
+  .ob-cta {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 11px;
+    width: 100%;
+    min-height: 68px;
+    padding: 16px 22px;
+    background: var(--accent);
+    color: ${T.ink};
+    border: 1px solid rgba(17,18,17,.13);
+    border-radius: 18px 18px 7px 18px;
+    cursor: pointer;
+    font-family: var(--body);
+    font-size: 17px;
+    font-weight: 700;
+    box-shadow: 0 4px 0 rgba(17,18,17,.09);
+    transition: transform .16s ease, box-shadow .16s ease, opacity .16s ease, background .3s ease;
+  }
+
+  .ob-cta:active:not(:disabled) {
+    transform: translateY(3px);
+    box-shadow: 0 1px 0 rgba(17,18,17,.09);
+  }
+
+  .ob-cta:disabled {
+    opacity: .42;
+    cursor: default;
+  }
+
+  .ob-cta svg {
+    transition: transform .18s ease;
+  }
+
+  .ob-foot {
+    margin: 12px 0 0;
+    color: var(--sub);
+    text-align: center;
+    font-family: var(--body);
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.65;
+    opacity: .9;
+  }
+
+  .ob-banner {
+    padding: 14px 16px;
+    background: #F0DCD3;
+    border: 1px solid rgba(168,79,74,.2);
+    border-radius: 14px;
+  }
+
+  .ob-banner p {
+    margin: 0;
+    color: ${T.ink};
+    font-family: var(--body);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.6;
+  }
+
+  .ob-root input,
+  .ob-root textarea,
+  .ob-root select {
+    -webkit-user-select: auto;
+    user-select: auto;
+  }
+
+  .ob-root img {
+    pointer-events: none;
+  }
+
+  .ob-chip:focus-visible,
+  .ob-cta:focus-visible,
+  .ob-photo:focus-visible,
+  .ob-photohit:focus-visible,
+  .ob-photox:focus-visible,
+  .ob-hbtn:focus-visible,
+  .ob-menuitem:focus-visible,
+  .ob-loc-btn:focus-visible,
+  .ob-loc-alt:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
 
   @media (hover: hover) and (pointer: fine) {
-    .ob-hbtn:hover { background: var(--yellow); }
-    .ob-menuitem:hover { background: rgba(229,72,77,.1); }
-    .ob-chip:hover:not(:disabled):not(.on) { background: #FFFBEA; }
-    .ob-chip.on:hover { background: var(--yellowDeep); }
-    .ob-cta:hover:not(:disabled) { background: var(--yellowDeep); }
-    .ob-cta:hover:not(:disabled) svg { transform: translateX(4px); }
-    .ob-photo:hover:not(.filled) { border-color: var(--ink); }
-    .ob-photohit:hover { background: rgba(25,25,25,.04); }
-    .ob-photox:hover { background: var(--red); color: #fff; }
+    .ob-hbtn:hover {
+      background: var(--tint);
+    }
+
+    .ob-menuitem:hover {
+      background: rgba(168,79,74,.08);
+    }
+
+    .ob-chip:hover:not(:disabled):not(.on) {
+      background: var(--tint);
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+
+    .ob-chip.on:hover {
+      filter: brightness(.97);
+    }
+
+    .ob-cta:hover:not(:disabled) {
+      filter: brightness(.96);
+    }
+
+    .ob-cta:hover:not(:disabled) svg {
+      transform: translateX(4px);
+    }
+
+    .ob-photo:hover:not(.filled) {
+      border-color: var(--accent);
+    }
+
+    .ob-loc-btn:hover:not(:disabled) {
+      filter: brightness(.96);
+    }
+
+    .ob-loc-alt:hover:not(:disabled) {
+      background: var(--tint);
+      border-color: var(--accent);
+    }
   }
+
+  @media (min-width: 681px) {
+    .ob-fit {
+      justify-content: center;
+    }
+  }
+
+  @media (min-width: 1050px) {
+    .ob-fit {
+      padding-top: 42px;
+      padding-bottom: 24px;
+    }
+
+    .ob-screen {
+      column-gap: 54px;
+      row-gap: 20px;
+    }
+
+    .ob-art {
+      max-height: 320px;
+    }
+  }
+
+  @media (max-width: 680px) {
+    .ob-head {
+      padding-left: 17px;
+      padding-right: 17px;
+    }
+
+    .ob-fit {
+      min-height: calc(100dvh - 70px);
+      flex: 0 0 auto;
+      padding: 32px 21px max(25px, env(safe-area-inset-bottom));
+      gap: 18px;
+      justify-content: flex-start;
+    }
+
+    .ob-screen {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas:
+        "title"
+        "hint"
+        "art"
+        "field";
+      row-gap: 14px;
+      align-content: start;
+    }
+
+    .ob-screen-photo {
+      grid-template-areas:
+        "title"
+        "hint"
+        "field";
+    }
+
+    .ob-title {
+      font-size: clamp(52px, 12.8vw, 76px);
+      line-height: .88;
+    }
+
+    .ob-title::after {
+      width: 54px;
+      height: 6px;
+      margin-top: 13px;
+    }
+
+    .ob-hint {
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .ob-art {
+      justify-self: end;
+      width: min(58%, 270px);
+      min-width: 175px;
+      max-height: 148px;
+      aspect-ratio: 1.65 / 1;
+      border-radius: 26px 26px 8px 26px;
+    }
+
+    .ob-art::before {
+      width: 95px;
+      height: 95px;
+      right: -35px;
+      top: -42px;
+    }
+
+    .ob-field {
+      gap: 14px;
+      padding-top: 3px;
+    }
+
+    .ob-input {
+      height: 70px;
+      padding: 0 18px;
+      font-size: 20px;
+      border-radius: 15px;
+    }
+
+    .ob-dob {
+      height: 65px;
+      padding: 0 4px;
+      font-size: clamp(16px, 4.8vw, 22px);
+    }
+
+    .ob-chips {
+      gap: 10px;
+    }
+
+    .ob-chip {
+      min-height: 60px;
+      padding: 15px 19px;
+      border-radius: 14px;
+      font-size: 16px;
+    }
+
+    .ob-photo {
+      width: 100%;
+      aspect-ratio: 4 / 5;
+      max-height: 46.5dvh;
+      min-height: min(285px, 46.5dvh);
+      border-radius: 21px;
+    }
+
+    .ob-photoempty {
+      font-size: 15px;
+    }
+
+    .ob-cam {
+      width: 74px;
+      height: 74px;
+    }
+
+    .ob-actions {
+      margin: 8px 0 0;
+      padding: 0 0 max(25px, env(safe-area-inset-bottom));
+    }
+
+    .ob-cta {
+      min-height: 64px;
+      border-radius: 16px 16px 6px 16px;
+      font-size: 16px;
+    }
+
+    .ob-foot {
+      font-size: 11px;
+    }
+
+    .ob-root::before {
+      width: 85vw;
+      right: -35%;
+      top: 10%;
+      filter: blur(65px);
+    }
+  }
+
+  @media (max-width: 390px) {
+    .ob-fit {
+      padding-left: 17px;
+      padding-right: 17px;
+    }
+
+    .ob-title {
+      font-size: clamp(48px, 12.3vw, 58px);
+    }
+
+    .ob-art {
+      min-width: 160px;
+      max-height: 132px;
+    }
+
+    .ob-chip {
+      padding-left: 13px;
+      padding-right: 13px;
+      font-size: 14px;
+    }
+
+  }
+
+  @media (max-height: 700px) and (max-width: 680px) {
+    .ob-fit {
+      padding-top: 21px;
+    }
+
+    .ob-screen {
+      row-gap: 11px;
+    }
+
+    .ob-title {
+      font-size: clamp(43px, 10vw, 58px);
+    }
+
+    .ob-title::after {
+      margin-top: 9px;
+      height: 5px;
+    }
+
+    .ob-art {
+      max-height: 105px;
+      min-width: 140px;
+    }
+
+    .ob-photo {
+      min-height: 220px;
+      max-height: 46.5dvh;
+    }
+
+    .ob-input {
+      height: 70px;
+    }
+
+    .ob-chip {
+      min-height: 60px;
+    }
+
+    .ob-actions {
+      position: static;
+      padding-top: 0;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
-    .ob-root * { transition: none !important; animation: none !important; }
+    .ob-root *,
+    .ob-root *::before,
+    .ob-root *::after {
+      transition: none !important;
+      animation: none !important;
+    }
   }
 `;
 
-/* ── screen transition — straight directional slide, springy landing,
-   staggered kids. Forward slides left, back slides right. No rotation. ── */
+const StepArtwork = ({ step }) => {
+  const { ink, paper, card, yellow, orange, green, concrete } = T;
+
+  switch (step) {
+    case 'name':
+      return (
+        <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
+          <g className="art-float">
+            <rect x="61" y="31" width="188" height="132" rx="22" fill={paper} transform="rotate(-5 155 97)" />
+            <rect x="85" y="57" width="102" height="11" rx="5.5" fill={ink} />
+            <rect x="85" y="79" width="135" height="7" rx="3.5" fill={concrete} />
+            <rect x="85" y="94" width="111" height="7" rx="3.5" fill={concrete} opacity=".7" />
+            <rect x="85" y="117" width="58" height="24" rx="8" fill={orange} />
+            <path d="M160 128h46" stroke={yellow} strokeWidth="5" strokeLinecap="round" />
+          </g>
+          <g className="art-float-late">
+            <circle cx="238" cy="39" r="21" fill={yellow} />
+            <path d="M230 39l6 6 11-13" fill="none" stroke={ink} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+          </g>
+          <circle cx="52" cy="157" r="7" fill={orange} />
+          <circle cx="266" cy="151" r="5" fill={green} />
+        </svg>
+      );
+
+    case 'dob':
+      return (
+        <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
+          <g className="art-float">
+            <rect x="64" y="26" width="190" height="144" rx="20" fill={card} stroke={ink} strokeWidth="2" transform="rotate(4 159 98)" />
+            <path d="M64 48a22 22 0 0 1 22-22h146a22 22 0 0 1 22 22v20H64z" fill={yellow} />
+            <path d="M106 19v22M212 19v22" stroke={ink} strokeWidth="5" strokeLinecap="round" />
+            <g fill={concrete} opacity=".7">
+              <rect x="87" y="82" width="25" height="21" rx="6" />
+              <rect x="124" y="82" width="25" height="21" rx="6" />
+              <rect x="161" y="82" width="25" height="21" rx="6" />
+              <rect x="198" y="82" width="25" height="21" rx="6" />
+              <rect x="87" y="115" width="25" height="21" rx="6" />
+              <rect x="124" y="115" width="25" height="21" rx="6" />
+              <rect x="198" y="115" width="25" height="21" rx="6" />
+            </g>
+            <rect x="161" y="115" width="25" height="21" rx="6" fill={orange} />
+          </g>
+          <circle cx="258" cy="43" r="18" fill={green} />
+          <path d="M249 43l6 6 11-13" fill="none" stroke={ink} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M46 141l8-14 8 14z" fill={orange} />
+        </svg>
+      );
+
+    case 'photo':
+      return null;
+
+    case 'gender':
+      return (
+        <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
+          <g className="art-pulse">
+            <circle cx="160" cy="100" r="67" fill="none" stroke={ink} strokeWidth="1.5" opacity=".25" />
+            <circle cx="160" cy="100" r="49" fill="none" stroke={orange} strokeWidth="2" />
+            <circle cx="160" cy="100" r="31" fill={yellow} />
+            <circle cx="160" cy="100" r="12" fill={ink} />
+          </g>
+          <g className="art-float">
+            <circle cx="83" cy="61" r="21" fill={green} />
+            <circle cx="241" cy="62" r="16" fill={orange} />
+            <circle cx="83" cy="144" r="14" fill={yellow} />
+            <circle cx="244" cy="145" r="23" fill={green} />
+          </g>
+          <path d="M100 70l28 17M224 73l-27 16M103 136l31-22M221 136l-26-22" stroke={ink} strokeWidth="1.5" strokeLinecap="round" opacity=".45" />
+        </svg>
+      );
+
+    case 'interestedIn':
+      return (
+        <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
+          <g className="art-float-late" transform="rotate(-8 94 104)">
+            <rect x="41" y="40" width="93" height="126" rx="20" fill={yellow} />
+            <circle cx="87" cy="81" r="19" fill={ink} />
+            <path d="M58 135q29-54 58 0v10H58z" fill={paper} />
+          </g>
+          <g className="art-float" transform="rotate(5 160 101)">
+            <rect x="113" y="27" width="96" height="145" rx="21" fill={card} stroke={ink} strokeWidth="1.5" />
+            <circle cx="161" cy="76" r="20" fill={orange} />
+            <path d="M128 128q33-46 66 0v17h-66z" fill={green} />
+            <rect x="139" y="151" width="44" height="5" rx="2.5" fill={concrete} />
+          </g>
+          <g className="art-float-late" transform="rotate(10 242 112)">
+            <rect x="211" y="53" width="67" height="111" rx="17" fill={green} />
+            <circle cx="245" cy="86" r="13" fill={paper} />
+            <path d="M220 131q25-37 50 0v8h-50z" fill={yellow} />
+          </g>
+          <circle cx="46" cy="27" r="6" fill={orange} />
+          <circle cx="271" cy="28" r="7" fill={yellow} />
+        </svg>
+      );
+
+    case 'year':
+      return (
+        <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
+          <g className="art-float">
+            <path d="M53 139h69v28H53z" fill={green} stroke={ink} strokeWidth="1.5" />
+            <path d="M68 109h69v30H68z" fill={card} stroke={ink} strokeWidth="1.5" />
+            <path d="M84 80h69v29H84z" fill={orange} stroke={ink} strokeWidth="1.5" />
+            <path d="M99 53h69v27H99z" fill={ink} stroke={ink} strokeWidth="1.5" />
+            <path d="M109 62h47" stroke={paper} strokeWidth="3" strokeLinecap="round" />
+            <path d="M78 119h48M63 149h49" stroke={ink} strokeWidth="2" strokeLinecap="round" opacity=".5" />
+          </g>
+          <g className="art-float-late">
+            <path d="M188 65l52-23 52 23-52 24z" fill={card} stroke={ink} strokeWidth="2" strokeLinejoin="round" />
+            <path d="M208 76v38q32 20 64 0V76" fill={yellow} stroke={ink} strokeWidth="2" strokeLinejoin="round" />
+            <path d="M292 66v43" stroke={ink} strokeWidth="2" strokeLinecap="round" />
+            <circle cx="292" cy="115" r="5" fill={orange} stroke={ink} strokeWidth="1.5" />
+          </g>
+          <circle cx="197" cy="141" r="8" fill={orange} />
+        </svg>
+      );
+
+    case 'intent':
+      return (
+        <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
+          <g className="art-pulse">
+            <circle cx="151" cy="101" r="69" fill="none" stroke={paper} strokeWidth="1.5" opacity=".27" />
+            <circle cx="151" cy="101" r="52" fill="none" stroke={green} strokeWidth="3" />
+            <circle cx="151" cy="101" r="34" fill="none" stroke={yellow} strokeWidth="3" />
+            <circle cx="151" cy="101" r="14" fill={orange} />
+          </g>
+          <g className="art-float">
+            <path d="M177 75l61-34-31 63-9-21z" fill={yellow} stroke={paper} strokeWidth="2" strokeLinejoin="round" />
+            <path d="M207 83l-31 30" stroke={paper} strokeWidth="4" strokeLinecap="round" />
+          </g>
+          <circle cx="67" cy="50" r="8" fill={orange} />
+          <circle cx="254" cy="145" r="13" fill={green} />
+          <path d="M50 153h46" stroke={paper} strokeWidth="3" strokeLinecap="round" opacity=".55" />
+        </svg>
+      );
+
+    case 'location':
+      return (
+        <svg viewBox="0 0 320 200" aria-hidden="true" focusable="false">
+          <g className="art-float">
+            <path d="M44 52l62-17 51 17 60-17 58 17v102l-58 17-60-17-51 17-62-17z" fill={card} stroke={ink} strokeWidth="1.8" strokeLinejoin="round" />
+            <path d="M106 35v119M157 52v102M217 35v119M44 86h231M44 121h231" stroke={green} strokeWidth="1.4" opacity=".7" />
+            <path d="M45 87h61l51 34h60l58-35" fill="none" stroke={orange} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+          </g>
+          <g className="art-pulse">
+            <path d="M158 45c-19 0-34 15-34 34 0 26 34 60 34 60s34-34 34-60c0-19-15-34-34-34z" fill={orange} stroke={ink} strokeWidth="2" />
+            <circle cx="158" cy="79" r="12" fill={card} stroke={ink} strokeWidth="2" />
+          </g>
+          <circle cx="248" cy="31" r="9" fill={yellow} />
+          <circle cx="75" cy="169" r="6" fill={green} />
+        </svg>
+      );
+
+    default:
+      return null;
+  }
+};
+
 const useScreenVariants = (reduceMotion) => ({
   screen: {
-    enter: (d) => (reduceMotion
-      ? { opacity: 1, x: 0 }
-      : { opacity: 0, x: d * 90 }),
+    enter: (direction) => reduceMotion
+      ? { opacity: 1, x: 0, scale: 1 }
+      : { opacity: 0, x: direction * 65, scale: .97, filter: 'blur(3px)' },
     center: {
-      opacity: 1, x: 0,
-      transition: { type: 'spring', stiffness: 330, damping: 32, staggerChildren: 0.06, delayChildren: 0.03 },
+      opacity: 1,
+      x: 0,
+      scale: 1,
+      filter: 'blur(0px)',
+      transition: {
+        type: 'spring',
+        stiffness: 300,
+        damping: 29,
+        staggerChildren: .055,
+        delayChildren: .025,
+      },
     },
-    exit: (d) => (reduceMotion
-      ? { opacity: 0, transition: { duration: 0.12 } }
-      : { opacity: 0, x: d * -80, transition: { duration: 0.18, ease: 'easeIn' } }),
+    exit: (direction) => reduceMotion
+      ? { opacity: 0, transition: { duration: .12 } }
+      : {
+          opacity: 0,
+          x: direction * -48,
+          scale: .985,
+          filter: 'blur(2px)',
+          transition: { duration: .18, ease: 'easeIn' },
+        },
   },
   item: {
-    enter: () => (reduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 18 }),
-    center: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 420, damping: 30 } },
+    enter: () => reduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 12 },
+    center: {
+      opacity: 1,
+      y: 0,
+      transition: { type: 'spring', stiffness: 400, damping: 30 },
+    },
   },
 });
 
-/* ── client-side photo compression — this is what makes uploads fast.
-     Downscales to max 1280px on the long edge and re-encodes as JPEG q85,
-     which cuts a typical phone photo (~3-6MB) down to ~200-400KB.
-     Skips tiny files, never upscales, falls back to the original on any
-     decode failure (e.g. HEIC the browser can't paint). ── */
 const MAX_DIM = 1280;
 const JPEG_QUALITY = 0.85;
-const SKIP_BELOW = 400 * 1024; // already small — upload as-is
+const SKIP_BELOW = 400 * 1024;
 
 const compressImage = (file) =>
   new Promise((resolve, reject) => {
-    if (!file.type.startsWith('image/')) { reject(new Error('not an image')); return; }
-    if (file.size < SKIP_BELOW) { resolve(file); return; }
+    if (!file.type.startsWith('image/')) {
+      reject(new Error('not an image'));
+      return;
+    }
+
+    if (file.size < SKIP_BELOW) {
+      resolve(file);
+      return;
+    }
+
     const src = URL.createObjectURL(file);
     const img = new Image();
+
     img.onload = () => {
       URL.revokeObjectURL(src);
+
       try {
         const scale = Math.min(1, MAX_DIM / Math.max(img.width, img.height));
         const w = Math.max(1, Math.round(img.width * scale));
         const h = Math.max(1, Math.round(img.height * scale));
         const canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
+
+        canvas.width = w;
+        canvas.height = h;
         canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+
         canvas.toBlob((blob) => {
-          if (!blob) { resolve(file); return; }
-          // if compression somehow didn't help, ship the original
-          resolve(blob.size < file.size ? new File([blob], 'photo.jpg', { type: 'image/jpeg' }) : file);
+          if (!blob) {
+            resolve(file);
+            return;
+          }
+
+          resolve(
+            blob.size < file.size
+              ? new File([blob], 'photo.jpg', { type: 'image/jpeg' })
+              : file,
+          );
         }, 'image/jpeg', JPEG_QUALITY);
-      } catch { resolve(file); }
+      } catch {
+        resolve(file);
+      }
     };
-    img.onerror = () => { URL.revokeObjectURL(src); resolve(file); };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(src);
+      resolve(file);
+    };
+
     img.src = src;
   });
 
@@ -16841,7 +22181,7 @@ const Onboarding = ({ onComplete }) => {
   const { logout, login } = useAuth();
   const fileRef = useRef(null);
   const rootRef = useRef(null);
-  const previewRef = useRef(null); // live blob URL while a photo is in flight
+  const previewRef = useRef(null);
   const V = useScreenVariants(reduceMotion);
 
   const [step, setStep] = useState(0);
@@ -16853,18 +22193,25 @@ const Onboarding = ({ onComplete }) => {
   const [preview, setPreview] = useState(null);
 
   const [formData, setFormData] = useState({
-    name: '', dob: '', gender: '', year: '', intent: [], interestedIn: [],
-    photos: [], prompts: [], interests: [], currentLatLng: undefined,
+    name: '',
+    dob: '',
+    gender: '',
+    year: '',
+    intent: [],
+    interestedIn: [],
+    photos: [],
+    prompts: [],
+    interests: [],
+    currentLatLng: undefined,
   });
 
-  /* ── resume an interrupted run ──
-     Retries on reconnect; recovery only fills fields that are still empty,
-     so it can never clobber an answer the student gave after a failed load. */
   const resumeDraft = useCallback(async () => {
     try {
       const res = await api.get('/users/onboarding/resume');
       if (!res?.data || !Object.keys(res.data).length) return;
+
       const saved = res.data;
+
       setFormData((prev) => ({
         ...prev,
         ...saved,
@@ -16878,6 +22225,7 @@ const Onboarding = ({ onComplete }) => {
         interests: prev.interests?.length ? prev.interests : (Array.isArray(saved.interests) ? saved.interests : prev.interests),
         prompts: prev.prompts?.length ? prev.prompts : (Array.isArray(saved.prompts) ? saved.prompts : prev.prompts),
       }));
+
       const idx = Number(saved.__step);
       if (Number.isFinite(idx) && idx >= 0 && idx < STEPS.length) setStep(idx);
     } catch {
@@ -16887,31 +22235,42 @@ const Onboarding = ({ onComplete }) => {
 
   useEffect(() => {
     resumeDraft();
+
     const onOnline = () => resumeDraft();
-    const onVisible = () => { if (document.visibilityState === 'visible') resumeDraft(); };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') resumeDraft();
+    };
+
     window.addEventListener('online', onOnline);
     document.addEventListener('visibilitychange', onVisible);
+
     return () => {
       window.removeEventListener('online', onOnline);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [resumeDraft]);
 
-  /* Autosave, debounced; step included so resume knows where the user was. */
   useEffect(() => {
     const { name, gender, dob } = formData;
     if (!name && !gender && !dob) return undefined;
+
     const t = setTimeout(() => {
-      api.put('/users/onboarding/save', { step: step + 1, data: { ...formData, __step: step } })
-        .catch(() => {});
+      api.put('/users/onboarding/save', {
+        step: step + 1,
+        data: { ...formData, __step: step },
+      }).catch(() => {});
     }, 800);
+
     return () => clearTimeout(t);
   }, [formData, step]);
 
-  /* Escape closes the overflow menu */
   useEffect(() => {
     if (!menuOpen) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false); };
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [menuOpen]);
@@ -16922,57 +22281,93 @@ const Onboarding = ({ onComplete }) => {
     setFormData((f) => {
       const arr = f[field] || [];
       const on = arr.includes(item);
+
       if (on) return { ...f, [field]: arr.filter((i) => i !== item) };
-      if (max && arr.length >= max) { triggerHaptic('heavy'); return f; }
-      // 'Everyone' is mutually exclusive with specific choices.
+
+      if (max && arr.length >= max) {
+        triggerHaptic('heavy');
+        return f;
+      }
+
       const next = field === 'interestedIn'
         ? ['Everyone']
         : (item === 'Everyone' ? [] : arr.filter((i) => i !== 'Everyone'));
+
       return { ...f, [field]: [...next, item] };
     });
+
     triggerHaptic('light');
   };
 
-  /* ── DOB — three auto-advancing boxes. Age is COMPUTED, never typed, and
-     only for the on-screen preview. ── */
   const dobParts = (formData.dob || '--').split('-');
   const dobY = dobParts[0] === '--' ? '' : dobParts[0];
   const dobM = dobParts[1] === '--' ? '' : dobParts[1];
   const dobD = dobParts[2] === '--' ? '' : dobParts[2];
-  const dayRef = useRef(null); const monRef = useRef(null); const yrRef = useRef(null);
+
+  const dayRef = useRef(null);
+  const monRef = useRef(null);
+  const yrRef = useRef(null);
 
   const age = (() => {
     if (dobY.length !== 4 || dobM.length !== 2 || dobD.length !== 2) return null;
+
     const today = new Date();
     const birth = new Date(`${dobY}-${dobM}-${dobD}`);
+
     if (Number.isNaN(birth.getTime())) return null;
+
     let a = today.getFullYear() - birth.getFullYear();
     const m = today.getMonth() - birth.getMonth();
+
     return (m < 0 || (m === 0 && today.getDate() < birth.getDate())) ? a - 1 : a;
   })();
 
   const setDob = (part, raw) => {
     const num = raw.replace(/\D/g, '');
-    let d = dobD; let m = dobM; let y = dobY;
+    let d = dobD;
+    let m = dobM;
+    let y = dobY;
+
     if (part === 'd') {
       d = num.slice(0, 2);
-      if (d.length === 2) { if (+d > 31) d = '31'; if (+d === 0) d = '01'; monRef.current?.focus(); }
+      if (d.length === 2) {
+        if (+d > 31) d = '31';
+        if (+d === 0) d = '01';
+        monRef.current?.focus();
+      }
     }
+
     if (part === 'm') {
       m = num.slice(0, 2);
-      if (m.length === 2) { if (+m > 12) m = '12'; if (+m === 0) m = '01'; yrRef.current?.focus(); }
+      if (m.length === 2) {
+        if (+m > 12) m = '12';
+        if (+m === 0) m = '01';
+        yrRef.current?.focus();
+      }
     }
+
     if (part === 'y') y = num.slice(0, 4);
+
     update({ dob: `${y}-${m}-${d}` });
   };
 
-  /* ── photo ── */
   const clearPreview = () => {
-    if (previewRef.current) { URL.revokeObjectURL(previewRef.current); previewRef.current = null; }
+    if (previewRef.current) {
+      URL.revokeObjectURL(previewRef.current);
+      previewRef.current = null;
+    }
+
     setPreview(null);
   };
 
-  const pickPhoto = () => { triggerHaptic('light'); fileRef.current?.click(); };
+  useEffect(() => () => {
+    if (previewRef.current) URL.revokeObjectURL(previewRef.current);
+  }, []);
+
+  const pickPhoto = () => {
+    triggerHaptic('light');
+    fileRef.current?.click();
+  };
 
   const removePhoto = () => {
     triggerHaptic('light');
@@ -16984,42 +22379,34 @@ const Onboarding = ({ onComplete }) => {
     const f = e.target.files?.[0];
     e.target.value = '';
     if (!f) return;
+
     setUploading(true);
     setError('');
     triggerHaptic('medium');
 
-    // Show the chosen photo INSTANTLY from a local blob while it uploads —
-    // no waiting on the network to see your picture.
     const localUrl = URL.createObjectURL(f);
     previewRef.current = localUrl;
     setPreview(localUrl);
 
     try {
-      const toUpload = await compressImage(f); // smaller payload = much faster upload
+      const toUpload = await compressImage(f);
       const { url } = await api.upload(toUpload);
-      update({ photos: [url] });   // slot 0 is the hero; slots 1–3 live in Profile
+      update({ photos: [url] });
       triggerHaptic('success');
     } catch {
       toast.error('Upload failed. Check your connection, or try a smaller image.');
       triggerHaptic('heavy');
     } finally {
       setUploading(false);
-      clearPreview(); // real URL (or nothing, on failure) takes over
+      clearPreview();
     }
   };
 
-  /* ── 📍 location (required, one-shot, with a real fallback) ──
-     These must be declared BEFORE the `done` object because `done`
-     references `locationReading` and `locDeclined`. */
   const [locBusy, setLocBusy] = useState(false);
   const [locationReading, setLocationReading] = useState(false);
   const [locError, setLocError] = useState('');
-  /* An EXPLICIT decline, distinct from never having tried. Without this flag a
-     refusal and an untouched step look identical, and the user could not tell
-     whether "required" meant "required" or "skippable". */
   const [locDeclined, setLocDeclined] = useState(false);
 
-  /* ── per-screen completion ── */
   const done = {
     name: !!formData.name.trim(),
     dob: age !== null && age >= 18 && age <= 40,
@@ -17028,32 +22415,27 @@ const Onboarding = ({ onComplete }) => {
     interestedIn: formData.interestedIn.length > 0,
     year: !!formData.year,
     intent: formData.intent.length > 0,
-    /* 📍 REQUIRED, BUT AS AN EXPLICIT CHOICE — not a permission to skip past.
-
-       The step blocks until the user either shares a reading or deliberately
-       picks the campus fallback. Both paths out of this screen work and neither
-       is a dead end, so this is not Next held hostage for a permission they may
-       never grant: declining is a real choice with a stated consequence, which
-       is why the fallback button says what it costs instead of hiding behind
-       "Not now". */
     location: locationReading || locDeclined,
   };
+
   const stepDone = (i) => done[STEPS[i].key];
   const allDone = STEPS.every((st) => done[st.key]);
 
   const grantLocation = useCallback(async () => {
     if (locBusy) return;
+
     setLocBusy(true);
     setLocError('');
+
     const res = await readLocationOnce();
     setLocBusy(false);
+
     if (res.ok) {
-      /* Held in memory only. It goes out once, in the setup payload, and the
-         server rounds it before storing. */
       setFormData((f) => ({ ...f, currentLatLng: res.latLng }));
       setLocationReading(true);
       return;
     }
+
     setLocError(
       res.reason === LOCATION_UNAVAILABLE.DENIED
         ? 'Location permission was declined.'
@@ -17063,46 +22445,70 @@ const Onboarding = ({ onComplete }) => {
     );
   }, [locBusy]);
 
-  /* ── publish — posts exactly the publish band; the server scores it ── */
   const publish = async () => {
-    if (!allDone || uploading || publishing) { triggerHaptic('heavy'); return; }
+    if (!allDone || uploading || publishing) {
+      triggerHaptic('heavy');
+      return;
+    }
+
     setPublishing(true);
     setError('');
     triggerHaptic('heavy');
+
     try {
       const res = await api.post('/users/setup', {
         ...formData,
         age,
         prompts: (formData.prompts || []).slice(0, 3),
       });
+
       await api.delete('/users/onboarding/clear').catch(() => {});
 
       const stored = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
       const updated = res?.user || res?.data?.user || res || {
-        ...stored, isSetup: true, isOnboarded: true, profileCompleted: true, onboardingCompleted: true,
+        ...stored,
+        isSetup: true,
+        isOnboarded: true,
+        profileCompleted: true,
+        onboardingCompleted: true,
       };
+
       login(updated);
       onComplete();
     } catch (err) {
-      if (!err?.toasted) toast.error('Could not publish your profile. Check your connection and try again.');
+      if (!err?.toasted) {
+        toast.error('Could not publish your profile. Check your connection and try again.');
+      }
       setPublishing(false);
     }
   };
 
+  const scrollToTop = () => {
+    rootRef.current?.scrollTo({
+      top: 0,
+      behavior: reduceMotion ? 'auto' : 'smooth',
+    });
+  };
+
   const next = () => {
-    if (!stepDone(step)) { triggerHaptic('heavy'); return; }
+    if (!stepDone(step)) {
+      triggerHaptic('heavy');
+      return;
+    }
+
     triggerHaptic('light');
     setError('');
     setDir(1);
     setStep((s) => Math.min(s + 1, STEPS.length - 1));
-    rootRef.current?.scrollTo({ top: 0 });
+    scrollToTop();
   };
+
   const back = () => {
     triggerHaptic('light');
     setError('');
     setDir(-1);
     setStep((s) => Math.max(0, s - 1));
-    rootRef.current?.scrollTo({ top: 0 });
+    scrollToTop();
   };
 
   const s = STEPS[step];
@@ -17115,28 +22521,40 @@ const Onboarding = ({ onComplete }) => {
   const banner = (
     <AnimatePresence>
       {error && (
-        <motion.div key="b" role="alert"
-          initial={reduceMotion ? false : { opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0 }}
-          transition={{ duration: 0.2 }} style={{ overflow: 'hidden' }}>
-          <div className="ob-banner"><p>{error}</p></div>
+        <motion.div
+          key="b"
+          role="alert"
+          initial={reduceMotion ? false : { opacity: 0, height: 0, y: -4 }}
+          animate={{ opacity: 1, height: 'auto', y: 0 }}
+          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0, y: -4 }}
+          transition={{ duration: .2 }}
+          style={{ overflow: 'hidden' }}
+        >
+          <div className="ob-banner">
+            <p>{error}</p>
+          </div>
         </motion.div>
       )}
     </AnimatePresence>
   );
 
   return (
-    <div className="ob-root" ref={rootRef}>
+    <div className={`ob-root ob-root-${s.key.toLowerCase()}`} ref={rootRef}>
       <style>{CSS}</style>
 
-      {/* ── fixed header: back left, ⋮ right. Same on every step. ── */}
       <header className="ob-head">
         {step > 0 ? (
-          <button type="button" className="ob-hbtn" aria-label="Previous question" onClick={back}>
-            <ChevronLeft size={22} strokeWidth={2.8} />
+          <button
+            type="button"
+            className="ob-hbtn"
+            aria-label="Previous question"
+            onClick={back}
+          >
+            <ChevronLeft size={22} strokeWidth={2.4} />
           </button>
-        ) : <span className="ob-headspacer" />}
+        ) : (
+          <span className="ob-headspacer" />
+        )}
 
         <div style={{ position: 'relative' }}>
           <button
@@ -17144,21 +22562,29 @@ const Onboarding = ({ onComplete }) => {
             className="ob-hbtn"
             aria-label="More options"
             aria-expanded={menuOpen}
-            onClick={() => { triggerHaptic('light'); setMenuOpen((v) => !v); }}
+            onClick={() => {
+              triggerHaptic('light');
+              setMenuOpen((v) => !v);
+            }}
           >
-            <MoreVertical size={20} strokeWidth={2.8} />
+            <MoreVertical size={20} strokeWidth={2.4} />
           </button>
 
           <AnimatePresence>
             {menuOpen && (
               <>
-                <div className="ob-scrim" onClick={() => setMenuOpen(false)} aria-hidden="true" />
+                <div
+                  className="ob-scrim"
+                  onClick={() => setMenuOpen(false)}
+                  aria-hidden="true"
+                />
+
                 <motion.div
                   className="ob-menu"
-                  initial={reduceMotion ? false : { opacity: 0, scale: 0.9, y: -6 }}
+                  initial={reduceMotion ? false : { opacity: 0, scale: .94, y: -6 }}
                   animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.9, y: -6 }}
-                  transition={{ duration: 0.13, ease: 'easeOut' }}
+                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: .94, y: -6 }}
+                  transition={{ duration: .13, ease: 'easeOut' }}
                 >
                   <button
                     type="button"
@@ -17170,7 +22596,8 @@ const Onboarding = ({ onComplete }) => {
                       }
                     }}
                   >
-                    <LogOut size={15} strokeWidth={2.8} /> Log out
+                    <LogOut size={16} strokeWidth={2.4} />
+                    Log out
                   </button>
                 </motion.div>
               </>
@@ -17179,23 +22606,34 @@ const Onboarding = ({ onComplete }) => {
         </div>
       </header>
 
-      {/* ── the question — straight slide between steps ── */}
       <div className="ob-fit">
         <AnimatePresence mode="wait" custom={dir} initial={false}>
           <motion.div
             key={s.key}
+            className={`ob-screen ob-screen-${s.key.toLowerCase()}`}
             custom={dir}
             variants={V.screen}
             initial="enter"
             animate="center"
             exit="exit"
-            style={{ display: 'flex', flexDirection: 'column', gap: 18 }}
           >
-            <motion.h1 className="ob-title" variants={V.item}>{s.title}</motion.h1>
-            {s.hint && <motion.p className="ob-hint" variants={V.item}>{s.hint}</motion.p>}
+            <motion.h1 className="ob-title" variants={V.item}>
+              {s.title}
+            </motion.h1>
+
+            {s.hint && (
+              <motion.p className="ob-hint" variants={V.item}>
+                {s.hint}
+              </motion.p>
+            )}
+
+            {s.key !== 'photo' && (
+              <motion.div className="ob-art" variants={V.item}>
+                <StepArtwork step={s.key} />
+              </motion.div>
+            )}
 
             <motion.div className="ob-field" variants={V.item}>
-              {/* ── NAME ── */}
               {s.key === 'name' && (
                 <input
                   className="ob-input"
@@ -17205,145 +22643,234 @@ const Onboarding = ({ onComplete }) => {
                   autoCapitalize="words"
                   autoCorrect="off"
                   spellCheck="false"
-                  autoComplete="off"
+                  autoComplete="given-name"
                   aria-label="Your name"
-                  onKeyDown={(e) => { if (e.key === 'Enter') next(); }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') next();
+                  }}
                 />
               )}
 
-              {/* ── DOB ── */}
               {s.key === 'dob' && (
                 <>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <input ref={dayRef} className="ob-input ob-dob"
-                      style={{ textAlign: 'center', flex: 1, minWidth: 0 }} value={dobD}
-                      onChange={(e) => setDob('d', e.target.value)} onKeyDown={(e) => {
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                    <input
+                      ref={dayRef}
+                      className="ob-input ob-dob"
+                      style={{ flex: 1, minWidth: 0 }}
+                      value={dobD}
+                      onChange={(e) => setDob('d', e.target.value)}
+                      onKeyDown={(e) => {
                         if (e.key === 'Backspace' && !dobD) return;
                         if (e.key === 'Enter' && age) next();
-                      }} placeholder="DD" inputMode="numeric" maxLength={2} aria-label="Day" />
-                    <span className="ob-slash">/</span>
-                    <input ref={monRef} className="ob-input ob-dob"
-                      style={{ textAlign: 'center', flex: 1, minWidth: 0 }} value={dobM}
-                      onChange={(e) => setDob('m', e.target.value)} onKeyDown={(e) => {
+                      }}
+                      placeholder="DD"
+                      inputMode="numeric"
+                      maxLength={2}
+                      aria-label="Day"
+                    />
+
+                    <span className="ob-slash" aria-hidden="true">/</span>
+
+                    <input
+                      ref={monRef}
+                      className="ob-input ob-dob"
+                      style={{ flex: 1, minWidth: 0 }}
+                      value={dobM}
+                      onChange={(e) => setDob('m', e.target.value)}
+                      onKeyDown={(e) => {
                         if (e.key === 'Backspace' && !dobM) dayRef.current?.focus();
                         if (e.key === 'Enter' && age) next();
-                      }} placeholder="MM" inputMode="numeric" maxLength={2} aria-label="Month" />
-                    <span className="ob-slash">/</span>
-                    <input ref={yrRef} className="ob-input ob-dob"
-                      style={{ textAlign: 'center', flex: 1, minWidth: 0 }} value={dobY}
-                      onChange={(e) => setDob('y', e.target.value)} onKeyDown={(e) => {
+                      }}
+                      placeholder="MM"
+                      inputMode="numeric"
+                      maxLength={2}
+                      aria-label="Month"
+                    />
+
+                    <span className="ob-slash" aria-hidden="true">/</span>
+
+                    <input
+                      ref={yrRef}
+                      className="ob-input ob-dob"
+                      style={{ flex: 1, minWidth: 0 }}
+                      value={dobY}
+                      onChange={(e) => setDob('y', e.target.value)}
+                      onKeyDown={(e) => {
                         if (e.key === 'Backspace' && !dobY) monRef.current?.focus();
                         if (e.key === 'Enter' && age) next();
-                      }} placeholder="YYYY" inputMode="numeric" maxLength={4} aria-label="Year" />
+                      }}
+                      placeholder="YYYY"
+                      inputMode="numeric"
+                      maxLength={4}
+                      aria-label="Year"
+                    />
                   </div>
+
                   {age !== null && (
-                    <span className={`ob-age${age >= 18 && age <= 40 ? ' ok' : ''}`}>Age {age}</span>
+                    <span className={`ob-age${age >= 18 && age <= 40 ? ' ok' : ''}`}>
+                      Age {age}
+                    </span>
                   )}
                 </>
               )}
 
-              {/* ── PHOTO ── the zone stays still; only the cross / add buttons press.
-                   Shows the local preview instantly, then swaps in the uploaded URL.
-                   Cross = remove; tapping the photo = change. ── */}
               {s.key === 'photo' && (
                 <>
                   {(formData.photos[0] || preview) ? (
                     <div className="ob-photo filled">
                       <img src={formData.photos[0] || preview} alt="Your photo" />
+
                       {uploading && (
                         <span className="ob-uploading">
-                          <span className="ob-spin" aria-hidden="true" /> Uploading…
+                          <span className="ob-spin" aria-hidden="true" />
+                          Uploading…
                         </span>
                       )}
+
                       {!uploading && (
                         <>
-                          <button type="button" className="ob-photohit" onClick={pickPhoto}
-                            aria-label="Change your photo" />
-                          <button type="button" className="ob-photox" onClick={removePhoto}
-                            aria-label="Remove photo">
-                            <X size={17} strokeWidth={3} />
+                          <button
+                            type="button"
+                            className="ob-photohit"
+                            onClick={pickPhoto}
+                            aria-label="Change your photo"
+                          />
+
+                          <button
+                            type="button"
+                            className="ob-photox"
+                            onClick={removePhoto}
+                            aria-label="Remove photo"
+                          >
+                            <X size={18} strokeWidth={2.4} />
                           </button>
                         </>
                       )}
                     </div>
                   ) : (
-                    <button type="button" className="ob-photo" onClick={pickPhoto}
-                      disabled={uploading} aria-label="Add your photo">
+                    <button
+                      type="button"
+                      className="ob-photo"
+                      onClick={pickPhoto}
+                      disabled={uploading}
+                      aria-label="Add your photo"
+                    >
                       <span className="ob-photoempty">
-                        <span className="ob-cam"><Camera size={28} strokeWidth={2.2} /></span>
-                        Tap to add a photo
+                        <span className="ob-cam">
+                          <Camera size={29} strokeWidth={1.9} />
+                        </span>
+                        Tap to choose your photo
                       </span>
                     </button>
                   )}
-                  <input ref={fileRef} type="file" accept="image/*" onChange={onFile} style={{ display: 'none' }} />
+
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={onFile}
+                    style={{ display: 'none' }}
+                  />
                 </>
               )}
 
-              {/* ── GENDER ── required: discover.js filters the deck on it ── */}
               {s.key === 'gender' && (
                 <div className="ob-chips">
                   {genders.map((g) => (
-                    <button key={g} type="button"
+                    <button
+                      key={g}
+                      type="button"
                       className={`ob-chip${formData.gender === g ? ' on' : ''}`}
-                      onClick={() => { update({ gender: g }); triggerHaptic('light'); }}>
-                      {formData.gender === g && <Check size={15} strokeWidth={3.2} />}
+                      aria-pressed={formData.gender === g}
+                      onClick={() => {
+                        update({ gender: g });
+                        triggerHaptic('light');
+                      }}
+                    >
+                      {formData.gender === g && <Check size={17} strokeWidth={2.5} />}
                       {g}
                     </button>
                   ))}
                 </div>
               )}
 
-              {/* ── SHOW ME ── multi-select; 'Everyone' is the escape hatch ── */}
               {s.key === 'interestedIn' && (
                 <div className="ob-chips">
                   {showOptions.map((g) => (
-                    <button key={g} type="button"
+                    <button
+                      key={g}
+                      type="button"
                       className={`ob-chip${formData.interestedIn.includes(g) ? ' on' : ''}`}
-                      onClick={() => toggleIn('interestedIn', g)}>
-                      {formData.interestedIn.includes(g) && <Check size={15} strokeWidth={3.2} />}
+                      aria-pressed={formData.interestedIn.includes(g)}
+                      onClick={() => toggleIn('interestedIn', g)}
+                    >
+                      {formData.interestedIn.includes(g) && (
+                        <Check size={17} strokeWidth={2.5} />
+                      )}
                       {g}
                     </button>
                   ))}
                 </div>
               )}
 
-              {/* ── YEAR ── */}
               {s.key === 'year' && (
                 <div className="ob-chips">
                   {(config?.years || ['UG', 'PG']).map((y) => (
-                    <button key={y} type="button"
+                    <button
+                      key={y}
+                      type="button"
                       className={`ob-chip${formData.year === y ? ' on' : ''}`}
-                      onClick={() => { update({ year: y }); triggerHaptic('light'); }}>
-                      {formData.year === y && <Check size={15} strokeWidth={3.2} />}
+                      aria-pressed={formData.year === y}
+                      onClick={() => {
+                        update({ year: y });
+                        triggerHaptic('light');
+                      }}
+                    >
+                      {formData.year === y && <Check size={17} strokeWidth={2.5} />}
                       {y}
                     </button>
                   ))}
                 </div>
               )}
 
-              {s.key === 'location' && (
-                /* 📍 REQUIRED, BUT NEVER A TRAP.
-                   The prompt only fires from the button below, never on mount —
-                   browsers penalise an unsolicited permission request, and this
-                   is the first thing they would see if it fired automatically.
+              {s.key === 'intent' && (
+                <div className="ob-chips">
+                  {intentOptions.map((it) => (
+                    <button
+                      key={it}
+                      type="button"
+                      className={`ob-chip${formData.intent.includes(it) ? ' on' : ''}`}
+                      aria-pressed={formData.intent.includes(it)}
+                      onClick={() => toggleIn('intent', it)}
+                    >
+                      {formData.intent.includes(it) && (
+                        <Check size={17} strokeWidth={2.5} />
+                      )}
+                      {it}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-                   Both buttons leave this screen. Declining is stated in terms of
-                   what the feed will actually do, because "Not now" would be a
-                   lie here: the feed is not neutral without a reading, it is
-                   campus-ranked. Coordinates go into the setup payload only if
-                   the read actually succeeded. */
+              {s.key === 'location' && (
                 <div className="ob-location">
                   {locationReading ? (
                     <p className="ob-location-ok">
-                      <Check size={15} strokeWidth={3.2} /> Location shared. We'll
-                      show you people near you first.
+                      <Check size={17} strokeWidth={2.5} />
+                      <span>
+                        Location shared. We'll show you people near you first.
+                      </span>
                     </p>
                   ) : locDeclined ? (
                     <>
                       <p className="ob-location-ok">
-                        <Check size={15} strokeWidth={3.2} /> No problem — we'll rank
-                        your feed using your college location.
+                        <Check size={17} strokeWidth={2.5} />
+                        <span>
+                          No problem — we'll rank your feed using your college location.
+                        </span>
                       </p>
+
                       <p className="ob-location-copy">
                         You can switch to your real location any time in Settings.
                       </p>
@@ -17351,19 +22878,32 @@ const Onboarding = ({ onComplete }) => {
                   ) : (
                     <>
                       <p className="ob-location-copy">
-                        We'll use your location to show you people who are actually
-                        nearby — not just people from your college. It is rounded
-                        to about a kilometre and never shown to anyone else.
+                        We use a rounded location to help you discover people nearby,
+                        beyond your campus. Your exact location is never shown to anyone.
                       </p>
-                      <button type="button" className="ob-loc-btn"
-                        onClick={grantLocation} disabled={locBusy}>
+
+                      <button
+                        type="button"
+                        className="ob-loc-btn"
+                        onClick={grantLocation}
+                        disabled={locBusy}
+                      >
                         {locBusy ? 'Finding you…' : 'Use my location'}
                       </button>
-                      <button type="button" className="ob-loc-alt"
-                        onClick={() => { setLocDeclined(true); setLocError(''); triggerHaptic('light'); }}
-                        disabled={locBusy}>
+
+                      <button
+                        type="button"
+                        className="ob-loc-alt"
+                        onClick={() => {
+                          setLocDeclined(true);
+                          setLocError('');
+                          triggerHaptic('light');
+                        }}
+                        disabled={locBusy}
+                      >
                         Use my college location instead
                       </button>
+
                       {locError && (
                         <p className="ob-loc-note">
                           {locError} You can turn this on later in Settings, or use
@@ -17374,46 +22914,44 @@ const Onboarding = ({ onComplete }) => {
                   )}
                 </div>
               )}
-
-              {s.key === 'intent' && (
-                <div className="ob-chips">
-                  {intentOptions.map((it) => (
-                    <button key={it} type="button"
-                      className={`ob-chip${formData.intent.includes(it) ? ' on' : ''}`}
-                      onClick={() => toggleIn('intent', it)}>
-                      {formData.intent.includes(it) && <Check size={15} strokeWidth={3.2} />}
-                      {it}
-                    </button>
-                  ))}
-                </div>
-              )}
             </motion.div>
           </motion.div>
         </AnimatePresence>
 
         {banner}
 
-        {/* ── primary action ── */}
-        {isLast ? (
-          <button type="button" className="ob-cta" onClick={publish}
-            disabled={!allDone || uploading || publishing}>
-            {publishing ? 'Publishing…' : 'Publish & start matching'}
-            <ChevronRight size={18} strokeWidth={3} />
-          </button>
-        ) : (
-          <button type="button" className="ob-cta" onClick={next} disabled={!stepDone(step)}>
-            Continue <ChevronRight size={18} strokeWidth={3} />
-          </button>
-        )}
+        <div className="ob-actions">
+          {isLast ? (
+            <button
+              type="button"
+              className="ob-cta"
+              onClick={publish}
+              disabled={!allDone || uploading || publishing}
+            >
+              {publishing ? 'Publishing…' : 'Publish & start matching'}
+              <ChevronRight size={20} strokeWidth={2.5} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="ob-cta"
+              onClick={next}
+              disabled={!stepDone(step)}
+            >
+              Continue
+              <ChevronRight size={20} strokeWidth={2.5} />
+            </button>
+          )}
 
-        {/* ── the quiet footnote — bottom, always ── */}
-        <p className="ob-foot">{s.foot || FOOT_DEFAULT}</p>
+          {s.foot && <p className="ob-foot">{s.foot}</p>}
+        </div>
       </div>
     </div>
   );
 };
 
 export default Onboarding;
+
 ```
 
 ### ./client/src/pages/Profile.jsx
@@ -17435,6 +22973,7 @@ import LearnMoreSheet from '../components/LearnMoreSheet';
 import { toast } from '../utils/toast';
 import { PROMPT_ANSWER_MAX, PROMPT_QUESTION_MAX } from '../utils/promptLimits.js';
 import { readScore, bandFor } from '../utils/ladder.js';
+import neu from '../styles/neu';
 
 // Server-side caps mirrored from models/User.js (and FIELD_LIMITS in
 // routes/users.js). Without maxLength here a user could type past the limit and
@@ -17529,24 +23068,34 @@ const HEADER_RELEASE = 8;
 /* Used only if [data-deck-header] cannot be found: DECK_TOP (12) + DECK_BTN (42). */
 const HEADER_FALLBACK_BOTTOM = 54;
 
+/* Type voices — MUST stay identical to ProfileCard.jsx. This sheet and the
+   deck card are the same object seen from two screens, so any drift between
+   these three lines and that file's is visible as the profile looking like a
+   different app from the deck it was just swiped out of. */
 const F = {
-  heavy: "'Archivo Black', 'Arial Black', sans-serif",
-  body: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  mono: "'Space Mono', 'Courier New', monospace",
+  heavy: "'Barlow Condensed', sans-serif",
+  body: "'Space Grotesk', sans-serif",
+  mono: "'IBM Plex Mono', monospace",
 };
 
+/* Palette — same overrides as ProfileCard.jsx, which re-tints the shared neu
+   canon rather than replacing it (the spread keeps shadow/radius/z/grain, which
+   this file no longer uses but other callers of neu still do). */
 const C = {
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  hair: '#EBE5D6',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  pink: '#FFA3C6',
-  red: '#E5484D',
+  ...neu,
+  ink: '#111211',
+  ink2: '#383832',
+  ink3: '#77766F',
+  paper: '#F1EDE2',
+  card: '#F8F5EC',
+  desk: '#111211',
+  yellow: '#E0A15E',
+  coral: '#C96F68',
+  green: '#779477',
+  pink: '#A3A3A1',
+  red: '#A84F4A',
+  hair: 'rgba(17,18,17,.22)',
+  line: 'rgba(241,237,226,.2)',
 };
 
 const TILE = ['coral', 'yellow', 'green', 'pink'];
@@ -17556,6 +23105,8 @@ const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
 /* ───────────────────────── styles ───────────────────────── */
 
 const PROFILE_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
   .pc-root {
     --paper: ${C.paper};
     --card: ${C.card};
@@ -17568,71 +23119,76 @@ const PROFILE_CSS = `
     --green: ${C.green};
     --pink: ${C.pink};
     --red: ${C.red};
-    --bw: 2px;
-    --r: 14px;
+    --bw: 1px;
+    --r: 8px;
     --ease: cubic-bezier(.2,0,0,1);
 
     position: relative; width: 100%; height: 100%; overflow: hidden;
-    background: #131313;
+    background: #111211;
     font-family: ${F.body}; color: var(--ink);
     -webkit-font-smoothing: antialiased;
   }
-  .pc-root ::selection { background: var(--yellow); color: var(--ink); }
+  .pc-root ::selection { background: var(--coral); color: var(--ink); }
 
   .pc-heroWrap { position: absolute; inset: 0; z-index: 0; transform-origin: 50% 30%; will-change: transform, opacity; }
   .pc-hero { width: 100%; height: 100%; object-fit: cover; display: block;
     opacity: 0; transition: opacity .4s ease-out; -webkit-user-drag: none; }
   .pc-hero.is-loaded { opacity: 1; }
   .pc-shade { position: absolute; inset: 0; pointer-events: none;
-    background: linear-gradient(to top, rgba(15,13,10,.4) 0%, rgba(15,13,10,.08) 42%, rgba(15,13,10,.18) 100%); }
+    background: linear-gradient(to top, rgba(17,18,17,.65) 0%, rgba(17,18,17,.08) 44%, rgba(17,18,17,.20) 100%); }
 
-  /* SMOOTHNESS: own compositor layer + paint containment, so the 8px shadow
+  /* SMOOTHNESS: own compositor layer + paint containment, so the shadow
      and all children never force full-page repaints while dragging */
   .pc-sheet { position: absolute; left: ${SIDE_MARGIN}px; right: ${SIDE_MARGIN}px; top: 0; z-index: 30;
-    background: var(--paper); border: var(--bw) solid var(--ink); border-radius: 22px;
-    box-shadow: 8px 8px 0 var(--ink);
+    background: var(--paper); border: var(--bw) solid var(--ink); border-radius: 15px 15px 4px 4px;
+    box-shadow: 0 14px 32px rgba(0,0,0,.22);
     transform: translateZ(0); backface-visibility: hidden;
     contain: layout paint style;
     touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
-    padding: 14px 20px calc(28px + env(safe-area-inset-bottom));
-    display: flex; flex-direction: column; gap: 22px; will-change: transform; }
+    padding: 12px 18px calc(26px + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; gap: 19px; will-change: transform; }
   .pc-sheet:active { cursor: grabbing; }
   .pc-sheet img { -webkit-user-drag: none; }
 
-  .pc-grabber { width: 48px; height: 6px; border-radius: 999px; margin: 0 auto 0; flex-shrink: 0;
-    background: var(--ink); transition: none; }
-  .pc-sheet:active .pc-grabber { background: var(--yellow); }
+  .pc-grabber { width: 42px; height: 4px; border-radius: 0; margin: 0 auto 0; flex-shrink: 0;
+    background: var(--ink-3); transition: none; }
+  .pc-sheet:active .pc-grabber { background: var(--coral); }
 
-  .pc-notetext { display: block; text-align: center; margin-bottom: 6px;
+  .pc-notetext { display: block; text-align: center; margin-bottom: 4px;
     font-family: ${F.mono}; font-size: 9px; font-weight: 700; letter-spacing: .2em;
     text-transform: uppercase; color: var(--ink-3); pointer-events: none; }
 
   .pc-id { position: relative; }
   .pc-idrow { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-  .pc-name { font-family: ${F.heavy}; font-size: 34px; font-weight: 400; letter-spacing: -.01em;
-    line-height: 1.08; color: var(--ink); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    background-image: linear-gradient(180deg, transparent 58%, var(--yellow) 58%);
-    padding: 0 6px 3px 0; }
-  .pc-meta { font-family: ${F.mono}; font-size: 11px; font-weight: 700; letter-spacing: .1em;
+  .pc-name { font-family: ${F.heavy}; font-size: 39px; font-weight: 800; letter-spacing: -.025em;
+    line-height: .92; color: var(--ink); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    background-image: linear-gradient(180deg, transparent 77%, rgba(224,161,94,.78) 77%);
+    padding: 0 6px 5px 0; }
+  .pc-age { font-family: ${F.body}; font-weight: 600; font-size: .65em;
+    letter-spacing: 0; color: var(--ink-2); }
+  /* The deck carries college/distance here; this sheet has neither (the campus
+     is privacy-gated and distance is meaningless for your own card), so the year
+     takes the same mono line. */
+  .pc-meta { font-family: ${F.mono}; font-size: 9px; font-weight: 700; letter-spacing: .075em;
     text-transform: uppercase; color: var(--ink-2); font-variant-numeric: tabular-nums;
-    margin: 12px 0 0; display: flex; align-items: center; flex-wrap: wrap; row-gap: 4px; }
-  .pc-slash { color: var(--ink-3); font-weight: 400; margin: 0 8px; }
+    margin: 10px 0 0; display: flex; align-items: center; flex-wrap: wrap; row-gap: 4px; }
 
-  .pc-sec { display: flex; flex-direction: column; flex-shrink: 0; }
-  .pc-shead { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
-  .pc-mark { width: 11px; height: 11px; flex-shrink: 0; border: var(--bw) solid var(--ink); border-radius: 3px; }
+  .pc-sec { display: flex; flex-direction: column; flex-shrink: 0; position: relative; }
+  .pc-shead { display: flex; align-items: center; gap: 9px; margin: 0 0 12px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--hair); }
+  .pc-mark { width: 9px; height: 9px; flex-shrink: 0; border: 1px solid var(--ink); border-radius: 0; }
   .pc-mark.yellow { background: var(--yellow); }
   .pc-mark.coral { background: var(--coral); }
   .pc-mark.green { background: var(--green); }
   .pc-mark.pink { background: var(--pink); }
-  .pc-stitle { font-family: ${F.mono}; font-size: 12px; font-weight: 700; letter-spacing: .18em;
+  .pc-stitle { font-family: ${F.mono}; font-size: 10px; font-weight: 700; letter-spacing: .14em;
     text-transform: uppercase; color: var(--ink); }
-  .pc-scount { font-family: ${F.mono}; font-size: 10px; font-weight: 400; color: var(--ink-3);
+  .pc-scount { margin-left: auto; font-family: ${F.mono}; font-size: 9px; font-weight: 400; color: var(--ink-3);
     font-variant-numeric: tabular-nums; }
 
-  .pc-card { background: var(--card); border: var(--bw) solid var(--ink); border-radius: var(--r);
-    box-shadow: 5px 5px 0 var(--ink); position: relative; }
-  .pc-card.padded { padding: 16px; }
+  .pc-card { background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px;
+    box-shadow: none; position: relative; }
+  .pc-card.padded { padding: 15px; }
 
   /* '.pc-compat' was the compatibility score block's positioning hook.
      Renamed to say what it now wraps: the profile-strength readout.
@@ -17644,88 +23200,105 @@ const PROFILE_CSS = `
   .pc-strengthhead { position: relative; }
   .pc-scorehead { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
   .pc-scorenum { display: flex; align-items: flex-start; }
-  .pc-num { font-family: ${F.heavy}; font-size: 54px; font-weight: 400; letter-spacing: -.02em;
+  .pc-num { font-family: ${F.heavy}; font-size: 54px; font-weight: 800; letter-spacing: -.02em;
     line-height: .9; color: var(--ink); font-variant-numeric: tabular-nums; }
   .pc-pct { font-family: ${F.mono}; font-size: 13px; font-weight: 700; color: var(--ink-3); margin: 4px 0 0 4px; }
-  .pc-statust { font-family: ${F.mono}; font-size: 10.5px; font-weight: 700; letter-spacing: .12em;
+  .pc-statust { font-family: ${F.mono}; font-size: 10px; font-weight: 700; letter-spacing: .12em;
     text-transform: uppercase; color: var(--ink-2); text-align: right; line-height: 1.7; }
   .pc-star { color: var(--coral); font-size: 12px; }
-  .pc-bar { height: 16px; border: var(--bw) solid var(--ink); border-radius: 6px; background: var(--paper);
+  .pc-bar { height: 12px; border: var(--bw) solid var(--ink); border-radius: 3px; background: var(--paper);
     overflow: hidden; margin-top: 14px; }
   .pc-barfill { width: 100%; height: 100%; background: var(--yellow); transform-origin: left center; }
 
-  .pc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; }
-  .pc-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .pc-tile { width: 34px; height: 34px; flex-shrink: 0; border: var(--bw) solid var(--ink); border-radius: 10px;
+  .pc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px 12px; }
+  .pc-cell { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .pc-tile { width: 31px; height: 31px; flex-shrink: 0; border: var(--bw) solid var(--ink); border-radius: 3px;
     display: flex; align-items: center; justify-content: center; color: var(--ink); }
   .pc-tile.yellow { background: var(--yellow); }
   .pc-tile.coral { background: var(--coral); }
   .pc-tile.green { background: var(--green); }
   .pc-tile.pink { background: var(--pink); }
   .pc-cellinfo { min-width: 0; }
-  .pc-clabel { font-family: ${F.mono}; font-size: 9px; font-weight: 700; letter-spacing: .16em;
+  .pc-clabel { font-family: ${F.mono}; font-size: 8px; font-weight: 700; letter-spacing: .12em;
     text-transform: uppercase; color: var(--ink-3); }
-  .pc-cval { font-size: 14px; font-weight: 700; color: var(--ink); margin-top: 2px;
+  .pc-cval { font-size: 13px; font-weight: 700; color: var(--ink); margin-top: 3px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 
-  .pc-bio { font-size: 15px; font-weight: 500; line-height: 1.65; color: var(--ink-2);
+  /* The deck has no edit tiles; this sheet does, and they are absolutely
+     positioned in the top-right of their card. The right-hand clears below keep
+     long text and chip rows from running underneath one. */
+  .pc-bio { font-size: 14px; font-weight: 500; line-height: 1.7; color: var(--ink-2);
     margin: 0; word-break: break-word; text-wrap: pretty; padding-right: 38px; }
 
-  .pc-pills { display: flex; flex-wrap: wrap; gap: 9px; padding-right: 38px; }
-  .pc-chip { display: inline-block; padding: 8px 15px; border: var(--bw) solid var(--ink); border-radius: 999px;
-    font-family: ${F.mono}; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
-    background: var(--card); color: var(--ink); transition: none; }
+  .pc-pills { display: flex; flex-wrap: wrap; gap: 8px; padding-right: 38px; }
+  .pc-chip { display: inline-block; padding: 7px 11px; border: var(--bw) solid var(--ink); border-radius: 999px;
+    font-family: ${F.mono}; font-size: 9px; font-weight: 700; letter-spacing: .075em; text-transform: uppercase;
+    background: var(--card); color: var(--ink); transition: background .12s ease, color .12s ease; }
   .pc-chip.acc { background: var(--yellow); }
+  .pc-chip:active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 
   /* prompt card: question is the SETUP, answer is the PAYOFF — so the answer
-     carries the type weight. padding-right keeps both clear of the edit tile. */
-  .pc-prompt { padding: 14px 16px; transition: none; }
-  .pc-promptq { font-family: ${F.mono}; font-size: 11.5px; font-weight: 700; line-height: 1.55;
-    color: var(--ink-3); margin: 0 0 8px; word-break: break-word; padding-right: 38px; }
-  .pc-prompta { font-size: 17px; font-weight: 700; line-height: 1.5; color: var(--ink);
+     carries the type weight. */
+  .pc-prompt { padding: 15px; transition: background .12s ease, color .12s ease; }
+  .pc-promptq { font-family: ${F.mono}; font-size: 10px; font-weight: 700; line-height: 1.6;
+    letter-spacing: .025em; color: var(--ink-3); margin: 0 0 8px; word-break: break-word;
+    padding-right: 38px; transition: none; }
+  .pc-prompta { font-size: 16px; font-weight: 700; line-height: 1.5; color: var(--ink);
     margin: 0; word-break: break-word; overflow-wrap: anywhere; text-wrap: pretty;
-    padding-right: 38px; }
+    padding-right: 38px; transition: none; }
+  .pc-prompt:active .pc-prompta { color: var(--paper); }
+  .pc-prompt:active .pc-promptq { color: rgba(241,237,226,.6); }
 
-  .pc-ph { background: var(--card); border: var(--bw) solid var(--ink); border-radius: var(--r);
-    box-shadow: 4px 4px 0 var(--ink); padding: 6px; position: relative;
-    transition: transform .08s steps(2), box-shadow .08s steps(2); }
-  .pc-ph-in { border-radius: 9px; overflow: hidden; aspect-ratio: 1 / 1; background: var(--hair); }
+  .pc-ph { background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px;
+    box-shadow: none; padding: 5px; position: relative;
+    transition: border-color .12s ease; }
+  .pc-ph:active { border-color: var(--coral); }
+  .pc-ph-in { border-radius: 2px; overflow: hidden; aspect-ratio: 1 / 1; background: var(--hair); }
   .pc-ph-in.wide { aspect-ratio: 16 / 10; }
   .pc-ph-in img { width: 100%; height: 100%; object-fit: cover; display: block;
     opacity: 0; transition: opacity .3s ease-out; -webkit-user-drag: none; }
   .pc-ph-in img.is-loaded { opacity: 1; }
 
-  /* ── THE one constant edit button: same 30px yellow corner tile everywhere ── */
+  /* ── THE one constant edit button: same corner tile on every slot ── */
   .pr-slotbtn { position: absolute; top: 8px; right: 8px; z-index: 5;
     display: flex; align-items: center; justify-content: center; cursor: pointer;
-    width: 30px; height: 30px; background: var(--yellow); border: 1.5px solid var(--ink);
-    border-radius: 9px; color: var(--ink); box-shadow: 2.5px 2.5px 0 var(--ink);
-    transition: transform .08s steps(2), box-shadow .08s steps(2);
+    width: 30px; height: 30px; background: var(--yellow); border: var(--bw) solid var(--ink);
+    border-radius: 4px; color: var(--ink);
+    transition: background .12s ease, color .12s ease;
     -webkit-tap-highlight-color: transparent; }
-  .pr-slotbtn:active { transform: translate(2.5px, 2.5px); box-shadow: 0 0 0 var(--ink); }
+  .pr-slotbtn:active { background: var(--ink); color: var(--paper); }
+  /* inline variant: a flex item at the end of a section head, not a corner
+     tile. Styled as the deck's .pc-iconbtn — flat ink outline, no fill — because
+     there is one of these on most section heads and the filled tan tile at that
+     density turned the column into a ladder of orange blocks. The filled tile
+     stays on cards and photos, where it has a surface to sit on and a single
+     job to advertise. */
+  .pr-slotbtn.inline { position: static; width: 28px; height: 28px; flex-shrink: 0;
+    background: transparent; border-radius: 4px; }
+  .pr-slotbtn.inline:hover { background: var(--yellow); }
+  .pr-slotbtn.inline:active { background: var(--ink); color: var(--paper); }
 
   /* hero variant — same tile, anchored to the hero's top-right */
   .pr-herobtn { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 68px); right: 20px; z-index: 5;
     display: flex; align-items: center; justify-content: center; cursor: pointer;
-    width: 30px; height: 30px; background: var(--yellow); border: 1.5px solid var(--ink);
-    border-radius: 9px; color: var(--ink); box-shadow: 2.5px 2.5px 0 var(--ink);
-    transition: transform .08s steps(2), box-shadow .08s steps(2);
+    width: 30px; height: 30px; background: var(--yellow); border: var(--bw) solid var(--ink);
+    border-radius: 4px; color: var(--ink);
+    transition: background .12s ease, color .12s ease;
     -webkit-tap-highlight-color: transparent; }
-  .pr-herobtn:active { transform: translate(2.5px, 2.5px); box-shadow: 0 0 0 var(--ink); }
+  .pr-herobtn:active { background: var(--ink); color: var(--paper); }
 
-  .pr-empty { width: 100%; height: 100%; border-radius: 9px; border: 2px dashed var(--ink-3);
-    background: var(--hair); display: flex; flex-direction: column; align-items: center;
+  .pr-empty { width: 100%; height: 100%; border-radius: 2px; border: 1px dashed var(--ink-3);
+    background: transparent; display: flex; flex-direction: column; align-items: center;
     justify-content: center; gap: 8px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 
   /* ── upload progress: indeterminate sweep, pinned to the tile's inner edge ──
      fetch() + FormData cannot report upload bytes, so this deliberately does NOT
      show a fake percentage. It signals "in flight" and sweeps until resolve. */
-  .pr-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 5px; z-index: 7;
+  .pr-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; z-index: 7;
     background: var(--hair); overflow: hidden; pointer-events: none;
-    border-radius: 0 0 8px 8px; }
+    border-radius: 0 0 2px 2px; }
   .pr-bar::after { content: ''; position: absolute; inset: 0; width: 45%;
-    background: var(--yellow); border-top: 1px solid var(--ink);
-    border-bottom: 1px solid var(--ink);
+    background: var(--yellow);
     animation: prSweep 1.05s cubic-bezier(.5,0,.5,1) infinite; }
   @keyframes prSweep {
     0%   { transform: translateX(-110%); }
@@ -17737,15 +23310,15 @@ const PROFILE_CSS = `
      button permanently on every tile. */
   .pr-tray { position: absolute; inset: 0; z-index: 6;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 7px; border-radius: 9px; background: rgba(25,25,25,.62); padding: 6px; }
+    gap: 7px; border-radius: 5px; background: rgba(17,18,17,.72); padding: 6px; }
   .pr-traybtn { display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-    width: 100%; padding: 7px 4px; border-radius: 8px;
-    border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink);
-    box-shadow: 2px 2px 0 var(--ink);
+    width: 100%; padding: 7px 4px; border-radius: 4px;
+    border: var(--bw) solid var(--ink); background: var(--paper); color: var(--ink);
     font-family: ${F.mono}; font-size: 9px; font-weight: 700;
     letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
+    transition: background .12s ease, color .12s ease;
     -webkit-tap-highlight-color: transparent; }
-  .pr-traybtn:active { transform: translate(2px, 2px); box-shadow: 0 0 0 var(--ink); }
+  .pr-traybtn:active { background: var(--ink); color: var(--paper); }
   .pr-traybtn.danger { background: var(--red); color: #fff; }
 
   /* hero tray — anchored to the photo strip, never covered by the sheet */
@@ -17758,10 +23331,7 @@ const PROFILE_CSS = `
      background with room to spare, so these are scaled up to roughly a 44px
      touch target — the same as the app's other primary controls — which is what
      they were missing on the main photo. */
-  .pr-traybtn.big { padding: 12px 8px; gap: 7px; border-radius: 10px;
-    border-width: 2px; box-shadow: 3px 3px 0 var(--ink);
-    font-size: 11.5px; letter-spacing: .1em; }
-  .pr-traybtn.big:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink); }
+  .pr-traybtn.big { padding: 13px 8px; gap: 7px; border-radius: 5px; font-size: 11px; letter-spacing: .1em; }
   .pr-traybtn.big svg { width: 15px; height: 15px; flex: none; }
 
   /* Wrapper that gives the hero pencil + tray one element to hang the
@@ -17783,56 +23353,54 @@ const PROFILE_CSS = `
     top: calc(env(safe-area-inset-top, 0px) + 118px); left: 50%;
     z-index: 60; overflow: hidden;
     display: inline-flex; align-items: center; gap: 9px;
-    padding: 9px 14px; background: var(--paper);
-    border: 2px solid var(--ink); border-radius: 999px;
-    box-shadow: 3px 3px 0 var(--ink);
+    padding: 8px 14px; background: var(--paper);
+    border: var(--bw) solid var(--ink); border-radius: 999px;
     font-family: ${F.mono}; font-size: 10px; font-weight: 700;
     letter-spacing: .14em; text-transform: uppercase; color: var(--ink);
     pointer-events: none; }
   .pr-uploadpill::after { content: ''; position: absolute; left: 0; bottom: 0;
-    height: 4px; width: 45%; background: var(--yellow);
-    border-top: 1.5px solid var(--ink);
+    height: 3px; width: 45%; background: var(--yellow);
     animation: prSweep 1.05s cubic-bezier(.5,0,.5,1) infinite; }
 
   .pr-input, .pr-select, .pr-textarea { width: 100%; box-sizing: border-box;
-    padding: 13px 14px; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 11px;
+    padding: 13px 14px; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px;
     font-family: ${F.body}; font-size: 14px; font-weight: 500; color: var(--ink); outline: none; }
   .pr-textarea { resize: none; line-height: 1.55; }
-  .pr-input:focus, .pr-select:focus, .pr-textarea:focus { box-shadow: 3px 3px 0 var(--ink); }
+  .pr-input:focus, .pr-select:focus, .pr-textarea:focus { border-color: var(--coral); }
 
   .pr-chipbtn { padding: 9px 15px; border: var(--bw) solid var(--ink); border-radius: 999px;
     font-family: ${F.mono}; font-size: 11px; font-weight: 700; letter-spacing: .08em;
     text-transform: uppercase; background: var(--card); color: var(--ink); cursor: pointer;
-    transition: none; -webkit-tap-highlight-color: transparent; }
+    transition: background .12s ease, color .12s ease; -webkit-tap-highlight-color: transparent; }
   .pr-chipbtn.on { background: var(--coral); color: #fff; }
   .pr-chipbtn:disabled { opacity: .35; cursor: not-allowed; }
   .pr-chipbtn:active:not(:disabled) { background: var(--ink); color: var(--paper); }
 
   .pr-slam { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
     width: 100%; padding: 14px; background: var(--card); color: var(--ink);
-    border: var(--bw) solid var(--ink); border-radius: 12px; box-shadow: 4px 4px 0 var(--ink);
+    border: var(--bw) solid var(--ink); border-radius: 5px;
     font-family: ${F.mono}; font-size: 12px; font-weight: 700; letter-spacing: .12em;
     text-transform: uppercase; cursor: pointer;
-    transition: transform .08s steps(2), box-shadow .08s steps(2), background .08s steps(2);
+    transition: background .12s ease, color .12s ease;
     -webkit-tap-highlight-color: transparent; }
-  .pr-slam:active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--ink); }
+  .pr-slam:active:not(:disabled) { background: var(--ink); color: var(--paper); }
   .pr-slam.yellow { background: var(--yellow); }
+  .pr-slam.yellow:active:not(:disabled) { background: var(--ink); color: var(--paper); }
   .pr-slam.danger { color: var(--red); }
   /* Save stays visible but inert until something actually changes — that is the
      feedback that tells you the drawer has nothing to commit. */
   .pr-slam:disabled { opacity: .34; cursor: not-allowed; }
-  .pr-slam:disabled:active { transform: none; box-shadow: 4px 4px 0 var(--ink); }
 
   /* ── always-visible "addable" slot ──
      A prompt / bio / interests slot keeps its place on the card whether or not it
      has content, so clearing one never makes the layout jump. Filled slots use the
      real card chrome; empty ones use this dashed frame around the shared .pr-empty,
      so every empty slot in the sheet looks the same however it was reached. */
-  .pc-slot { background: var(--card); border: var(--bw) dashed var(--ink-3);
-    border-radius: var(--r); padding: 6px; position: relative; box-shadow: none; }
+  .pc-slot { background: transparent; border: 1px dashed var(--hair);
+    border-radius: 5px; padding: 5px; position: relative; box-shadow: none; }
   .pc-slot .pr-empty { min-height: 68px; }
 
-  .pc-slotlabel { font-family: ${F.mono}; font-size: 10px; font-weight: 700;
+  .pc-slotlabel { font-family: ${F.mono}; font-size: 9px; font-weight: 700;
     letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); }
 
   /* ── drawer commit bar: sticky, always reachable above the keyboard ── */
@@ -17848,15 +23416,28 @@ const PROFILE_CSS = `
     transform: translateY(-140%); opacity: 0; pointer-events: none; }
 
   @media (hover: hover) and (pointer: fine) {
-    .pr-slotbtn:hover, .pr-herobtn:hover { filter: brightness(1.05); }
-    .pc-prompt:hover { background: #FFFDF6; }
+    .pr-slotbtn:hover, .pr-herobtn:hover { background: var(--yellow); color: var(--ink); }
+    .pc-prompt:hover { background: #E9E4D8; }
+    .pc-chip:hover { background: rgba(224,161,94,.2); }
+    .pc-chip.acc:hover { background: var(--yellow); }
+    .pc-ph:hover { border-color: var(--coral); }
   }
 
   .pc-sheet:focus-visible, .pr-slotbtn:focus-visible, .pr-herobtn:focus-visible,
-  .pr-prompt:focus-visible { outline: 3px solid var(--yellow); outline-offset: 2px; }
+  .pc-prompt:focus-visible { outline: 2px solid var(--coral); outline-offset: 3px; }
+
+  @media (max-width: 390px) {
+    .pc-sheet { padding-left: 14px; padding-right: 14px; gap: 17px; }
+    .pc-name { font-size: 34px; }
+    .pc-grid { gap: 12px 8px; }
+    .pc-cell { gap: 7px; }
+    .pc-tile { width: 28px; height: 28px; }
+    .pc-cval { font-size: 12px; }
+  }
 
   @media (prefers-reduced-motion: reduce) {
-    .pc-hero, .pc-ph-in img, .pr-slotbtn, .pr-herobtn { transition: none; }
+    .pc-hero, .pc-ph-in img, .pr-slotbtn, .pr-herobtn, .pc-ph,
+    .pc-chip, .pc-prompt, .pr-traybtn, .pr-chipbtn, .pr-slam { transition: none; }
     .pr-bar::after { animation: none; width: 100%; }
     .pr-uploadpill::after { animation: none; width: 100%; }
     [data-deck-header] { transition: none; }
@@ -17881,12 +23462,20 @@ const FieldCell = ({ icon: Icon, color, label, value }) => (
   </div>
 );
 
-/* plain head — NO edit button here; the button lives on the component itself */
-const SectionHead = ({ mark = 'yellow', count, children }) => (
+/* plain head — the edit button rides inline as a flex item (same slot the deck
+   gives its kebab) rather than floating over the row as an absolute corner
+   tile, which would sit on top of the right-aligned count. Sections whose body
+   is a real .pc-card keep the absolute corner tile instead. */
+const SectionHead = ({ mark = 'yellow', count, onEdit, editLabel, children }) => (
   <div className="pc-shead">
     <span className={`pc-mark ${mark}`} aria-hidden="true" />
     <span className="pc-stitle">{children}</span>
     {count > 0 && <span className="pc-scount">/ {count}</span>}
+    {onEdit && (
+      <button className="pr-slotbtn inline" aria-label={editLabel} title={editLabel} onClick={onEdit}>
+        <Pencil size={12} strokeWidth={2.8} />
+      </button>
+    )}
   </div>
 );
 
@@ -18873,7 +24462,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
 
   if (loading || (!userData && !fetchError)) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#131313' }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#111211' }}>
         <p style={{ fontFamily: F.mono, fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: C.ink3 }}>
           Loading your card…
         </p>
@@ -18896,7 +24485,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
       <div style={{
         flex: 1, display: 'flex', flexDirection: 'column', gap: 16,
         alignItems: 'center', justifyContent: 'center',
-        backgroundColor: '#131313', padding: 24, textAlign: 'center',
+        backgroundColor: '#111211', padding: 24, textAlign: 'center',
       }}>
         <p style={{ fontFamily: F.mono, fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: C.red }}>
           Card unavailable
@@ -18908,8 +24497,8 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
           onClick={fetchProfile}
           className="tactile-btn"
           style={{
-            padding: '10px 20px', borderRadius: 6, cursor: 'pointer',
-            border: `2px solid ${C.ink}`, backgroundColor: C.yellow,
+            padding: '10px 20px', borderRadius: 4, cursor: 'pointer',
+            border: `1px solid ${C.ink}`, backgroundColor: C.yellow,
             color: C.ink, fontFamily: F.mono, fontSize: 11, fontWeight: 700,
             letterSpacing: '.12em', textTransform: 'uppercase',
           }}
@@ -19037,20 +24626,21 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
         <span className="pc-notetext">As others see you</span>
         <div className="pc-grabber" aria-hidden="true" />
 
-        {/* IDENTITY — one edit button */}
+        {/* IDENTITY — one edit button. Age is inline in the name, matching the
+            deck card exactly; the year stays on its own mono line below. */}
         <div ref={idRef} className="pc-id">
           <div className="pc-idrow">
             <div style={{ minWidth: 0 }}>
-              <h2 className="pc-name">{userData.name || 'Anonymous'}</h2>
-              <p className="pc-meta">
-                {userData.age || '—'}<span className="pc-slash">/</span>
-                {userData.year || '—'}
-              </p>
+              <h2 className="pc-name">
+                {userData.name || 'Anonymous'}
+                {userData.age ? <span className="pc-age">, {userData.age}</span> : null}
+              </h2>
             </div>
             <button className="pr-slotbtn" aria-label="Edit basics" title="Edit basics" onClick={() => openEditDrawer({ type: 'identity' })}>
               <Pencil size={13} strokeWidth={2.8} />
             </button>
           </div>
+          <p className="pc-meta">{userData.year || '—'}</p>
         </div>
 
         {/* PROFILE STRENGTH — score lives HERE and nowhere else; not editable */}
@@ -19067,7 +24657,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
                   {isAspirational && <span className="pc-star">✦ </span>}
                   {completion}
                   {isAspirational && (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 6, padding: '3px 8px', background: C.green, border: '1.5px solid var(--ink)', borderRadius: 6, color: C.ink, fontSize: 8.5 }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 6, padding: '3px 8px', background: C.green, border: '1px solid var(--ink)', borderRadius: 4, color: C.ink, fontSize: 8.5 }}>
                       <CheckCircle2 size={10} strokeWidth={3} /> Complete
                     </span>
                   )}
@@ -19099,50 +24689,36 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
         </div>
 
         {/* ABOUT — always present; clearing the bio shows an add-target instead of
-            removing the section and its edit button */}
+            removing the section and its edit button. Bare text, not a card, so it
+            matches the deck. */}
         <div className="pc-sec">
-          <SectionHead mark="green">About</SectionHead>
+          <SectionHead mark="green" onEdit={() => openEditDrawer({ type: 'bio' })} editLabel="Edit about">About</SectionHead>
           {userData.bio ? (
-            <div className="pc-card padded">
-              <p className="pc-bio">{userData.bio}</p>
-              <button className="pr-slotbtn" aria-label="Edit about" title="Edit about" onClick={() => openEditDrawer({ type: 'bio' })}>
-                <Pencil size={13} strokeWidth={2.8} />
-              </button>
-            </div>
+            <p className="pc-bio">{userData.bio}</p>
           ) : (
             <EmptySlot onClick={() => openEditDrawer({ type: 'bio' })} label="Add about you" />
           )}
         </div>
 
-        {/* SEEKING — now a card so it carries its button like everything else */}
+        {/* SEEKING — bare chips, matching the deck */}
         <div className="pc-sec">
-          <SectionHead mark="pink">Seeking</SectionHead>
-          <div className="pc-card padded">
-            <div className="pc-pills">
-              {(userData.intent?.length ? userData.intent : ['Connection']).map((it, i) => (
-                <span key={`${it}-${i}`} className="pc-chip acc">{it}</span>
-              ))}
-            </div>
-            <button className="pr-slotbtn" aria-label="Edit seeking" title="Edit seeking" onClick={() => openEditDrawer({ type: 'intent' })}>
-              <Pencil size={13} strokeWidth={2.8} />
-            </button>
+          <SectionHead mark="pink" onEdit={() => openEditDrawer({ type: 'intent' })} editLabel="Edit seeking">Seeking</SectionHead>
+          <div className="pc-pills">
+            {(userData.intent?.length ? userData.intent : ['Connection']).map((it, i) => (
+              <span key={`${it}-${i}`} className="pc-chip acc">{it}</span>
+            ))}
           </div>
         </div>
 
         {/* INTERESTS — always present; an empty list shows an add-target rather
             than deleting the section (same rule as the prompt slots) */}
         <div className="pc-sec">
-          <SectionHead mark="yellow" count={interests.length}>Interests</SectionHead>
+          <SectionHead mark="yellow" count={interests.length} onEdit={() => openEditDrawer({ type: 'interests' })} editLabel="Edit interests">Interests</SectionHead>
           {interests.length > 0 ? (
-            <div className="pc-card padded">
-              <div className="pc-pills">
-                {interests.map((it, i) => (
-                  <span key={`${it}-${i}`} className="pc-chip">{it}</span>
-                ))}
-              </div>
-              <button className="pr-slotbtn" aria-label="Edit interests" title="Edit interests" onClick={() => openEditDrawer({ type: 'interests' })}>
-                <Pencil size={13} strokeWidth={2.8} />
-              </button>
+            <div className="pc-pills">
+              {interests.map((it, i) => (
+                <span key={`${it}-${i}`} className="pc-chip">{it}</span>
+              ))}
             </div>
           ) : (
             <EmptySlot onClick={() => openEditDrawer({ type: 'interests' })} label="Add interests" />
@@ -19182,13 +24758,13 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
             <motion.div
               initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-              style={{ position: 'fixed', bottom: 0, left: 0, right: 0, height: '80dvh', backgroundColor: C.paper, borderTop: `2px solid ${C.ink}`, borderRadius: '22px 22px 0 0', zIndex: 101, display: 'flex', flexDirection: 'column', boxShadow: '0 -10px 40px rgba(0,0,0,.4)' }}
+              style={{ position: 'fixed', bottom: 0, left: 0, right: 0, height: '80dvh', backgroundColor: C.paper, borderTop: `1px solid ${C.ink}`, borderRadius: '15px 15px 0 0', zIndex: 101, display: 'flex', flexDirection: 'column', boxShadow: '0 -14px 32px rgba(0,0,0,.22)' }}
             >
-              <div style={{ padding: '16px 20px', borderBottom: `2px solid ${C.ink}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontFamily: F.heavy, fontSize: 18, fontWeight: 400, color: C.ink, letterSpacing: '-.01em', textTransform: 'uppercase' }}>
+              <div style={{ padding: '16px 20px', borderBottom: `1px solid ${C.ink}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontFamily: F.heavy, fontSize: 18, fontWeight: 800, color: C.ink, letterSpacing: '-.02em', textTransform: 'uppercase' }}>
                   {drawerConfig.type === 'interests' ? 'Edit interests' : drawerConfig.type === 'intent' ? 'Edit seeking' : drawerConfig.type === 'prompt' ? 'Edit question' : drawerConfig.type === 'vitals' ? 'Edit vitals' : drawerConfig.type === 'identity' ? 'Edit basics' : 'Edit about'}
                 </span>
-                <button onClick={requestCloseDrawer} aria-label="Close editor" style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.card, border: `2px solid ${C.ink}`, borderRadius: 11, boxShadow: `3px 3px 0 ${C.ink}`, cursor: 'pointer', color: C.ink }}>
+                <button onClick={requestCloseDrawer} aria-label="Close editor" style={{ width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: `1px solid ${C.ink}`, borderRadius: 4, cursor: 'pointer', color: C.ink }}>
                   <X size={16} strokeWidth={3} />
                 </button>
               </div>
@@ -19218,7 +24794,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
                       role="switch"
                       aria-checked={!!draft.gapYear}
                       onClick={() => { triggerHaptic('light'); setDraft((d) => ({ ...d, gapYear: !d.gapYear })); }}
-                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '13px 14px', borderRadius: 12, border: '2px solid #191919', background: draft.gapYear ? '#FFD43D' : '#FFFFFF', cursor: 'pointer', fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 600, color: '#191919', boxShadow: '3px 3px 0 #191919' }}
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '13px 14px', borderRadius: 5, border: `1px solid ${C.ink}`, background: draft.gapYear ? C.yellow : C.card, cursor: 'pointer', fontFamily: F.body, fontSize: 14, fontWeight: 600, color: C.ink }}
                     >
                       <span>I'm on a gap year</span>
                       <span aria-hidden="true">{draft.gapYear ? 'ON' : 'OFF'}</span>
@@ -19259,13 +24835,13 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
                   </span>
                   <span style={{
                     width: 46, height: 26, flexShrink: 0, borderRadius: 999,
-                    border: `2px solid ${C.ink}`, position: 'relative',
+                    border: `1px solid ${C.ink}`, position: 'relative',
                     background: userData.showCollege !== false ? C.yellow : C.hair,
                   }}>
                     <span style={{
-                      position: 'absolute', top: 2, left: userData.showCollege !== false ? 22 : 2,
+                      position: 'absolute', top: 3, left: userData.showCollege !== false ? 23 : 3,
                       width: 18, height: 18, borderRadius: '50%', background: C.card,
-                      border: `2px solid ${C.ink}`, boxSizing: 'border-box',
+                      border: `1px solid ${C.ink}`, boxSizing: 'border-box',
                       transition: 'left 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
                     }} />
                   </span>
@@ -19288,7 +24864,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
                         <button
                           key={i}
                           className={`pr-chipbtn${draft.question === promptText ? ' on' : ''}`}
-                          style={{ borderRadius: 11, textAlign: 'left', textTransform: 'none', fontFamily: F.body, fontSize: 13.5, fontWeight: 600, letterSpacing: 0 }}
+                          style={{ borderRadius: 4, textAlign: 'left', textTransform: 'none', fontFamily: F.body, fontSize: 13.5, fontWeight: 600, letterSpacing: 0 }}
                           onClick={() => {
                             setDraft((d) => {
                               if (d.question === promptText) return d;
@@ -19381,28 +24957,15 @@ export default Profile;
 
 ```
 import React, { useState } from 'react';
+import neu from '../styles/neu';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Shuffle, Video, ShieldCheck } from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
 import { toast } from '../utils/toast';
 import { DECK_CONTENT_TOP } from '../utils/deckChrome';
 
-/* Locked tokens — neubrutalism, same family as ProfileCard / Matches */
-const t = {
-  desk: '#131313',
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  yellow: '#FFD43D',
-  coral: '#FF7A59',
-  green: '#5BD98A',
-  red: '#E5484D',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
-};
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
 
 const ROULETTE_CSS = `
   .rt-slam { display: inline-flex; align-items: center; justify-content: center; gap: 10px;
@@ -19534,24 +25097,18 @@ import { toast } from '../utils/toast';
 import { getThemePreference, setThemePreference, getDarkMood, setDarkMood } from '../utils/theme';
 import { readLocationOnce, LOCATION_UNAVAILABLE } from '../utils/geolocation';
 import { resetDiscoverStore } from '../utils/discoverStore';
+import neu from '../styles/neu';
 
 const FALLBACK_IMG = 'https://placehold.co/600x800/fff3dc/191919?text=%C2%B7';
 
+/* The shared neo-brutalist canon (src/styles/neu.js) */
 const F = {
-  heavy: "'Archivo Black', 'Arial Black', sans-serif",
-  body: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  mono: "'Space Mono', 'Courier New', monospace",
+  heavy: neu.fontHeavy,
+  body: neu.fontBody,
+  mono: neu.fontMono,
 };
 
-const C = {
-  paper: '#FFF9EC',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  yellow: '#FFD43D',
-  red: '#E5484D',
-};
+const C = neu;
 
 const SETTINGS_CSS = `
   .st-slam { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -20374,652 +25931,6 @@ export default Settings;
 
 ```
 
-### ./client/src/pages/Waitlist.jsx
-
-```
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import confetti from 'canvas-confetti';
-import { api, API_BASE } from '../utils/api';
-import { theme as design } from '../utils/theme';
-import { Feather, KeyRound } from 'lucide-react';
-
-// Sunlit Library token set — same family as Auth/ProfileCard
-const t = {
-  desk: 'var(--desk)',
-  paper: 'var(--paper)',
-  card: 'var(--card)',
-  surfaceAlt: 'var(--surface-alt)',
-  lineDark: 'var(--line-dark)',
-  line: 'var(--line)',
-  ink: 'var(--ink)',
-  inkSoft: 'var(--ink-soft)',
-  inkMuted: 'var(--ink-muted)',
-  accent: 'var(--accent)',
-  accentSoft: 'var(--accent-18)',
-  accentFaint: 'var(--accent-05)',
-  crimson: 'var(--crimson)',
-  success: 'var(--success)',
-  fontDisplay: design?.font?.heading || "'Playfair Display', Georgia, serif",
-  fontBody: design?.font?.body || "'Inter', -apple-system, sans-serif",
-  fontType: "'Special Elite', 'Courier New', monospace",
-  grain: design?.texture?.grain || '',
-};
-
-// Single source of truth for tier thresholds (mirrored in backend)
-const TIER_THRESHOLDS = { charter: 50, founding: 250 };
-
-// FIXED: Match the server's hardcoded constant exactly
-const FALLBACK_LAUNCH_DATE = new Date('2026-10-02T00:00:00Z');
-
-const tierName = (position) => {
-  if (position <= TIER_THRESHOLDS.charter) return 'Charter';
-  if (position <= TIER_THRESHOLDS.founding) return 'Founding';
-  return 'Original';
-};
-
-const useCountdown = (target) => {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  const diff = Math.max(0, target.getTime() - now);
-  const days = Math.floor(diff / 86400000);
-  const hours = Math.floor((diff % 86400000) / 3600000);
-  const minutes = Math.floor((diff % 3600000) / 60000);
-  const seconds = Math.floor((diff % 60000) / 1000);
-  return {
-    daysS: String(days).padStart(2, '0'),
-    hoursS: String(hours).padStart(2, '0'),
-    minutesS: String(minutes).padStart(2, '0'),
-    secondsS: String(seconds).padStart(2, '0'),
-  };
-};
-
-const TimeBox = ({ value, label }) => (
-  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-    <div
-      style={{
-        width: 64, height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        borderRadius: 16, border: `1px solid ${t.line}`, backgroundColor: t.card,
-        fontFamily: t.fontType, fontSize: 26, fontWeight: 700, color: t.accent,
-      }}
-    >
-      {value}
-    </div>
-    <span style={{ marginTop: 6, fontSize: 10, letterSpacing: '0.2em', textTransform: 'uppercase', color: t.inkMuted, fontFamily: t.fontBody, fontWeight: 500 }}>
-      {label}
-    </span>
-  </div>
-);
-
-const Stat = ({ value, label, accent }) => (
-  <div
-    style={{
-      borderRadius: 14, border: `1px solid ${t.line}`, backgroundColor: t.card, padding: 14,
-    }}
-  >
-    <div style={{ fontFamily: t.fontType, fontSize: 24, fontWeight: 700, color: accent || t.ink }}>
-      {value}
-    </div>
-    <div style={{ marginTop: 2, fontSize: 11, color: t.inkMuted, fontFamily: t.fontBody }}>{label}</div>
-  </div>
-);
-
-const Panel = ({ children, style = {} }) => (
-  <div
-    style={{
-      borderRadius: 16, border: `1px solid ${t.line}`, backgroundColor: t.card, padding: 20,
-      ...style,
-    }}
-  >
-    {children}
-  </div>
-);
-
-export default function Waitlist() {
-  const [step, setStep] = useState('landing');
-  const [email, setEmail] = useState('');
-  const [name, setName] = useState('');
-  const [referralCode, setReferralCode] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [stats, setStats] = useState(null);
-  const [myData, setMyData] = useState(null);
-  const [recentToasts, setRecentToasts] = useState([]);
-
-  const confettiFired = useRef(false);
-  const toastTimersRef = useRef([]);
-
-  // FIXED: stable launch date — countdown never resets on refetch
-  const launchDate = useMemo(
-    () => (stats?.launchDate ? new Date(stats.launchDate) : FALLBACK_LAUNCH_DATE),
-    [stats?.launchDate]
-  );
-  const countdown = useCountdown(launchDate);
-
-  const fetchStats = useCallback(async () => {
-    try {
-      setStats(await api.get('/waitlist/stats'));
-    } catch {
-      // keep last stats
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchStats();
-    const id = setInterval(fetchStats, 15000);
-    return () => {
-      clearInterval(id);
-      toastTimersRef.current.forEach(clearTimeout);
-      toastTimersRef.current = [];
-    };
-  }, [fetchStats]);
-
-  // FIXED: Real joins instead of fabricated names — matches ethical framework
-  useEffect(() => {
-    if (step !== 'success' || !stats?.recentJoins?.length) return;
-
-    const formatJoin = (join) => {
-      if (!join.name || join.name === 'An IITian') return 'An IITian just joined';
-      const firstName = join.name.split(' ')[0];
-      const yearMatch = join.year?.match(/Freshies|Sophies|Thirdies|Fourthies/);
-      const yearMap = { Freshies: '28', Sophies: '27', Thirdies: '26', Fourthies: '25' };
-      const yearSuffix = yearMatch ? yearMap[yearMatch[0]] || '27' : '27';
-      const branchShort = join.branch ? join.branch.split(' ')[0] : 'IITB';
-      return `${firstName} from ${branchShort} '${yearSuffix} just joined`;
-    };
-
-    const interval = setInterval(() => {
-      const join = stats.recentJoins[Math.floor(Math.random() * stats.recentJoins.length)];
-      const id = Date.now() + Math.random();
-      setRecentToasts(prev => [{ id, name: formatJoin(join) }, ...prev].slice(0, 3));
-      const timer = setTimeout(() => {
-        setRecentToasts(prev => prev.filter(toast => toast.id !== id));
-      }, 4000);
-      toastTimersRef.current.push(timer);
-    }, 8000 + Math.random() * 5000);
-
-    return () => {
-      clearInterval(interval);
-      toastTimersRef.current.forEach(clearTimeout);
-      toastTimersRef.current = [];
-    };
-  }, [step, stats]);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError('');
-    const normalized = email.trim().toLowerCase().replace(/\s+/g, '');
-    setEmail(normalized);
-    if (!normalized || !/^[\w.+-]+@[\w-]+\.[\w.]+$/.test(normalized)) {
-      setError('Please enter a valid email.');
-      return;
-    }
-    if (!normalized.endsWith('.ac.in')) {
-      setError('Only academic (.ac.in) emails are accepted.');
-      return;
-    }
-    setLoading(true);
-    try {
-      // Raw fetch so the 409 resume body and error status are preserved
-      const res = await fetch(`${API_BASE}/api/waitlist/join`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          email: normalized,
-          name: name.trim(),
-          referralCode: referralCode.trim().toUpperCase(),
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-
-      if (res.status === 409) {
-        confettiFired.current = true;
-        confetti({ particleCount: 60, spread: 70, origin: { y: 0.6 }, colors: ['var(--accent)', 'var(--line-dark)', 'var(--crimson)', 'var(--paper)'] });
-        setMyData(data);
-        setStep('success');
-        return;
-      }
-      if (!res.ok) {
-        setError(data.message || 'Something went wrong. Please try again.');
-        return;
-      }
-
-      if (!confettiFired.current) {
-        confettiFired.current = true;
-        confetti({ particleCount: 160, spread: 100, origin: { y: 0.6 }, colors: ['var(--accent)', 'var(--line-dark)', 'var(--crimson)', 'var(--paper)'] });
-      }
-      setMyData(data);
-      setStep('success');
-    } catch {
-      setError('Network error. Please check your connection and try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const pct = stats ? Math.round((stats.total / 250) * 100) : 0;
-
-  return (
-    <div
-      style={{
-        minHeight: '100dvh', backgroundColor: t.desk, color: t.ink,
-        fontFamily: t.fontBody, position: 'relative', overflowX: 'hidden',
-        backgroundImage: `radial-gradient(ellipse at top,'var(--accent-06)', transparent 60%), ${t.grain}`,
-      }}
-    >
-      <style>{`
-        @keyframes wlToast { from { opacity: 0; transform: translate3d(0, -12px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
-        .wl-toast { animation: wlToast 0.3s ease-out both; }
-        @keyframes wlFadeUp { from { opacity: 0; transform: translate3d(0, 18px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
-        .wl-fade-up { animation: wlFadeUp 0.55s cubic-bezier(0.2, 0.8, 0.3, 1) both; }
-      `}</style>
-
-      {/* Recent join toasts — real data from stats.recentJoins */}
-      <div style={{ position: 'fixed', top: 96, left: 16, zIndex: 50, display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: 'none' }}>
-        {recentToasts.map(toast => (
-          <div
-            key={toast.id}
-            className="wl-toast"
-            style={{
-              borderRadius: 12, border: `1px solid ${t.line}`, backgroundColor: 'var(--paper-94)',
-              padding: '10px 14px', fontSize: 12.5, color: t.inkSoft,
-              fontFamily: t.fontBody, maxWidth: 260,
-            }}
-          >
-            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 99, backgroundColor: t.crimson, marginRight: 8, verticalAlign: 'middle' }} />
-            {toast.name}
-          </div>
-        ))}
-      </div>
-
-      <div style={{ maxWidth: 520, margin: '0 auto', padding: '28px 20px 64px', position: 'relative' }}>
-        {/* Masthead */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div
-              style={{
-                width: 32, height: 32, borderRadius: 10, backgroundColor: t.accent, color: t.paper,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontFamily: t.fontDisplay, fontWeight: 800, fontSize: 17,
-              }}
-            >
-              M
-            </div>
-            <span style={{ fontFamily: t.fontDisplay, fontWeight: 700, fontSize: 17, letterSpacing: '0.01em' }}>
-              Matchalize
-            </span>
-          </div>
-          <span
-            style={{
-              border: `1px solid ${t.lineDark}`, borderRadius: 999, padding: '5px 12px',
-              fontFamily: t.fontType, fontSize: 10.5, letterSpacing: '0.22em', color: t.accent,
-              backgroundColor: 'var(--paper-60)', textTransform: 'uppercase',
-            }}
-          >
-            Founding Cohort
-          </span>
-        </div>
-
-        <AnimatePresence mode="wait">
-          {step === 'landing' && (
-            <motion.div
-              key="landing"
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.4 }}
-            >
-              {/* Live badge */}
-              <div
-                className="wl-fade-up"
-                style={{
-                  marginTop: 40, display: 'inline-flex', alignItems: 'center', gap: 8,
-                  border: `1px solid ${t.line}`, borderRadius: 999, padding: '6px 14px',
-                  backgroundColor: 'var(--paper-70)', fontSize: 12, color: t.inkSoft, fontFamily: t.fontBody,
-                }}
-              >
-                <span style={{ width: 7, height: 7, borderRadius: 99, backgroundColor: t.accent, animation: 'wlPulse 1.6s ease-in-out infinite' }} />
-                {stats ? `${stats.last24h} joined in the last 24h` : 'Join the waitlist'}
-              </div>
-              <style>{`@keyframes wlPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }`}</style>
-
-              {/* Hero */}
-              <h1
-                className="wl-fade-up"
-                style={{
-                  marginTop: 22, fontFamily: t.fontDisplay, fontWeight: 800, fontSize: 38, lineHeight: 1.12,
-                  letterSpacing: '-0.01em', color: t.ink,
-                }}
-              >
-                The founders of the{' '}
-                <em style={{ color: t.accent, fontStyle: 'italic' }}>campus dating economy</em>{' '}
-                at IIT Bombay.
-              </h1>
-              <p className="wl-fade-up" style={{ marginTop: 14, maxWidth: 460, fontSize: 14.5, lineHeight: 1.65, color: t.inkSoft }}>
-                The <strong style={{ color: t.ink }}>Charter Cohort</strong> gets first access, an exclusive badge, and a direct line to product decisions.
-              </p>
-
-              {/* Tier tiles */}
-              <div className="wl-fade-up" style={{ marginTop: 24, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-                <Stat value="50" label="Charter spots" accent={t.accent} />
-                <Stat value="250" label="Founding seats" accent={t.accent} />
-                <Stat value="0" label="Public" accent={t.inkMuted} />
-              </div>
-
-              {/* Founding progress */}
-              <div className="wl-fade-up" style={{ marginTop: 16 }}>
-                <Panel>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 12.5, color: t.inkSoft, fontFamily: t.fontBody }}>
-                    <span>{stats ? `${stats.total} founding members` : 'Loading…'}</span>
-                    <span style={{ fontFamily: t.fontType, fontWeight: 700, color: t.accent }}>{pct}%</span>
-                  </div>
-                  <div style={{ marginTop: 10, height: 8, borderRadius: 999, backgroundColor: t.desk, overflow: 'hidden' }}>
-                    <div
-                      style={{
-                        height: '100%', borderRadius: 999,
-                        background: `linear-gradient(90deg, ${t.accent},'var(--accent)')`,
-                        width: `${pct}%`, transition: 'width 1s ease',
-                      }}
-                    />
-                  </div>
-                  <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', fontSize: 10.5, color: t.inkMuted }}>
-                    <span>Founding Cohort fills at 250</span>
-                    <span>{stats ? 250 - stats.total : '—'} left</span>
-                  </div>
-                </Panel>
-              </div>
-
-              {/* Perks */}
-              <div className="wl-fade-up" style={{ marginTop: 28 }}>
-                <h2 style={{ fontFamily: t.fontDisplay, fontWeight: 700, fontSize: 17, color: t.ink }}>Your spot could be worth it</h2>
-                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: 14, color: t.inkSoft }}>Referral Jump</span>
-                    <span style={{ fontSize: 14, fontFamily: t.fontType, color: t.accent, fontWeight: 700 }}>+2 to +15 spots</span>
-                  </div>
-                  <div style={{ height: 1, backgroundColor: t.line }} />
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: 14, color: t.inkSoft }}>Top 50</span>
-                    <span style={{ fontSize: 14, fontFamily: t.fontType, color: t.accent, fontWeight: 700 }}>Charter badge</span>
-                  </div>
-                  <div style={{ height: 1, backgroundColor: t.line }} />
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: 14, color: t.inkSoft }}>Every 3-day check-in streak</span>
-                    <span style={{ fontSize: 14, fontFamily: t.fontType, color: t.accent, fontWeight: 700 }}>+2 spots</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Join form */}
-              <form className="wl-fade-up" onSubmit={handleSubmit} style={{ marginTop: 28, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {error && (
-                  <div
-                    style={{
-                      borderRadius: 12, border: `1px solid var(--crim-35)`, backgroundColor: 'var(--crim-06)',
-                      padding: '10px 14px', fontSize: 13, color: t.crimson,
-                    }}
-                  >
-                    {error}
-                  </div>
-                )}
-                <input
-                  type="text"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  placeholder="Your name (optional)"
-                  maxLength={60}
-                  style={{
-                    borderRadius: 12, border: `1px solid ${t.line}`, backgroundColor: t.paper, padding: '13px 15px',
-                    fontSize: 14, color: t.ink, outline: 'none', fontFamily: t.fontBody,
-                  }}
-                  onFocus={e => Object.assign(e.target.style, { borderColor: t.accent, boxShadow: `0 0 0 3px ${t.accentSoft}` })}
-                  onBlur={e => Object.assign(e.target.style, { borderColor: t.line })}
-                />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  placeholder="you@college.ac.in"
-                  autoFocus
-                  style={{
-                    borderRadius: 12, border: `1px solid ${t.line}`, backgroundColor: t.paper, padding: '13px 15px',
-                    fontSize: 14, color: t.ink, outline: 'none', fontFamily: t.fontBody,
-                  }}
-                  onFocus={e => Object.assign(e.target.style, { borderColor: t.accent, boxShadow: `0 0 0 3px ${t.accentSoft}` })}
-                  onBlur={e => Object.assign(e.target.style, { borderColor: t.line })}
-                />
-                <div>
-                  <input
-                    type="text"
-                    value={referralCode}
-                    onChange={e => setReferralCode(e.target.value.toUpperCase())}
-                    placeholder="Referral code (optional — +2 to +15 spots)"
-                    maxLength={6}
-                    style={{
-                      borderRadius: 12, border: `1px solid ${t.line}`, backgroundColor: t.paper, padding: '13px 15px',
-                      width: '100%', fontSize: 14, color: t.ink, outline: 'none', fontFamily: t.fontType,
-                      letterSpacing: '0.15em',
-                    }}
-                    onFocus={e => Object.assign(e.target.style, { borderColor: t.accent, boxShadow: `0 0 0 3px ${t.accentSoft}` })}
-                    onBlur={e => Object.assign(e.target.style, { borderColor: t.line })}
-                  />
-                  <p style={{ marginTop: 6, paddingLeft: 2, fontSize: 11, color: t.inkMuted }}>
-                    Hint: find a friend already in — you'll both move up.
-                  </p>
-                </div>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  style={{
-                    borderRadius: 12, backgroundColor: t.accent, color: t.paper, padding: '14px 15px',
-                    fontSize: 14.5, fontWeight: 600, fontFamily: t.fontBody, border: 'none', cursor: 'pointer',
-                    opacity: loading ? 0.6 : 1,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                  }}
-                >
-                  {loading ? 'Claiming your spot…' : (<><Feather size={16} /> Claim your founding spot →</>)}
-                </button>
-                <p style={{ textAlign: 'center', fontSize: 11, color: t.inkMuted }}>
-                  {stats ? `${stats.charter} Charter / ${stats.founding} Founding spots claimed` : '…'}
-                </p>
-              </form>
-
-              {/* Countdown */}
-              <div className="wl-fade-up" style={{ marginTop: 40, borderTop: `1px solid ${t.line}`, paddingTop: 22 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, letterSpacing: '0.22em', textTransform: 'uppercase', color: t.inkMuted, fontFamily: t.fontBody }}>
-                  <span>Launch countdown</span>
-                  <span style={{ color: t.accent, fontFamily: t.fontType }}>{stats ? 'Live' : '…'}</span>
-                </div>
-                <div style={{ marginTop: 18, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 18 }}>
-                  <TimeBox value={countdown.daysS} label="Days" />
-                  <span style={{ fontFamily: t.fontType, fontWeight: 700, color: t.accent, fontSize: 20 }}>:</span>
-                  <TimeBox value={countdown.hoursS} label="Hours" />
-                  <span style={{ fontFamily: t.fontType, fontWeight: 700, color: t.accent, fontSize: 20 }}>:</span>
-                  <TimeBox value={countdown.minutesS} label="Mins" />
-                  <span style={{ fontFamily: t.fontType, fontWeight: 700, color: t.accent, fontSize: 20 }}>:</span>
-                  <TimeBox value={countdown.secondsS} label="Secs" />
-                </div>
-              </div>
-            </motion.div>
-          )}
-
-          {step === 'success' && myData && (
-            <motion.div
-              key="success"
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.45 }}
-            >
-              {/* Admission ticket */}
-              <div
-                style={{
-                  marginTop: 36, borderRadius: 22, border: `1px solid ${t.lineDark}`,
-                  background: `linear-gradient(180deg,'var(--accent-07)', transparent 45%), ${t.paper}`,
-                  padding: 28, position: 'relative', overflow: 'hidden',
-                  backgroundImage: `linear-gradient(180deg,'var(--accent-07)', transparent 45%), ${t.grain}`,
-                }}
-              >
-                {/* Corner stamp */}
-                <div
-                  style={{
-                    position: 'absolute', top: 18, right: -38, transform: 'rotate(45deg)', width: 150,
-                    textAlign: 'center', padding: '5px 0', borderTop: `1.5px solid ${t.crimson}`, borderBottom: `1.5px solid ${t.crimson}`,
-                    fontFamily: t.fontType, fontSize: 11, letterSpacing: '0.28em', color: t.crimson, textTransform: 'uppercase',
-                    backgroundColor: 'var(--crim-05)',
-                  }}
-                >
-                  Booking Verified
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontFamily: t.fontType, fontSize: 11, letterSpacing: '0.24em', textTransform: 'uppercase', color: t.accent }}>
-                    {tierName(myData.position)} Cohort
-                  </span>
-                  <span style={{ fontFamily: t.fontType, fontSize: 13, color: t.inkMuted, border: `1px solid ${t.line}`, borderRadius: 999, padding: '4px 10px' }}>
-                    #{myData.position}
-                  </span>
-                </div>
-
-                <div style={{ marginTop: 22 }}>
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.85 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ type: 'spring', stiffness: 200, damping: 16, delay: 0.15 }}
-                    style={{ fontFamily: t.fontDisplay, fontWeight: 800, fontSize: 40, letterSpacing: '-0.01em', color: myData.referralBonus ? t.accent : t.ink, lineHeight: 1.1 }}
-                  >
-                    {myData.referralBonus ? `+${myData.referralBonus.spotsJumped} SPOTS` : 'SPOT CLAIMED'}
-                  </motion.div>
-                  <p style={{ marginTop: 12, maxWidth: 380, fontSize: 14, lineHeight: 1.65, color: t.inkSoft }}>
-                    {myData.referralBonus ? (
-                      <>
-                        <span style={{ color: t.accent, fontWeight: 600 }}>{myData.referralBonus.referrerName}</span> jumped from
-                        #{myData.position + myData.referralBonus.spotsJumped} to #{myData.referralBonus.newPosition}.
-                        You now hold <strong style={{ color: t.ink }}>#{myData.position}</strong> of 250.
-                      </>
-                    ) : (
-                      <>
-                        You're <strong style={{ color: t.ink }}>#{myData.position}</strong> in line.
-                        Share your code to move up — every friend you bring jumps you both.
-                      </>
-                    )}
-                  </p>
-                </div>
-
-                {/* Progress */}
-                <div style={{ marginTop: 22 }}>
-                  <div style={{ height: 8, borderRadius: 999, backgroundColor: t.desk, overflow: 'hidden' }}>
-                    <div
-                      style={{
-                        height: '100%', borderRadius: 999,
-                        background: `linear-gradient(90deg, ${t.accent},'var(--accent)')`,
-                        width: `${Math.min(100, (myData.position / 250) * 100)}%`,
-                      }}
-                    />
-                  </div>
-                  <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', fontSize: 10.5, color: t.inkMuted }}>
-                    <span>Top {tierName(myData.position).toLowerCase()} of 250</span>
-                    <span>{myData.position} of 250</span>
-                  </div>
-                </div>
-
-                {/* Referral code */}
-                <div
-                  style={{
-                    marginTop: 22, borderRadius: 14, border: `1px solid ${t.lineDark}`, backgroundColor: 'var(--paper-70)',
-                    padding: 16,
-                  }}
-                >
-                  <div style={{ fontSize: 10, letterSpacing: '0.24em', textTransform: 'uppercase', color: t.inkMuted, fontFamily: t.fontBody, fontWeight: 600 }}>
-                    Your referral code
-                  </div>
-                  <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <motion.div
-                      initial={{ opacity: 0, letterSpacing: '0.8em' }}
-                      animate={{ opacity: 1, letterSpacing: '0.18em' }}
-                      transition={{ duration: 0.5, delay: 0.3 }}
-                      style={{ fontFamily: t.fontType, fontSize: 28, fontWeight: 700, color: t.accent }}
-                    >
-                      {myData.referralCode}
-                    </motion.div>
-                    <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(myData.referralCode);
-                        triggerCopyFlash();
-                      }}
-                      style={{
-                        borderRadius: 10, border: `1px solid ${t.lineDark}`, backgroundColor: t.paper,
-                        padding: '8px 14px', fontSize: 12, fontWeight: 600, color: t.accent, cursor: 'pointer', fontFamily: t.fontBody,
-                      }}
-                    >
-                      <KeyRound size={13} style={{ verticalAlign: '-2px', marginRight: 5 }} />
-                      Copy
-                    </button>
-                  </div>
-                </div>
-
-                {/* Mini stats */}
-                <div style={{ marginTop: 18, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, textAlign: 'center' }}>
-                  <div style={{ borderRadius: 12, border: `1px solid ${t.line}`, backgroundColor: 'var(--paper-60)', padding: '12px 4px' }}>
-                    <div style={{ fontFamily: t.fontType, fontWeight: 700, fontSize: 16, color: t.accent }}>#{myData.position}</div>
-                    <div style={{ marginTop: 3, fontSize: 9.5, letterSpacing: '0.14em', textTransform: 'uppercase', color: t.inkMuted }}>My spot</div>
-                  </div>
-                  <div style={{ borderRadius: 12, border: `1px solid ${t.line}`, backgroundColor: 'var(--paper-60)', padding: '12px 4px' }}>
-                    <div style={{ fontFamily: t.fontType, fontWeight: 700, fontSize: 16, color: t.accent }}>
-                      {myData.referralBonus ? `+${myData.referralBonus.spotsJumped}` : '+0'}
-                    </div>
-                    <div style={{ marginTop: 3, fontSize: 9.5, letterSpacing: '0.14em', textTransform: 'uppercase', color: t.inkMuted }}>Advantage</div>
-                  </div>
-                  <div style={{ borderRadius: 12, border: `1px solid ${t.line}`, backgroundColor: 'var(--paper-60)', padding: '12px 4px' }}>
-                    <div style={{ fontFamily: t.fontType, fontWeight: 700, fontSize: 16, color: t.inkMuted }}>Pending</div>
-                    <div style={{ marginTop: 3, fontSize: 9.5, letterSpacing: '0.14em', textTransform: 'uppercase', color: t.inkMuted }}>Status</div>
-                  </div>
-                </div>
-
-                <p style={{ marginTop: 20, textAlign: 'center', fontSize: 11, color: t.inkMuted }}>
-                  We're onboarding a small Founding Cohort before public launch.
-                </p>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-      <CopyFlashController />
-    </div>
-  );
-}
-
-/* Tiny helper to flash a "Copied" state on the copy button */
-function CopyFlashController() {
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    window.__setWaitlistCopied = () => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1400);
-    };
-    return () => { delete window.__setWaitlistCopied; };
-  }, []);
-  return copied ? (
-    <div
-      style={{
-        position: 'fixed', bottom: 32, left: '50%', transform: 'translateX(-50%)', zIndex: 60,
-        borderRadius: 999, backgroundColor: t.ink, color: t.paper, padding: '9px 18px', fontSize: 12.5,
-        fontFamily: t.fontBody,
-      }}
-    >
-      Code copied to clipboard
-    </div>
-  ) : null;
-}
-
-function triggerCopyFlash() {
-  if (window.__setWaitlistCopied) window.__setWaitlistCopied();
-}
-```
-
 ## Section — Server Source
 
 ### ./server/config/appData.js
@@ -21506,6 +26417,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Config
 import connectDB from './config/db.js';
+import { seedGatedColleges } from './utils/campusSeed.js';
 import { socketHandler } from './socket/chat.js';
 
 // Routes
@@ -21519,7 +26431,6 @@ import adminRoutes from './routes/admin.js';
 import uploadRoutes from './routes/upload.js';
 import notificationRoutes from './routes/notifications.js';
 import reportRoutes from './routes/report.js';
-import waitlistRoutes from './routes/waitlist.js';
 import collegeRoutes from './routes/colleges.js';
 
 // Initialize Sentry (must run after dotenv.config so SENTRY_DSN is loaded)
@@ -21564,6 +26475,49 @@ const IS_PROD = NODE_ENV === 'production';
 if (!process.env.RESEND_API_KEY) {
   console.warn('⚠️  Resend API key not configured — OTP codes will be logged to console only (users won\'t receive emails)');
 }
+
+// 🛑 THE SILENT-FAILURE CHECK.
+//
+// An API key WITHOUT a verified sending domain is the worst combination in this
+// file, and it fails completely silently:
+//
+//   - Resend ACCEPTS the send. It returns HTTP 200. Nothing errors, anywhere.
+//   - `onboarding@resend.dev` is Resend's sandbox sender. It delivers ONLY to
+//     the address that owns the Resend account.
+//   - So the OTP is accepted, discarded, and never reaches the student. The
+//     server's success path runs exactly as it would if email had been
+//     delivered, because from this side, it was.
+//
+// The symptom is "signups silently don't work", which reads as a bug in the
+// app and costs hours of debugging code that is perfectly fine. Worse than the
+// missing-key case above: with NO key, `sendOTP` prints the code to the log
+// and someone can relay it. With a key but no domain, the code is gone and
+// nothing local knows where it went.
+if (process.env.RESEND_API_KEY) {
+  const sender = (process.env.RESEND_SENDER_EMAIL || '').trim().toLowerCase();
+  const isSandbox =
+    sender === 'onboarding@resend.dev'
+    || sender === 'onboarding@sendgrid.com'
+    || sender.endsWith('@resend.dev');
+
+  if (isSandbox) {
+    console.error(
+      '\n' +
+      '🛑🛑🛑  OTP EMAILS WILL NOT ARRIVE  🛑🛑🛑\n\n' +
+      `   RESEND_API_KEY is set, but RESEND_SENDER_EMAIL is "${sender}".\n` +
+      '   That is Resend\'s SANDBOX sender — it delivers only to the email\n' +
+      '   address that owns your Resend account. Resend will accept every\n' +
+      '   send and return 200. No error will appear. No student will get a\n' +
+      '   code, and nobody will be able to sign up.\n\n' +
+      '   Fix — pick one:\n' +
+      '     • Verify a domain (Resend → Domains → Add Domain) and set\n' +
+      '       RESEND_SENDER_EMAIL=you@yourdomain.com\n' +
+      '     • UNSET RESEND_API_KEY entirely. OTP codes then print to this\n' +
+      '       log and can be relayed by hand, which is fine for a small\n' +
+      '       pilot cohort.\n\n',
+    );
+  }
+}
 if (!process.env.OTP_HASH_SECRET) {
   console.warn('⚠️  OTP_HASH_SECRET not configured — falling back to JWT_SECRET for OTP hashing. Set a dedicated secret in production.');
 }
@@ -21586,6 +26540,17 @@ try {
 } catch (err) {
   console.error(`❌ Server failed to start: ${err.message}`);
   process.exit(1);
+}
+
+// 🏫 Seed any gated campus that does not exist yet.
+//
+// Runs AFTER connectDB (which has verified every index) and BEFORE the server
+// listens, so a picker query can never race it. Never throws — see the file for
+// why an empty picker is survivable and an unbootable server is not.
+try {
+  await seedGatedColleges();
+} catch (err) {
+  console.error(`⚠️  Campus seed skipped: ${err.message}`);
 }
 
 const app = express();
@@ -21681,6 +26646,32 @@ app.use(helmet({
       connectSrc: [
         "'self'",
         'https://*.onrender.com', 'wss://*.onrender.com',
+        // 🔒 THE FRONTEND ORIGIN, DERIVED.
+        //
+        // This was hardcoded to the Render wildcard above, which works only
+        // while the client is served from an *.onrender.com domain. Attach a
+        // custom domain — or serve the client from Vercel/Cloudflare Pages, or
+        // a different host entirely — and the browser blocks every API call
+        // and every socket handshake, with no server-side error to explain it:
+        // the request is never made.
+        //
+        // So the deployed FRONTEND_URL is added here, expanded to BOTH the
+        // https:// (REST) and wss:// (socket) transports. Deriving it from the
+        // same variable that drives the CORS allowlist means there is exactly
+        // one place to change when the domain changes, instead of a CSP list
+        // that quietly rots.
+        //
+        // Written as two independent replacements rather than a chained pair
+        // on purpose. `x.replace(/^http:/,'https:').replace(/^http:/,'ws:')`
+        // looks right and is not: the first pass turns `http:` into `https:`,
+        // which no longer matches the second pattern, so the wss:// origin is
+        // silently never emitted and sockets fail only in the browser.
+        ...(FRONTEND_URL
+          ? [
+              FRONTEND_URL.replace(/^http:/, 'https:'),
+              FRONTEND_URL.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:'),
+            ]
+          : []),
         // Loopback is dev-only. These four used to sit outside the IS_PROD
         // guard, which shipped them to production: harmless in practice (a
         // script would have to run on someone's own laptop to make use of
@@ -21776,12 +26767,31 @@ app.use('/api/config', configRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/report', reportRoutes);
-app.use('/api/waitlist', waitlistRoutes);
 app.use('/api/colleges', collegeRoutes);
 
 // JSON 404 for unknown API endpoints (must come AFTER all /api route mounts)
 app.use('/api', (req, res) => {
   res.status(404).json({ success: false, message: 'Endpoint not found' });
+});
+
+// 🔎 HEALTH — mounted BEFORE express.static so it always answers, and so a
+// keep-alive ping never downloads the SPA shell to prove the server is up.
+//
+// This route exists because of a specific Render behaviour: while a free web
+// service is asleep, Render answers /robots.txt itself and never forwards it.
+// A monitor pointed there reports green on a sleeping service. Point pings
+// here instead — it is a real route on this app.
+//
+// Deliberately cheap: it does NOT touch the database. If Atlas is briefly
+// unreachable the process is still listening and still able to serve, and a
+// liveness probe that fails on a dependency outage just triggers a pointless
+// restart of a healthy process. Readiness is a separate question from liveness.
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    uptime: Math.round(process.uptime()),
+    env: NODE_ENV,
+  });
 });
 
 // Protect local uploads fallback (Prod uses Cloudinary URLs, so this mostly protects dev/staging)
@@ -23684,96 +28694,6 @@ export default User;
 
 ```
 
-### ./server/models/Waitlist.js
-
-```
-import mongoose from 'mongoose';
-import crypto from 'crypto';
-
-const waitlistSchema = new mongoose.Schema(
-  {
-    email: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-      lowercase: true,
-    },
-    name: { type: String, trim: true, default: '' },
-    college: { type: String, default: 'IIT Bombay' },
-    collegeCode: { type: String, default: 'iitb' },
-    branch: { type: String, default: '' },
-    year: { type: String, default: '' },
-
-    // Unique 6-char referral code they share
-    referralCode: {
-      type: String,
-      required: true,
-      unique: true,
-      index: true,
-    },
-    // Who referred them (ObjectId or null)
-    referredBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      default: null,
-      ref: 'Waitlist',
-    },
-    // Current queue position (recomputed on referral events)
-    position: { type: Number, required: true, index: true },
-    // How many people they've referred
-    referralCount: { type: Number, default: 0 },
-    // Total spots jumped via referrals
-    spotsJumped: { type: Number, default: 0 },
-
-    status: {
-      type: String,
-      enum: ['pending', 'invited', 'registered'],
-      default: 'pending',
-    },
-    // Tier based on position
-    tier: {
-      type: String,
-      enum: ['charter', 'founding', 'original'],
-      default: 'original',
-    },
-
-    // Daily check-in streak (engagement loop)
-    lastCheckIn: { type: Date, default: null },
-    checkInStreak: { type: Number, default: 0 },
-
-    joinedAt: { type: Date, default: Date.now },
-    invitedAt: { type: Date, default: null },
-    registeredAt: { type: Date, default: null },
-  },
-  { timestamps: true }
-);
-
-// Single source of truth for tier thresholds (mirrored in frontend)
-waitlistSchema.statics.TIER_THRESHOLDS = { charter: 50, founding: 250 };
-
-// Generate a unique 6-char alphanumeric referral code (no I/O/0/1 to avoid confusion)
-waitlistSchema.statics.generateReferralCode = async function () {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code;
-  let exists = true;
-  while (exists) {
-    code = Array.from({ length: 6 }, () => chars[crypto.randomInt(chars.length)]).join('');
-    exists = await this.findOne({ referralCode: code });
-  }
-  return code;
-};
-
-waitlistSchema.methods.computeTier = function () {
-  const T = this.constructor.TIER_THRESHOLDS;
-  if (this.position <= T.charter) return 'charter';
-  if (this.position <= T.founding) return 'founding';
-  return 'original';
-};
-
-const Waitlist = mongoose.model('Waitlist', waitlistSchema);
-export default Waitlist;
-```
-
 ### ./server/models/index.js
 
 ```
@@ -23812,7 +28732,11 @@ export { default as OTP } from './OTP.js';
 export { default as Report } from './Report.js';
 export { default as Setting } from './Setting.js';
 export { default as User } from './User.js';
-export { default as Waitlist } from './Waitlist.js';
+/* Waitlist was removed for the IIT Bombay pilot. The invite list is the gate,
+   not a public queue, so the model, its routes, and its page are gone rather
+   than merely unmounted — an orphaned collection with indexes still being
+   verified at boot is worse than no collection. Restore all three together if
+   a staged launch ever needs them back. */
 ```
 
 ### ./server/scripts/audit-cloudinary-orphans.mjs
@@ -24344,6 +29268,117 @@ run().catch((err) => {
 });
 ```
 
+### ./server/scripts/drop-waitlist.mjs
+
+```
+import mongoose from 'mongoose';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const loadEnv = () => {
+  for (const p of [path.join(__dirname, '../.env'), path.join(process.cwd(), '.env')]) {
+    if (!fs.existsSync(p)) continue;
+    for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+      const idx = line.indexOf('=');
+      if (idx === -1) continue;
+      const key = line.slice(0, idx).trim();
+      if (!process.env[key]) process.env[key] = line.slice(idx + 1).trim();
+    }
+    return p;
+  }
+  return null;
+};
+
+/**
+ * 🧹 DROP THE ORPHANED WAITLIST COLLECTION.
+ *
+ * Removing the waitlist removed the code. This removes what the code left
+ * behind: a `waitlist` collection, and the indexes it created, still sitting
+ * in the database with nothing reading them.
+ *
+ * Why bother, since it is inert:
+ *   - It holds real email addresses that people submitted. Those addresses
+ *     were collected for a purpose that no longer exists, and leaving them is
+ *     the kind of thing that becomes a privacy question the day you notice.
+ *   - An orphaned indexed collection is invisible in every dashboard except a
+ *     database browser, which is precisely why it gets forgotten.
+ *
+ * ── WHY THIS IS DESTRUCTIVE, AND WHY IT STILL ASKS ──────────────────────────
+ * There is no undo without a backup. The dry-run default prints the exact row
+ * count and the addresses involved so that decision is an informed one rather
+ * than a reflex — and if the count is anything other than what you expected,
+ * that is a reason to stop and read the list before passing --execute.
+ *
+ *   node server/scripts/drop-waitlist.mjs            # report only
+ *   node server/scripts/drop-waitlist.mjs --execute  # drop it
+ */
+
+const EXECUTE = process.argv.includes('--execute');
+
+const run = async () => {
+  const envFile = loadEnv();
+  if (!process.env.MONGODB_URI) {
+    console.error('❌ MONGODB_URI not found. Set it in server/.env.');
+    process.exit(1);
+  }
+  console.log(`📄 env: ${envFile}`);
+  console.log(`🔍 mode: ${EXECUTE ? '⚠️  EXECUTE — collection will be DROPPED' : 'report only'}`);
+
+  await mongoose.connect(process.env.MONGODB_URI);
+  const db = mongoose.connection.db;
+  console.log(`🗄  db:  ${mongoose.connection.host}/${mongoose.connection.name}\n`);
+
+  const exists = await db.listCollections({ name: 'waitlist' }).hasNext();
+
+  if (!exists) {
+    console.log('✅ No `waitlist` collection in this database. Nothing to do.');
+    await mongoose.disconnect();
+    return;
+  }
+
+  const count = await db.collection('waitlist').countDocuments({});
+  const indexes = await db.collection('waitlist').indexes();
+  console.log(`collection: waitlist`);
+  console.log(`   documents: ${count}`);
+  console.log(`   indexes:   ${indexes.length}`);
+
+  if (count > 0) {
+    // These are real addresses people typed in. Print them so the decision to
+    // delete is made with the data in front of you, not in the abstract.
+    const rows = await db.collection('waitlist')
+      .find({}, { projection: { email: 1, name: 1, tier: 1, createdAt: 1 } })
+      .sort({ createdAt: 1 })
+      .limit(100)
+      .toArray();
+
+    console.log('\naddresses that will be deleted:');
+    for (const r of rows) {
+      const when = r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 10) : '?';
+      console.log(`   ${String(r.email || '(none)').padEnd(38)} ${when}  ${r.tier || ''}`);
+    }
+    if (rows.length < count) console.log(`   … and ${count - rows.length} more`);
+  }
+
+  if (!EXECUTE) {
+    console.log('\n📋 Report only. Re-run with --execute to drop the collection.');
+    await mongoose.disconnect();
+    return;
+  }
+
+  await db.collection('waitlist').drop();
+  console.log('\n✅ Dropped collection: waitlist (documents and indexes).');
+  await mongoose.disconnect();
+};
+
+run().catch((err) => {
+  console.error('❌ Failed:', err?.error?.message || err?.message || err);
+  process.exit(1);
+});
+```
+
 ### ./server/scripts/migrate-alignment.mjs
 
 ```
@@ -24509,7 +29544,12 @@ if (fs.existsSync(envPath)) {
 }
 
 const EXECUTE = process.argv.includes('--execute');
-const URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/matchalize';
+const URI = process.env.MONGODB_URI;
+if (!URI) {
+  console.error('❌ MONGODB_URI is not set. Refusing to guess a database.');
+  console.error('   Set it in server/.env — never run this against an unintended target.');
+  process.exit(1);
+}
 
 const mapping = Object.entries(DEPRECATED_INTENTS);
 if (mapping.length === 0) {
@@ -24617,7 +29657,12 @@ if (fs.existsSync(envPath)) {
 }
 
 const EXECUTE = process.argv.includes('--execute');
-const URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/matchalize';
+const URI = process.env.MONGODB_URI;
+if (!URI) {
+  console.error('❌ MONGODB_URI is not set. Refusing to guess a database.');
+  console.error('   Set it in server/.env — never run this against an unintended target.');
+  process.exit(1);
+}
 
 console.log(EXECUTE ? 'Mode: EXECUTE' : 'Mode: DRY RUN (pass --execute to apply)\n');
 
@@ -24875,6 +29920,146 @@ run().catch((err) => {
 });
 ```
 
+### ./server/scripts/seed-iitb.mjs
+
+```
+import mongoose from 'mongoose';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import College from '../models/College.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const loadEnv = () => {
+  for (const p of [path.join(__dirname, '../.env'), path.join(process.cwd(), '.env')]) {
+    if (!fs.existsSync(p)) continue;
+    for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+      const idx = line.indexOf('=');
+      if (idx === -1) continue;
+      const key = line.slice(0, idx).trim();
+      if (!process.env[key]) process.env[key] = line.slice(idx + 1).trim();
+    }
+    return p;
+  }
+  return null;
+};
+
+/**
+ * 🏫 SEED IIT BOMBAY — non-destructive.
+ *
+ * The safe sibling of reset-colleges.mjs, which DELETES every user and college
+ * before seeding. That is the wrong tool for a pilot launch: the moment you
+ * want to add the first campus is the same moment you have real signups you
+ * cannot afford to lose.
+ *
+ * This script only touches the `colleges` collection. It never reads or writes
+ * a single user row, so it is safe to run against a database that already has
+ * students in it — which is exactly the situation it is for.
+ *
+ *   node server/scripts/seed-iitb.mjs            # dry run, reports only
+ *   node server/scripts/seed-iitb.mjs --execute  # upsert the college
+ */
+
+const SEED = {
+  code: 'iitb',
+  name: 'Indian Institute of Technology Bombay',
+  // Exact-or-subdomain matching means every department address
+  // (cse.iitb.ac.in, mech.iitb.ac.in, …) verifies against this one entry.
+  domains: ['iitb.ac.in'],
+  city: 'Mumbai',
+  state: 'Maharashtra',
+  country: 'India',
+  active: true,
+  // IIT Bombay main campus, Powai. This is campus data — a building's public
+  // location — not a student's coordinates, so it carries none of the privacy
+  // weight of User.currentLatLng. Optional: without it, students at this campus
+  // rank as "unknown location" and sort last rather than being guessed at.
+  latLng: [19.124, 72.914],
+};
+
+const EXECUTE = process.argv.includes('--execute');
+
+const run = async () => {
+  const envFile = loadEnv();
+  if (!process.env.MONGODB_URI) {
+    console.error('❌ MONGODB_URI not found. Set it in server/.env.');
+    process.exit(1);
+  }
+  console.log(`📄 env: ${envFile}`);
+  console.log(`🔍 mode: ${EXECUTE ? '⚠️  EXECUTE' : 'report only'}`);
+  console.log(`🗄  db:  ${process.env.MONGODB_URI.split('@').pop()}\n`);
+
+  await mongoose.connect(process.env.MONGODB_URI);
+
+  const existing = await College.find({}).sort({ code: 1 }).lean();
+  console.log(`colleges currently in the database: ${existing.length}`);
+  for (const c of existing) {
+    const match = c.code === SEED.code ? '  ← this script' : '';
+    console.log(`   ${c.code.padEnd(10)} active=${String(c.active).padEnd(5)} ${c.name}${match}`);
+  }
+
+  const already = await College.findOne({ code: SEED.code }).lean();
+  if (already) {
+    // Report drift rather than silently overwriting. A difference here means
+    // an operator edited the college from /admin — the admin value may be the
+    // corrected one, so this prints and stops rather than winning.
+    const drift = ['name', 'active'].filter((k) => String(already[k]) !== String(SEED[k]));
+    const domainDrift = JSON.stringify([...(already.domains || [])].sort())
+      !== JSON.stringify([...SEED.domains].sort());
+
+    if (drift.length || domainDrift) {
+      console.log('\n⚠️  IIT Bombay already exists and differs from this script:');
+      if (drift.length) console.log(`     fields: ${drift.join(', ')}`);
+      if (domainDrift) {
+        console.log(`     domains: db has [${(already.domains || []).join(', ')}], script has [${SEED.domains.join(', ')}]`);
+      }
+      console.log('     Not overwriting. The value in the database is the live one.');
+      console.log('     To change it, edit the college from /admin.');
+      await mongoose.disconnect();
+      return;
+    }
+    console.log('\n✅ IIT Bombay already matches. Nothing to do.');
+    await mongoose.disconnect();
+    return;
+  }
+
+  if (!EXECUTE) {
+    console.log('\n📋 Would seed:');
+    console.log(`   ${SEED.name}  (${SEED.code})  @${SEED.domains[0]}`);
+    console.log('   Re-run with --execute to apply.');
+    await mongoose.disconnect();
+    return;
+  }
+
+  // Upsert so re-running does not collide with the unique code index.
+  await College.findOneAndUpdate({ code: SEED.code }, { $set: SEED }, { upsert: true, new: true });
+
+  const after = await College.countDocuments({});
+  console.log(`\n✅ Seeded ${SEED.name} (${SEED.code})`);
+  console.log(`   colleges now: ${after}`);
+
+  const gate = process.env.ALLOWED_COLLEGES;
+  if (gate) {
+    const allowed = gate.split(',').map((c) => c.trim().toLowerCase());
+    console.log(`\n🚪 ALLOWED_COLLEGES = "${gate}"`);
+    console.log(allowed.includes(SEED.code)
+      ? '   ✓ IIT Bombay can sign up.'
+      : `   ✗ IIT Bombay is NOT in the gate — nobody will be able to sign up.\n     Set ALLOWED_COLLEGES=${SEED.code}`);
+  } else {
+    console.log('\n🚪 ALLOWED_COLLEGES is not set — every active college can sign up.');
+    console.log(`   Set ALLOWED_COLLEGES=${SEED.code} to run this as an IIT-Bombay-only pilot.`);
+  }
+
+  await mongoose.disconnect();
+};
+
+run().catch((err) => {
+  console.error('❌ Seed failed:', err?.error?.message || err?.message || err);
+  process.exit(1);
+});
+```
+
 ### ./server/scripts/verify-deck-metrics.mjs
 
 ```
@@ -24944,7 +30129,7 @@ const section = (t) => console.log(`\n── ${t} ──`);
 /* Impressions are written without awaiting, so a read can race the write. */
 const settle = () => new Promise((r) => setTimeout(r, 700));
 
-await mongoose.connect(env.MONGO_URI || 'mongodb://127.0.0.1:27017/matchalize');
+await mongoose.connect(env.MONGODB_URI);
 const db = mongoose.connection.db;
 
 const viewer = await db.collection('users').findOne({ email: VIEWER_EMAIL });
@@ -25258,11 +30443,12 @@ const fmt = (b) => [...b].map(([k, n]) => `${k}:${n}`).join('  ');
 const top = (c, n = 4) => [...c].slice(0, n).map(([k, v]) => `${k} (${v})`).join(', ');
 
 async function main() {
-  await mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/matchalize');
+  await mongoose.connect(process.env.MONGODB_URI);
   const db = mongoose.connection.db;
 
-  const viewer = await db.collection('users').findOne({ collegeCode: 'iitd', isOnboarded: true });
-  if (!viewer) throw new Error('no iitd user seeded');
+  const viewerCode = process.env.VIEWER_COLLEGE || 'iitd';
+  const viewer = await db.collection('users').findOne({ collegeCode: viewerCode, isOnboarded: true });
+  if (!viewer) throw new Error(`no ${viewerCode} user seeded`);
 
   /* Own the starting state: no personal reading, campus basis, no saved deck. */
   await db.collection('users').updateOne(
@@ -25445,6 +30631,51 @@ import College from './models/College.js';
 import { computeScore } from './utils/ladder.js';
 
 dotenv.config({ path: './.env' });
+
+/**
+ * 🛑 FAKE DATA IS NOT PRODUCTION DATA.
+ *
+ * This script generates invented people — names, photos from a stock image
+ * service, bios, prompts — and DELETES every real user and college before doing
+ * it. It is a local development convenience and nothing else.
+ *
+ * The guard below is deliberately at the very top and deliberately fatal. The
+ * failure this prevents is not subtle: `deleteMany({})` runs against whatever
+ * `MONGODB_URI` points at, so one `npm run seed` typed against a copied Atlas
+ * string replaces a real cohort with imaginary students who will happily match
+ * with, message, and report each other.
+ *
+ * Two independent conditions, so this cannot be undone by accident:
+ *   1. NODE_ENV must not be 'production'.
+ *   2. --allow-fake-data must be passed explicitly.
+ *
+ * Condition 2 exists because NODE_ENV is often unset in a local shell (it is
+ * set in server/.env, which this script loads, but not in every environment
+ * that can reach this file), and "unset" must not read as "fine".
+ */
+if (process.env.NODE_ENV === 'production') {
+  console.error(
+    '\n🛑 REFUSING TO RUN. NODE_ENV=production.\n\n' +
+    '   This script deletes all users and colleges, then fills the database\n' +
+    '   with invented profiles and stock photos. That is local development\n' +
+    '   data. If it reached a deployed database, real students would be\n' +
+    '   matching and messaging people who do not exist.\n\n' +
+    '   If you genuinely need to reseed production, that is a decision that\n' +
+    '   should not be made by a stray `npm run seed`.\n',
+  );
+  process.exit(1);
+}
+
+if (!process.argv.includes('--allow-fake-data')) {
+  console.error(
+    '\n🛑 REFUSING TO RUN without --allow-fake-data.\n\n' +
+    '   This script DELETES every user and college in MONGODB_URI, then seeds\n' +
+    '   invented profiles with stock photos.\n\n' +
+    '   Check the database it is about to touch before agreeing:\n' +
+    '     node server/seedRealistic.js --allow-fake-data\n',
+  );
+  process.exit(1);
+}
 
 /**
  * SEED — realistic population across three tiers.
@@ -25688,7 +30919,12 @@ function buildUser(gender, college, i) {
 }
 
 async function main() {
-  await mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/matchalize');
+  if (!process.env.MONGODB_URI) {
+    console.error('❌ MONGODB_URI is not set. Refusing to seed an unknown database.');
+    console.error('   Set it in server/.env. NOTE: this script DELETES all users and colleges.');
+    process.exit(1);
+  }
+  await mongoose.connect(process.env.MONGODB_URI);
   const db = mongoose.connection.db;
 
   console.log('── Clearing ──');
@@ -26058,6 +31294,316 @@ export class AppError extends Error {
 
 ```
 
+### ./server/utils/campusGate.js
+
+```
+/**
+ * 🚪 CAMPUS GATE — which campuses may currently sign up.
+ *
+ * The closed, verified-student network is only meaningful if the gate is
+ * actually closed. An IIT Bombay pilot has no use for a student from another
+ * campus: the entire product thesis is a dense, verified pool, and one
+ * outsider in a small pool is a stranger, not a feature.
+ *
+ * Two independent mechanisms exist, and it is worth being precise about why
+ * BOTH are needed rather than either:
+ *
+ *   1. This gate (`ALLOWED_COLLEGES`). An allow-list applied at the point a
+ *      signup is authorised — `resolveCollege()` in routes/auth.js. This is the
+ *      security control. It does not care what the database contains.
+ *
+ *   2. `College.active` in the database, which decides what the picker shows.
+ *
+ * The reason this is not just "set every other college inactive" is that the
+ * database is mutable at runtime: an operator can activate a campus from
+ * /admin, or approve a CollegeRequest, and the pilot gate would silently stop
+ * applying. This file is configuration — it only changes when someone edits
+ * the environment and redeploys — so it is the layer that cannot be talked out
+ * of its job by a click in the admin panel.
+ *
+ * ── WHY AN ALLOW-LIST AND NOT A BLOCK-LIST ───────────────────────────────────
+ * A block-list ("these campuses are closed") has to be updated every time a new
+ * campus is added, and the failure mode is opening the gate: forget the entry,
+ * and the campus is quietly live. An allow-list fails closed instead — an
+ * unlisted campus is refused, so the mistake costs you one new user rather than
+ * an unintended public launch.
+ *
+ * ── UNSET MEANS OPEN ────────────────────────────────────────────────────────
+ * With no `ALLOWED_COLLEGES` set, every active college can sign up. That is
+ * the pre-pilot behaviour and it is the correct default for local development,
+ * where seeding one college and pointing the picker at it is already the
+ * intended workflow. The gate is opt-IN, so a developer who never hears of it
+ * gets a working app rather than a confusing one.
+ */
+
+/**
+ * The parsed allow-list, or null when no gate is configured.
+ *
+ * Normalised on read rather than at module load, because a test that mutates
+ * `process.env` between cases would otherwise read a stale snapshot frozen at
+ * import time. The cost is trivial: the list is a handful of strings and this
+ * is called on signup, not on a hot path.
+ *
+ * @returns {Set<string>|null} lowercased college codes, or null when open
+ */
+export const getAllowedColleges = () => {
+  const raw = process.env.ALLOWED_COLLEGES;
+
+  // Empty string and whitespace both mean "not configured". An operator who
+  // blanks the variable expects the app to behave as it did before, not to
+  // lock every student out of a campus they never named.
+  if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+
+  const codes = String(raw)
+    .split(',')
+    .map((c) => c.trim().toLowerCase())
+    .filter(Boolean);
+
+  // A variable containing only separators (" ,, ") parses to an empty list.
+  // That is NOT the same as unset: returning null here would open the gate
+  // when the operator clearly intended to restrict it. An empty set closes it.
+  return new Set(codes);
+};
+
+/**
+ * @param {string} collegeCode
+ * @returns {boolean} true when this college may sign up (always true when no
+ *                    gate is configured)
+ */
+export const isCollegeAllowed = (collegeCode) => {
+  const allowed = getAllowedColleges();
+  if (allowed === null) return true;
+  return allowed.has(String(collegeCode || '').trim().toLowerCase());
+};
+
+/**
+ * The message a student sees when their campus is outside the gate.
+ *
+ * Deliberately does NOT say "this app is invite-only" or "not available in your
+ * region". It tells them what to do: use the college email and try again, or
+ * that their campus is not yet open. Naming a hard boundary invites people to
+ * look for a way around it; naming the next step does not.
+ */
+export const COLLEGE_GATE_MESSAGE =
+  'Sign-ups for your college are not open yet. If you have a college email address, please try again.';
+
+/**
+ * Build the Mongo filter fragment that limits a college query to the gate.
+ *
+ * Used by the two list endpoints so the picker only ever shows colleges a
+ * student could actually verify against. Showing a selectable campus that
+ * signup then rejects is the worst version of this: the student picks it,
+ * types their real college email, and is told no at the last step.
+ *
+ * @returns {{code?: {$in: string[]}}} `{}` when the gate is open
+ */
+export const collegeGateFilter = () => {
+  const allowed = getAllowedColleges();
+  if (allowed === null) return {};
+  return { code: { $in: [...allowed] } };
+};
+```
+
+### ./server/utils/campusSeed.js
+
+```
+import mongoose from 'mongoose';
+import College from '../models/College.js';
+import { getAllowedColleges } from './campusGate.js';
+
+/**
+ * 🏫 BOOT-TIME CAMPUS SEED.
+ *
+ * Why this exists: on a free Render plan there is no shell, so there is no way
+ * to run a script against the database the first time. That collides with the
+ * app's own design — the college picker reads from the `colleges` collection,
+ * so an empty database means an empty picker, which means no signup, which
+ * means there is no account that could ever reach /admin to add the first
+ * college. The two halves each need the other to exist first.
+ *
+ * Seeding at boot breaks that cycle: the service comes up with a usable campus
+ * already present, and /admin becomes reachable the moment an operator logs in.
+ *
+ * ── WHAT IT DELIBERATELY DOES NOT DO ────────────────────────────────────────
+ * It inserts MISSING colleges only. It never updates or overwrites an existing
+ * row, because an existing row means an operator has already seen it and may
+ * have corrected its name, domains or coordinates from /admin. A boot seed that
+ * "ensured" its own values would silently undo that edit on every deploy — and
+ * it would do it silently, which is the worst time for it to happen.
+ *
+ * ── WHY IT IS TIED TO ALLOWED_COLLEGES ──────────────────────────────────────
+ * The catalogue below is a fixed list of real campuses, but seeding them all
+ * would repopulate a picker that is meant to show one campus during the pilot.
+ * Reading the gate means the set of campuses that exists and the set that can
+ * sign up can never drift apart: open a campus by adding its code to
+ * ALLOWED_COLLEGES, and it exists. Nothing else to remember.
+ */
+
+/**
+ * Known campuses, keyed by `College.code`.
+ *
+ * Domains are the whole verification mechanism, so they must be the real
+ * institutional domains — `iitb.ac.in` covers every department address via
+ * exact-or-subdomain matching (see utils/collegeDomain.js), so no per-department
+ * list is needed.
+ *
+ * latLng is the campus location, not a student's: it is a building's published
+ * coordinates and carries none of the privacy weight of User.currentLatLng.
+ * Optional in the schema — without it, students at that campus simply rank as
+ * "unknown location" rather than being guessed at.
+ */
+const CATALOGUE = {
+  iitb: {
+    name: 'Indian Institute of Technology Bombay',
+    domains: ['iitb.ac.in'],
+    city: 'Mumbai',
+    state: 'Maharashtra',
+    country: 'India',
+    latLng: [19.124, 72.914],
+  },
+  iitd: {
+    name: 'Indian Institute of Technology Delhi',
+    domains: ['iitd.ac.in'],
+    city: 'New Delhi',
+    state: 'Delhi',
+    country: 'India',
+    latLng: [28.545, 77.192],
+  },
+  iitk: {
+    name: 'Indian Institute of Technology Kanpur',
+    domains: ['iitk.ac.in'],
+    city: 'Kanpur',
+    state: 'Uttar Pradesh',
+    country: 'India',
+    latLng: [26.487, 80.331],
+  },
+  iitkgp: {
+    name: 'Indian Institute of Technology Kharagpur',
+    domains: ['iitkgp.ac.in'],
+    city: 'Kharagpur',
+    state: 'West Bengal',
+    country: 'India',
+    latLng: [22.256, 87.232],
+  },
+  iitm: {
+    name: 'Indian Institute of Technology Madras',
+    domains: ['iitm.ac.in'],
+    city: 'Chennai',
+    state: 'Tamil Nadu',
+    country: 'India',
+    latLng: [12.991, 80.235],
+  },
+  iitr: {
+    name: 'Indian Institute of Technology Roorkee',
+    domains: ['iitr.ac.in'],
+    city: 'Roorkee',
+    state: 'Uttarakhand',
+    country: 'India',
+    latLng: [29.869, 80.312],
+  },
+  iitg: {
+    name: 'Indian Institute of Technology Guwahati',
+    domains: ['iitg.ac.in'],
+    city: 'Guwahati',
+    state: 'Assam',
+    country: 'India',
+    latLng: [26.144, 91.736],
+  },
+  iith: {
+    name: 'Indian Institute of Technology Hyderabad',
+    domains: ['iith.ac.in'],
+    city: 'Hyderabad',
+    state: 'Telangana',
+    country: 'India',
+    latLng: [17.593, 78.271],
+  },
+  iitbhu: {
+    name: 'Indian Institute of Technology (BHU) Varanasi',
+    domains: ['iitbhu.ac.in'],
+    city: 'Varanasi',
+    state: 'Uttar Pradesh',
+    country: 'India',
+    latLng: [25.135, 83.0],
+  },
+  iitism: {
+    name: 'Indian Institute of Technology (ISM) Dhanbad',
+    domains: ['iitism.ac.in'],
+    city: 'Dhanbad',
+    state: 'Jharkhand',
+    country: 'India',
+    latLng: [23.815, 86.436],
+  },
+};
+
+/**
+ * Insert any gated campus that is missing.
+ *
+ * Never throws. A seed that prevents the server from booting would be strictly
+ * worse than an empty picker: the app is a social network, and it still works
+ * for every already-registered campus if this quietly does nothing. It logs what
+ * it did and returns what it created.
+ *
+ * @returns {Promise<{created: string[], skipped: string[]}>}
+ */
+export const seedGatedColleges = async () => {
+  const result = { created: [], skipped: [] };
+
+  const allowed = getAllowedColleges();
+  if (allowed === null) {
+    // No gate configured — the pre-pilot behaviour is every active college can
+    // sign up, and seeding the whole catalogue would quietly pre-load ten
+    // campuses nobody asked for. Nothing to do.
+    return result;
+  }
+
+  for (const code of allowed) {
+    const record = CATALOGUE[code];
+    if (!record) {
+      // A gated code with no catalogue entry is an operator error worth
+      // shouting about: the campus is allowed to sign up but nothing can tell
+      // the picker what it is called or which domains to verify against.
+      console.error(
+        `⚠️  ALLOWED_COLLEGES includes "${code}", which is not in the campus catalogue. ` +
+        `Add it to CATALOGUE in server/utils/campusSeed.js, or add the campus from /admin.`,
+      );
+      continue;
+    }
+
+    try {
+      // insertOne would throw E11000 on the unique code index if a concurrent
+      // instance seeded first — which is exactly what happens on a rolling
+      // deploy with two instances briefly running. updateOne with upsert is
+      // idempotent and needs no error handling.
+      const res = await College.updateOne(
+        { code },
+        { $setOnInsert: { code, ...record, active: true } },
+        { upsert: true },
+      );
+
+      if (res.upsertedCount > 0) {
+        result.created.push(code);
+        console.log(`🏫 Seeded campus "${record.name}" (${code}) from ALLOWED_COLLEGES.`);
+      } else {
+        result.skipped.push(code);
+      }
+    } catch (err) {
+      console.error(`⚠️  Could not seed campus "${code}": ${err.message}`);
+    }
+  }
+
+  if (result.created.length > 0) {
+    console.log(
+      `🏫 Boot seed created ${result.created.length} campus(es): ${result.created.join(', ')}. ` +
+      `Sign up at / with an email on that domain, then open /admin.`,
+    );
+  }
+
+  return result;
+};
+
+export default seedGatedColleges;
+```
+
 ### ./server/utils/email.js
 
 ```
@@ -26076,13 +31622,34 @@ export class AppError extends Error {
  * would turn the request form into an account-takeover primitive: submit
  * someone else's address, have a link sent to them, click it.
  */
+/**
+ * 📧 EMAIL TRANSPORT — Resend.
+ *
+ * ── WHY RESEND_SENDER_EMAIL MUST BE A BARE ADDRESS ──────────────────────────
+ * The `from` header is composed as `${senderName} <${senderEmail}>`, so
+ * RESEND_SENDER_EMAIL must be ONLY the address — `otp@huh.app`. Setting it to
+ * the full display form (`huh? <otp@huh.app>`) produces
+ *
+ *     from: "huh? <huh? <otp@huh.app>>"
+ *
+ * which Resend rejects with a validation error, and the failure surfaces only
+ * as an OTP that never arrives. The default below is deliberately bare for the
+ * same reason.
+ */
+const senderEmail = () => process.env.RESEND_SENDER_EMAIL || 'onboarding@resend.dev';
+const senderName = () => process.env.RESEND_SENDER_NAME || 'huh?';
+
+// ⚠️ `onboarding@resend.dev` is Resend's sandbox sender. It delivers ONLY to
+// the email address that owns the Resend account. Every real student is
+// silently unreachable while it is in use, and nothing errors — Resend accepts
+// the send and delivers it to the wrong place. Set a verified domain.
+const brand = () => senderName();
+
 export const sendCollegeLive = async (email, collegeName) => {
   const apiKey = process.env.RESEND_API_KEY;
-  const senderEmail = process.env.RESEND_SENDER_EMAIL || 'Matchalize <onboarding@resend.dev>';
-  const senderName = process.env.RESEND_SENDER_NAME || 'Matchalize';
 
   if (!apiKey) {
-    console.log(`[DEV MODE] College-live email for ${email}: ${collegeName} is now on Matchalize`);
+    console.log(`[DEV MODE] College-live email for ${email}: ${collegeName} is now on ${brand()}`);
     return true;
   }
 
@@ -26094,7 +31661,7 @@ export const sendCollegeLive = async (email, collegeName) => {
 
   const htmlContent = `
     <div style="font-family: 'Inter', sans-serif; background-color: #0A0A0C; color: #F5F5F7; padding: 40px 20px; text-align: center; max-width: 500px; margin: 0 auto; border-radius: 16px; border: 1px solid rgba(255,255,255,0.06);">
-      <h1 style="color: #D4A853; font-size: 28px; margin-bottom: 8px; font-weight: 700; letter-spacing: 2px;">MATCHALIZE</h1>
+      <h1 style="color: #D4A853; font-size: 28px; margin-bottom: 8px; font-weight: 700; letter-spacing: 2px;">${brand().toUpperCase()}</h1>
       <p style="color: #6E6E80; font-size: 14px; margin-bottom: 24px;">Your Campus. Your People.</p>
       <div style="background-color: #141418; border-radius: 12px; padding: 24px; margin-bottom: 24px; border: 1px solid rgba(255,255,255,0.03);">
         <p style="font-size: 18px; color: #F5F5F7; margin: 0 0 8px 0; font-weight: 600;">${safeName} is live</p>
@@ -26103,7 +31670,7 @@ export const sendCollegeLive = async (email, collegeName) => {
         </p>
       </div>
       <p style="font-size: 12px; color: #6E6E80; line-height: 1.5;">
-        Matchalize is for verified students only. You will need your campus email address to sign up.
+        ${brand()} is for verified students only. You will need your campus email address to sign up.
       </p>
     </div>
   `;
@@ -26115,9 +31682,9 @@ export const sendCollegeLive = async (email, collegeName) => {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: `${senderName} <${senderEmail}>`,
+      from: `${senderName()} <${senderEmail()}>`,
       to: [email],
-      subject: `${collegeName} is now on Matchalize`,
+      subject: `${collegeName} is now on ${brand()}`,
       html: htmlContent,
     }),
   });
@@ -26133,8 +31700,6 @@ export const sendCollegeLive = async (email, collegeName) => {
 
 export const sendOTP = async (email, otp) => {
   const apiKey = process.env.RESEND_API_KEY;
-  const senderEmail = process.env.RESEND_SENDER_EMAIL || 'Matchalize <onboarding@resend.dev>';
-  const senderName = process.env.RESEND_SENDER_NAME || 'Matchalize';
 
   if (!apiKey) {
     console.log(`\n----------------------------------------`);
@@ -26145,7 +31710,7 @@ export const sendOTP = async (email, otp) => {
 
   const htmlContent = `
     <div style="font-family: 'Inter', sans-serif; background-color: #0A0A0C; color: #F5F5F7; padding: 40px 20px; text-align: center; max-width: 500px; margin: 0 auto; border-radius: 16px; border: 1px solid rgba(255,255,255,0.06);">
-      <h1 style="color: #D4A853; font-size: 28px; margin-bottom: 8px; font-weight: 700; letter-spacing: 2px;">MATCHALIZE</h1>
+      <h1 style="color: #D4A853; font-size: 28px; margin-bottom: 8px; font-weight: 700; letter-spacing: 2px;">${brand().toUpperCase()}</h1>
       <p style="color: #6E6E80; font-size: 14px; margin-bottom: 24px;">Your Campus. Your People.</p>
       <div style="background-color: #141418; border-radius: 12px; padding: 24px; margin-bottom: 24px; border: 1px solid rgba(255,255,255,0.03);">
         <p style="font-size: 16px; color: #F5F5F7; margin-top: 0;">Here is your verification code:</p>
@@ -26163,9 +31728,9 @@ export const sendOTP = async (email, otp) => {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: `${senderName} <${senderEmail}>`,
+      from: `${senderName()} <${senderEmail()}>`,
       to: [email],
-      subject: 'Your Matchalize Login Code',
+      subject: `Your ${brand()} Login Code`,
       html: htmlContent,
     }),
   });
@@ -27762,6 +33327,7 @@ import { sendOTP } from '../utils/email.js';
 import { hashOtp, verifyOtp, normalizeEmail } from '../utils/otpHash.js';
 import College from '../models/College.js';
 import { emailMatchesCollege } from '../utils/collegeDomain.js';
+import { isCollegeAllowed, COLLEGE_GATE_MESSAGE } from '../utils/campusGate.js';
 import { verifyOtpLimiter, otpEmailLimiter, reverifyLimiter } from '../middleware/rateLimiters.js';
 
 const router = express.Router();
@@ -27805,7 +33371,52 @@ export const resolveCollege = async (collegeCode, email) => {
     return { ok: false, college, reason: 'Sign-ups for this college are currently closed.' };
   }
 
+  // 🔒 THE PILOT GATE.
+  //
+  // Checked AFTER the college exists and is active, so a student outside the
+  // gate gets the same closed-door message whether their campus is missing,
+  // deactivated, or simply not yet opened to the pilot. Before this line the
+  // three failure modes were indistinguishable to the caller and each leaked a
+  // little of the shape of the pilot.
+  //
+  // This is the security control. The picker hiding non-gated colleges (see
+  // collegeGateFilter in the list routes) is only cosmetic — it keeps the UI
+  // honest, but a student can post any collegeCode they like to /api/auth, so
+  // the check that matters has to live here, server-side, on the path that
+  // actually issues an OTP.
+  if (!isCollegeAllowed(code)) {
+    return { ok: false, college, reason: COLLEGE_GATE_MESSAGE };
+  }
+
   if (!emailMatchesCollege(email, college.domains)) {
+    // ── THE OPERATOR ESCAPE HATCH ────────────────────────────────────────────
+    //
+    // A single account, matched by exact address, is allowed to register
+    // without a college-domain email. This exists because adminProtect gates on
+    // `user.email === ADMIN_EMAIL`, and an admin whose address is a Gmail or an
+    // alumni mailbox can never satisfy an academic-domain check — so without
+    // this, setting ADMIN_EMAIL to anything other than a student address makes
+    // the entire admin panel permanently unreachable. There is no other way
+    // to recover it: the panel has no separate login.
+    //
+    // Deliberately narrow on all three axes:
+    //   • ONE address, exact match after trim+lowercase — never a domain.
+    //   • It still needs a valid college CODE that exists and is active, and
+    //     still has to clear the pilot gate. This bypasses the email check
+    //     only, not the college gate.
+    //   • It still requires a real OTP. Nothing about it skips verification;
+    //     it only lets a non-@iitb.ac.in mailbox receive that code.
+    //
+    // Unset ADMIN_EMAIL → the comparison is against undefined, matches
+    // nothing, and behaviour is exactly as before.
+    const adminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    if (adminEmail && email.toLowerCase() === adminEmail) {
+      console.warn(
+        `[admin-bootstrap] ${email} registered on "${code}" without a matching college domain.`,
+      );
+      return { ok: true, college };
+    }
+
     // The one error that names the college and its domain. Specific enough to
     // tell a student what went wrong; it leaks no user data — college domains
     // are public information and the student supplied the email themselves.
@@ -28281,6 +33892,7 @@ import College from '../models/College.js';
 import CollegeRequest from '../models/CollegeRequest.js';
 import { extractDomain } from '../utils/collegeDomain.js';
 import { collegeRequestLimiter } from '../middleware/rateLimiters.js';
+import { collegeGateFilter, getAllowedColleges } from '../utils/campusGate.js';
 
 const router = express.Router();
 
@@ -28310,7 +33922,11 @@ router.get('/', async (req, res) => {
     // verified through it are untouched.
     const q = String(req.query.q || '').trim();
 
-    const filter = { active: true };
+    // Gate first, then search. Both merge into one filter so the campus limit
+    // cannot be bypassed by supplying a `q` — an `$or` written after this would
+    // still be ANDed against `code`, so a gated-out campus stays invisible
+    // however it is searched for.
+    const filter = { active: true, ...collegeGateFilter() };
     if (q) {
       // Escaped so a student typing "(" can't turn into a regex that throws.
       const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
@@ -32386,295 +38002,6 @@ export default router;
 
 ```
 
-### ./server/routes/waitlist.js
-
-```
-import express from 'express';
-import { body } from '../middleware/validate.js';
-import { validate } from '../middleware/validate.js';
-import Waitlist from '../models/Waitlist.js';
-import { rateLimit } from 'express-rate-limit';
-
-const router = express.Router();
-
-// FIXED: Hardcoded launch date — no more drift
-const LAUNCH_DATE = new Date('2026-10-02T00:00:00Z');
-
-// Rate limit: 5 joins per 15 min per email (not IP — campuses share one NAT IP)
-const joinLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: Number(process.env.WAITLIST_JOIN_MAX) || 5,
-  keyGenerator: (req) => {
-    const email = (req.body?.email || '').toString().toLowerCase().trim();
-    return email || `no-email-${req.ip}`;
-  },
-  message: { message: 'Too many join attempts. Please wait a bit.' },
-  // Matches every other limiter in the app (see middleware/rateLimiters.js).
-  // Without these the client gets a 429 with no RateLimit headers, so it can't
-  // tell when the window resets and has no way to back off politely.
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-// Extract college details from email (matches pattern in auth.js)
-const extractCollege = (email) => {
-  const domain = email.split('@')[1]?.toLowerCase() || '';
-  const parts = domain.split('.');
-  // College code is ALWAYS the part immediately before ".ac.in"
-  const code = domain.endsWith('.ac.in') ? (parts[Math.max(0, parts.length - 3)] || parts[0]) : parts[0];
-  const map = {
-    iitb: 'IIT Bombay', iitd: 'IIT Delhi', iitk: 'IIT Kanpur',
-    iitkgp: 'IIT Kharagpur', iitm: 'IIT Madras', iitr: 'IIT Roorkee',
-    iitg: 'IIT Guwahati', iith: 'IIT Hyderabad', iitbhu: 'IIT BHU',
-  };
-  return { collegeCode: code, college: map[code] || domain };
-};
-
-// Variable-ratio reward engine. The slot machine.
-// Weighted toward small bonuses with rare jackpots.
-const computeReferralBonus = (referrerCurrentCount) => {
-  const roll = Math.random();
-  let bonus;
-  if (roll < 0.50) bonus = 2 + Math.floor(Math.random() * 2);       // 50%: 2-3 spots
-  else if (roll < 0.80) bonus = 4 + Math.floor(Math.random() * 3);  // 30%: 4-6 spots
-  else if (roll < 0.95) bonus = 7 + Math.floor(Math.random() * 4);  // 15%: 7-10 spots
-  else bonus = 11 + Math.floor(Math.random() * 5);                  // 5%: 11-15 spots (JACKPOT)
-
-  // Early evangelist bonus: first 10 referrals get +5 extra
-  if (referrerCurrentCount < 10) bonus += 5;
-  return bonus;
-};
-
-// Proper block-shift: moves everyone in [newPosition, oldPosition) up by 1,
-// then recomputes tiers for the affected block + the referrer.
-const shiftPositionsUp = async (referrerId, oldPosition, newPosition) => {
-  if (newPosition >= oldPosition) return; // No shift needed
-
-  // 1. Shift everyone in the gap up by 1
-  await Waitlist.updateMany(
-    {
-      _id: { $ne: referrerId },
-      position: { $gte: newPosition, $lt: oldPosition },
-    },
-    { $inc: { position: 1 } }
-  );
-
-  // 2. Recompute tiers for the shifted block + the referrer
-  const T = Waitlist.TIER_THRESHOLDS;
-  const affected = await Waitlist.find({
-    position: { $gte: newPosition, $lte: oldPosition },
-  }).lean();
-
-  const ops = affected.map((entry) => {
-    const tier = entry.position <= T.charter ? 'charter'
-               : entry.position <= T.founding ? 'founding'
-               : 'original';
-    return {
-      updateOne: {
-        filter: { _id: entry._id },
-        update: { $set: { tier } },
-      },
-    };
-  });
-  if (ops.length > 0) await Waitlist.bulkWrite(ops);
-};
-
-// ─── JOIN THE WAITLIST ───
-router.post(
-  '/join',
-  joinLimiter,
-  [
-    body('email')
-      .isEmail().withMessage('Valid email required')
-      .custom((value) => {
-        const normalized = value.trim().toLowerCase();
-        if (!normalized.endsWith('.ac.in')) {
-          throw new Error('Only academic (.ac.in) emails are accepted');
-        }
-        return true;
-      }),
-    body('name').optional().isString().trim().isLength({ max: 60 }),
-    body('referralCode').optional().isString().trim().isLength({ min: 6, max: 6 }),
-  ],
-  validate,
-  async (req, res) => {
-    try {
-      const email = req.body.email.trim().toLowerCase();
-      const { name, referralCode } = req.body;
-
-      // Duplicate check
-      const existing = await Waitlist.findOne({ email });
-      if (existing) {
-        return res.status(409).json({
-          message: 'You are already in the cohort.',
-          position: existing.position,
-          referralCode: existing.referralCode,
-        });
-      }
-
-      // Process referral if provided
-      let referrer = null;
-      let bonusSpots = 0;
-      let oldPosition = null;
-
-      if (referralCode) {
-        referrer = await Waitlist.findOne({ referralCode: referralCode.toUpperCase() });
-        if (referrer) {
-          // Self-referral guard
-          if (referrer.email === email) {
-            return res.status(400).json({ message: 'Nice try. You cannot refer yourself.' });
-          }
-
-          // THE SLOT MACHINE MOMENT
-          bonusSpots = computeReferralBonus(referrer.referralCount);
-          oldPosition = referrer.position;
-          const newPosition = Math.max(1, referrer.position - bonusSpots);
-
-          referrer.position = newPosition;
-          referrer.referralCount += 1;
-          referrer.spotsJumped += bonusSpots;
-          referrer.tier = referrer.computeTier();
-          await referrer.save();
-
-          // Proper block-shift
-          await shiftPositionsUp(referrer._id, oldPosition, newPosition);
-        }
-      }
-
-      // Assign position (end of queue)
-      const totalBefore = await Waitlist.countDocuments();
-      const position = totalBefore + 1;
-      const newReferralCode = await Waitlist.generateReferralCode();
-      const { college, collegeCode } = extractCollege(email);
-
-      const T = Waitlist.TIER_THRESHOLDS;
-      const entry = await Waitlist.create({
-        email,
-        name: name || '',
-        college, collegeCode,
-        referralCode: newReferralCode,
-        referredBy: referrer?._id || null,
-        position,
-        tier: position <= T.charter ? 'charter' : position <= T.founding ? 'founding' : 'original',
-      });
-
-      res.status(201).json({
-        success: true,
-        position: entry.position,
-        referralCode: entry.referralCode,
-        tier: entry.tier,
-        totalWaiting: position,
-        referralBonus: referrer ? {
-          referrerName: referrer.name || 'A fellow IITian',
-          spotsJumped: bonusSpots,
-          newPosition: referrer.position,
-        } : null,
-      });
-    } catch (error) {
-      console.error('Waitlist join error:', error);
-      res.status(500).json({ message: 'The archives encountered an error. Please try again.' });
-    }
-  }
-);
-
-// ─── CHECK STATUS (by referral code — no auth needed) ───
-router.get('/status/:code', async (req, res) => {
-  try {
-    const entry = await Waitlist.findOne({ referralCode: req.params.code.toUpperCase() }).lean();
-    if (!entry) return res.status(404).json({ message: 'Code not found' });
-    const total = await Waitlist.countDocuments();
-    res.json({
-      position: entry.position,
-      tier: entry.tier,
-      totalWaiting: total,
-      ahead: entry.position - 1,
-      referralCount: entry.referralCount,
-      spotsJumped: entry.spotsJumped,
-      spotsToTop100: entry.position > 100 ? entry.position - 100 : 0,
-      spotsToTop50: entry.position > 50 ? entry.position - 50 : 0,
-      status: entry.status,
-      joinedAt: entry.joinedAt,
-      checkInStreak: entry.checkInStreak,
-      name: entry.name,
-    });
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to fetch status' });
-  }
-});
-
-// ─── PUBLIC STATS (for social proof counter) ───
-router.get('/stats', async (req, res) => {
-  try {
-    const [total, charter, founding, last24h, recentJoins] = await Promise.all([
-      Waitlist.countDocuments(),
-      Waitlist.countDocuments({ position: { $lte: 50 } }),
-      Waitlist.countDocuments({ position: { $gt: 50, $lte: 250 } }),
-      Waitlist.countDocuments({ joinedAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } }),
-      Waitlist.find().sort({ joinedAt: -1 }).limit(12).select('name branch year joinedAt').lean(),
-    ]);
-    res.json({
-      total, charter, founding, last24h,
-      // Real joins for transparent social proof
-      recentJoins: recentJoins.map(j => ({
-        name: j.name || 'An IITian',
-        branch: j.branch || '',
-        year: j.year || '',
-        joinedAt: j.joinedAt,
-      })),
-      // Fixed launch date (move to Setting model later)
-      launchDate: LAUNCH_DATE.toISOString(),
-    });
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to fetch stats' });
-  }
-});
-
-// ─── DAILY CHECK-IN (engagement loop) ───
-router.post('/checkin/:code', async (req, res) => {
-  try {
-    const entry = await Waitlist.findOne({ referralCode: req.params.code.toUpperCase() });
-    if (!entry) return res.status(404).json({ message: 'Code not found' });
-
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-    // Already checked in today
-    if (entry.lastCheckIn && new Date(entry.lastCheckIn).setHours(0,0,0,0) >= today.getTime()) {
-      return res.json({ streak: entry.checkInStreak, alreadyCheckedIn: true });
-    }
-
-    // Maintain or reset streak
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const lastCheckInDay = entry.lastCheckIn ? new Date(entry.lastCheckIn).setHours(0,0,0,0) : null;
-    entry.checkInStreak = (lastCheckInDay === yesterday.getTime()) ? entry.checkInStreak + 1 : 1;
-    entry.lastCheckIn = now;
-
-    // Reward: every 3-day streak = jump 2 spots
-    let reward = null;
-    if (entry.checkInStreak > 0 && entry.checkInStreak % 3 === 0) {
-      const jump = 2;
-      const oldPosition = entry.position;
-      const newPosition = Math.max(1, entry.position - jump);
-      entry.position = newPosition;
-      entry.spotsJumped += jump;
-      entry.tier = entry.computeTier();
-      await entry.save();
-      await shiftPositionsUp(entry._id, oldPosition, newPosition);
-      reward = { spotsJumped: jump, newPosition };
-    } else {
-      await entry.save();
-    }
-
-    res.json({ streak: entry.checkInStreak, position: entry.position, reward });
-  } catch (error) {
-    res.status(500).json({ message: 'Check-in failed' });
-  }
-});
-
-export default router;
-```
-
 ### ./server/tests/lib/env.mjs
 
 ```
@@ -33349,11 +38676,6 @@ const definitions = [
     blurb: 'Back on the admin dashboard: live campus stats, active bans, and the safety ledger reflecting everything the run did.',
   },
   {
-    id: 's13',
-    name: 'The Waitlist',
-    blurb: 'A student without a launch date joins the waitlist and claims their founding spot.',
-  },
-  {
     id: 's14',
     name: 'The Splash',
     blurb: 'The cinematic entry — tagline, and the automatic pass into the archives.',
@@ -33692,25 +39014,6 @@ async function runS12({ browser, cfg, world, log }) {
   return closeContext({ context, videoDir: dir, name: 's12' });
 }
 
-async function runS13({ browser, cfg, world, log }) {
-  const dir = path.join(SCENES_DIR, 's13');
-  const { context, page } = await makeContext(browser, dir, 's13');
-  await page.goto(`${QA_ORIGIN}/waitlist`, { waitUntil: 'domcontentloaded' });
-  await page.locator('text=/wait.?list/i').first().waitFor({ timeout: 20000 }).catch(() => {});
-  await sleep(1500);
-  try {
-    await page.locator('input[placeholder="Your name (optional)"]').fill('Farhan Ali');
-    await page.locator('input[placeholder="you@iitb.ac.in"]').fill('farhan.ali@iitb.ac.in');
-    await page.locator('button:has-text("Claim your founding spot")').tap();
-    await page.getByText('SPOT CLAIMED', { exact: false }).first().waitFor({ timeout: 15000 });
-    await sleep(2500);
-  } catch (e) {
-    log(`  [warn] s13 waitlist join failed: ${e.message}`);
-  }
-  await sleep(2000);
-  return closeContext({ context, videoDir: dir, name: 's13' });
-}
-
 async function runS14({ browser, cfg, world, log }) {
   const dir = path.join(SCENES_DIR, 's14');
   const { context, page } = await makeContext(browser, dir, 's14');
@@ -33751,7 +39054,6 @@ export const runners = {
   s10: runS10,
   s11: runS11,
   s12: runS12,
-  s13: runS13,
   s14: runS14,
   s15: runS15,
 };
@@ -34563,291 +39865,1218 @@ export async function seedSociety() {
 
 ### ./ambitions/roulette.md
 
-```
+````
 # Roulette — Canonical Design Spec
 
-_Captures every decision made about the Roulette (Omegle/Chatroulette-style) feature
-so far. Update this file when decisions change; other docs must not contradict it._
-
-## 1. Product identity
-
-Matchalize is NOT "a dating app plus Omegle", and it is NOT one college network.
-It is a single college network for all of India, with **two moods**:
-
-- **Discover** — "I want to choose who I talk to." (intentional)
-- **Roulette** — "I want a spontaneous, low-pressure introduction." (chance)
-
-Both lead to the same end: **mutual connection → private chat → optional reveal/date.**
-Roulette is the front door / hook; Discover is the product; chat converts either into
-something lasting. If Roulette can't produce mutual connects that become chats, it is
-just expensive entertainment.
-
-**Core promise:** "Meet verified college students your way: choose intentionally, or
-meet by chance."
-
-## 2. Network scope (CANONICAL — intra + inter)
-
-Matchalize is an **INTRA + INTER college network**:
-
-- **Intra:** users connect within their own campus.
-- **Inter:** users connect across all verified campuses in India.
-
-Documented in: HANDOFF.md (top-of-file block), PRD-related dump scripts,
-dumps/ (see dumps/00-INDEX.md). Never describe it as one or the other.
-
-- Roulette spans the **full verified network** (same campus AND all campuses).
-- Discover deck is currently **intra-only** (`collegeCode` filter) — widening it is a
-  backlog item, NOT a contradiction of the network scope.
-- Verification = each college's `.ac.in` academic email (allowlist, expandable via
-  COLLEGE_MAP) + DOB hard-check at signup (17-year-old freshmen edge).
-
-## 3. The two entrances
-
-| Action | Discover | Roulette |
-|---|---|---|
-| First impression | Profile / deck cards | Live masked video |
-| Skip | Discover-only, 7-day cooldown re-queue | Roulette-only, PERMANENT (no re-queue) |
-| Block/report | Lane-scoped | Lane-scoped |
-| Connection | Alignment | Mutual Align |
-| Identity | Full profile visible | Masked persona until reveal |
-
-Only **serious enforcement is shared**: a ban in either place bans globally. Everything
-else stays hermetically separate so users never feel watched across lanes.
-
-## 3a. Canonical terminology (Rename ledger — do not contradict)
-
-UI labels were de-jargoned. Any copy/documentation must use these, not the old terms:
-
-| Old | New |
-|---|---|
-| Match / matchId / matches | Alignment / alignmentId / alignments |
-| Discover tab | Deck tab |
-| Matches tab | Letters tab |
-| "Say hello" / "Open Correspondence" | Open Chat |
-| superlike / priority seal | Telegram (`telegram`, `priority_telegram`) |
-| "Matched Xh" | Aligned Xh |
-| Class of 20XX | era value as-is (UG / PG) |
-| foreword / "Draft the foreword" | bio / "Draft your bio" |
-| Given Name | Name |
-| Vault Settings / Seeking Parameters | Privacy / Seeking |
-| Blocked Subjects | Blocked |
-| dispatch / courier / artifact | send / message / photo |
-| seal stamp animation ("AFFIXED") | "SENT" |
-
-Shared feature verbs (kept): **Connect → Align** in Roulette. `archive` action and the
-`opening_letter` message type are retained as internal type values. Era values are
-**UG / PG only** (`year` field, `YEARS = ["UG","PG"]`).
-
-## 4. Identity & progressive reveal
-
-One verified account per person, with two faces:
-
-- **Dating profile** (Discover): full photos, prompts, bio — unchanged.
-- **Roulette persona**: first name/alias, maybe age band + college/region. No photos,
-  no prompts, no dating profile reachable.
-
-Flow: Roulette session → 60–120s masked video → both tap **Align** →
-**Roulette Alignment chat** (masked) → either may tap **Reveal profile** →
-**both must consent** → Discover profiles become visible to each other.
-
-Reveal consent uses the same bilateral pattern as `accept_letter`.
-
-## 5. Data model (decided: the CHEAP/UNIFIED path)
-
-**One Connection, two origins.** Generalize the existing `Alignment` doc:
-
-- Add `origin: 'discover' | 'roulette'`
-
-Roulette mutual-Align and Discover mutual-like both create an `Alignment`; the chat,
-sockets (rooms = alignmentId), Messages, notifications, and pushes all work
-**unchanged** for both origins. Roulette alignments simply render masked until both
-reveal, and do not emit an opening-letter.
-
-**Rejected alternative:** a brand-new `Connection` model + migrating chat off
-`Alignment` — touches ~13 files (Message, messages.js, socket/chat.js, alignments.js,
-discover.js, notifications.js, report.js, Chat.jsx, Matches.jsx, AppShell,
-NotificationDrawer, Discover.jsx) + indexes + data migration, and fragments chat into
-two systems. Rejected because it conflicts with "two doors, one room" and costs days
-for zero gain.
-
-**Roulette-only history:** skips/blocks live in a separate interaction store (e.g.,
-`RouletteInteraction`) so roulette actions NEVER read/write the Discover
-`Interaction` collection. Skipping someone in Roulette has zero effect on Discover
-and vice versa. `origin:'block'`-style roulette blocks are roulette-scoped only;
-suspension/ban is global.
-
-## 6. Matching rules
-
-- **Preference-filtered, not random:** the queue only pairs users whose
-  `interestedIn` intersects (incl. Everyone). Gender-ratio rails protect the
-  less-numerous side from being swarmed.
-- **Online-only pool:** only currently-in-session verified users are queued.
-- **Skip = permanent** in Roulette (no 7-day re-queue). When the online pool dries,
-  show a **"chamber is quiet"** state instead of a broken screen.
-- **Session duration cap:** 60–120 seconds; mutual Align then moves to masked chat.
-- **Roulette persona shows college/region** (location is visible; identity is not)
-  so users can bias toward nearby campuses if they want.
-
-## 7. Safety (₹0 tier — real, if manual)
-
-Layers, in order of importance:
-
-1. Verified identity on file (`ac.in`) — a named student signs in. **This is the
-   strongest free deterrent Omegle never had.** Banning one real student travels
-   fast on campus.
-2. Instant Report + immediate disconnect during a session.
-3. Block (lane-scoped) and global Ban/Suspension.
-4. Rate limits (session counts — free tier: ~10 connections/day).
-5. Admin review of serious reports in the existing admin panel.
-6. Optional **in-browser NSFW detection** (TensorFlow.js sampling, verdict-only to
-   server) — one extra layer ONLY. It is bypassable (edited client, virtual camera,
-   model-stripped) and is NOT the safety system.
-7. **No recording at start** (₹0). On report, keep text transcript + metadata + what
-   the reporter submits.
-
-Report/block/ban behaviors reuse the existing Report → shadowban → admin flow.
-
-## 8. Tech decisions (₹0 start)
-
-- **WebRTC P2P, STUN-first.** Browser-to-browser video = free transit.
-- **TURN (coturn) = config flag from day one.** Env/config-driven; enabled only at
-  public beta. No code change when flipped.
-- **Progressive fallback live at launch:** if media can't connect, show
-  "Can't reach each other's networks — continue in masked chat?" → the interaction
-  continues in text. This is a feature (Bumble/Hinge "text first" pattern), never a
-  broken screen.
-- **No SFU / no server media core for 1:1.** 1:1 is P2P or simple relay.
-- **Video 360p / adaptive quality, not HD.**
-- Signaling rides the existing authenticated Socket.IO connection.
-- No deployment manifests currently in repo; hosting is external/env-based.
-
-## 9. Cost model — the full truthful picture
-
-### Phases
-
-| Phase | Cost | What it buys |
-|---|---|---|
-| Build | ₹0 | Queue, P2P video, masked chat, skip/connect/reveal, report UI, admin |
-| Test (20–100 students) | ₹0 | Private beta on free tiers |
-| Public beta launch | **₹400–500/mo** (one VPS) | Always-on sockets + coturn + uptime |
-| Growing real usage | ₹2,000–10,000/mo | Real relay bandwidth + stable hosting |
-| Mass daily usage ceiling | ~₹2 lakh/mo | Only if thousands of users stay on video for hours daily — monetize BEFORE this |
-
-The ₹500 and ₹2 lakh numbers are the same timeline at different points; they do not
-contradict.
-
-### Bandwidth math (why the secondary lane fits a small VPS)
-
-- TURN relays only the **minority** of calls that fail P2P — NOT all traffic.
-- 360p call ≈ 1 Mbps through relay ≈ **0.45 GB per relayed call-hour.**
-- Conservative ₹500 VPS ≈ **1 TB/month** (Hetzner ~20 TB at similar price).
-- 1 TB ≈ **~2,200 relayed call-hours/month.**
-- Realistic 5,000-user secondary lane: ~1,800 total call-hours/mo; even if HALF relay
-  → ~400 GB — under half the conservative allowance.
-- Registered users ≠ concurrent load; online-only + short sessions keeps duty cycle
-  tiny. Signaling for hundreds of concurrent sockets is KB/s.
-- Capacity ceiling on that VPS ≈ 20–50 **simultaneous** relayed calls — fine for a
-  secondary tab; track it, don't guess.
-
-### What stays free at 5,000 users
-
-| Layer | Free solution |
-|---|---|
-| Compute (signaling/API/sockets) | Free tier works for build; VPS at public launch |
-| Database | MongoDB Atlas M0 (512MB free) — text/metadata only; media in Cloudinary |
-| Media storage | Cloudinary free tier (25GB) |
-| OTP email | Resend free tier (100/day, 3,000/mo); fine for normal pace (7-day JWTs → OTPs rare) |
-| Moderation compute | In-browser, client-side |
-| Video transit | P2P free; relay only when needed |
-
-### Monitoring — the three numbers that decide when to pay
-
-1. WebRTC connection-success rate
-2. Percentage of calls relayed through TURN
-3. Average TURN GB/day
-
-(Do NOT promise a success % — measure it. Pay for more only when these prove real
-usage.)
-
-### Honest trade-offs at ₹0
-
-- Some calls fail without TURN → masked-chat fallback takes over.
-- Free PaaS tiers sleep sockets → flaky "live".
-- No recording → rely on reporter's evidence vs past incidents.
-- Manual moderation, not enterprise AI.
-- Verdict: fully free = "works but degraded"; ₹500 = "works like imagined."
-
-## 10. Monetization & business model (when ready)
-
-**Keep free:** joining Roulette, a few daily rounds, reporting/blocking, basic
-Discover + chat, mutual Align.
-
-**Charge (premium ~₹199/mo example):**
-- More Roulette rounds after daily free limit (e.g., free = 10 connections/day)
-- Skip-queue / faster matching (only where it doesn't harm fairness)
-- Advanced Discover filters
-- "Who liked you"
-- Profile boosts
-- Extra profile/prompt/customization
-- "Late Night Chamber" / themed live rooms
-- Campus event tickets / sponsored mixer passes
-
-**Profit math (from external review, accepted here):** ₹2 lakh/mo opex is covered by
-roughly 5–10% of a 10k user base paying:
-
-| Paid users | Price/mo | Revenue |
-|---|---|---|
-| 500 | ₹399 | ₹1.99 lakh |
-| 1,000 | ₹199 | ₹1.99 lakh |
-| 2,000 | ₹99 | ₹1.98 lakh |
-
-(before payment fees, GST, marketing, staff.)
-
-**The business loop:** Free Roulette → retention/addiction → more opens → more
-alignments/chats → premium conversion. Monetize Roulette's limits and Discover's
-control; do not paywall basic video.
-
-**Reality check first milestone:** can 50–100 students repeatedly use it, connect,
-and come back? If no, no amount of money saves it. If yes, add limits + premium
-later.
-
-## 11. Build order / prerequisites
-
-1. **Fix the two HIGH security findings FIRST** (they become critical when strangers
-   are face-to-face):
-   - Admin force-disconnect doesn't invalidate JWT/cookie (`lastLogoutAt`) → kicked
-     users re-auth on refresh; uncooperative clients stay in rooms.
-   - Cross-user Cloudinary media wipe
-     (`isValidImageUrl` owns-nothing scope → user can plant + delete another user's
-     photos).
-   - Plus the documented CastError + destructive-route rate-limit gaps.
-2. Pass the QA suite (`npm run qa`).
-3. Data model: `Alignment.origin`.
-4. Roulette backend: online-only preference queue, session rooms, sockets, skip/block
-   store, masked chat render + bilateral reveal endpoint.
-5. WebRTC P2P + STUN + graceful fallback (TURN flag off).
-6. Reports → admin → ban wiring (reuse existing).
-7. Nav consolidation: Deck / Roulette / Letters / Profile (badges by origin).
-8. Full-dump + HANDOFF updates.
-
-## 12. Current code state (so far)
-
-- **Nav tab added** to mobile `NavBar.jsx` + `DesktopSidebar.jsx` (Shuffle icon),
-  wired via lazy import in `AppShell.jsx`. Build passes.
-- **Placeholder page** `client/src/pages/Roulette.jsx` — masked lobby UI, no backend.
-- **Docs updated:** HANDOFF.md (intra+inter block), dump scripts + existing dumps,
-  roulette lobby copy.
-- PRD.md was **deleted** (per owner). Roulette + all product decisions now live HERE.
-
-## 13. Open items / backlog
-
-- Discover inter-college deck scope (deferred — "we'll do something about it later").
-- WebRTC-video vs chat-only-first launch order (video deferred is acceptable if the
-  budget never appears).
-- Verify Cloudflare free 1 TB real-time/SFU/TURN allowance as a possible ₹0 middle
-  phase before the VPS.
-- Decide premium pricing precisely only when usage proves a need.
 ```
+Version:       2.0  (supersedes the v1 spec of 2026-10-10 in full)
+Generated:     2026-10-16
+Status:        Design approved in principle. NOT YET IMPLEMENTED.
+Audited against: working tree on main @ 50c0095 (+ uncommitted changes present)
+Method:        read-only source inspection. No app was started, no test run,
+               no database touched, no external service contacted.
+Cloudflare docs: verified 2026-10-16 (TURN service, Generate Credentials,
+               FAQ, Analytics)
+
+Companion documents:
+  summary.md    app-wide engineering audit (backend, security, data, costs)
+  summary2.md   Roulette architecture & staged design (superseded by this file
+                where they differ — this file is canonical)
+  summary3.md   UI / navigation inspection (identity leak map, z-order, journeys)
+
+Legend:   [CONFIRMED] read in source · [INFERRED] reasoned · [UNKNOWN] needs runtime
+```
+
+**Plain-English note for the founder:** Section 1 is the product. Sections 4+ are
+engineering. Nothing here is built yet — this file records what we have *decided* and
+*verified*, so the next session can start from here without re-deriving anything.
+
+---
+
+## 1. PRODUCT MODEL
+
+huh? has two ways to meet college students:
+
+- **Deck** — discover people through profiles.
+- **Roulette** — meet someone through a spontaneous, nearby-first video conversation.
+
+Both can lead to the same saved chat system.
+
+### 1.1 The central rule
+
+> **Align means "let's stay connected." It does NOT automatically mean dating, and it does
+> NOT automatically reveal a hidden profile.**
+
+The v1 spec conflated three independent concepts into one. Version 2 separates them:
+
+| Concept | Meaning | Triggered by |
+|---|---|---|
+| **Align** | "Let's stay connected" | Mutual accept → creates or returns a chat |
+| **Dating** | Intent / compatibility | Matchmaking rules only |
+| **Reveal** | "Show you my real profile" | Separate mutual action |
+
+A saved connection can exist with **zero** profile access.
+
+```text
+Deck ─────── Accepted/mutual Align ─────────┐
+                                           ↓
+                                      Saved chat
+                                           ↑
+Roulette ─── Accepted/mutual Align ────────┘
+                                           ↓
+                            Optional mutual profile reveal
+                            (profile-hidden connections only)
+```
+
+### 1.2 Visibility matrix — asymmetric by design
+
+A visibility choice controls what **that person shares**. It never obligates the other
+party to reciprocate.
+
+| A | B | Result |
+|---|---|---|
+| Hidden | Hidden | Both use temporary names + generic avatars |
+| Visible | Hidden | **B can view A's profile. A cannot view B's.** |
+| Visible | Visible | Both profiles available |
+
+Before a user switches to visible mode, show:
+
+> "Students you meet can view your public profile, even if they keep theirs hidden."
+
+### 1.3 The privacy promise we will actually make
+
+**Use:**
+
+> "Roulette does not display your profile until you choose to share it."
+
+**Never use:**
+
+> "Nobody can identify you."
+
+Faces, voices, backgrounds, conversation content, and recognition from the Deck can all
+identify someone. See §19 — this limitation must be disclosed *before* the user chooses
+hidden mode, not buried in a policy.
+
+---
+
+## 2. NAVIGATION AND REQUEST PLACEMENT
+
+### 2.1 Main navigation
+
+```text
+Deck       Chats       Roulette       Profile
+```
+
+**Rename the visible label only.** The internal `matches` tab key, the `['matches']` React
+Query key, the `/api/alignments` endpoint, the `matches` response field, the `matches`
+CSS classes, and the `matchalize_*` localStorage keys all stay as they are. Renaming them
+is not required for the visible change and would risk regressions across ~30 files.
+
+### 2.2 Inside Chats
+
+```text
+Chats
+[Conversations]  [Requests · 3]
+```
+
+- **Conversations** — accepted connections from both discovery experiences.
+- **Requests** — pending incoming requests. Each carries an origin label:
+  **"From Deck"** or **"From Roulette"**.
+- Source filters only if the list becomes hard to scan. Not essential for v1.
+- An incoming Roulette Align also surfaces **inline during the active call**.
+- All entry points refer to **one** underlying request — never duplicate copies.
+
+### 2.3 Badge behaviour
+
+| Badge | Counts |
+|---|---|
+| Conversations tab | Unread message counts |
+| Requests tab | Pending incoming request counts |
+
+- Accepting, declining, expiring, or blocking must update both counts consistently.
+- Pagination **must** let users reach past the first page.
+
+**[CONFIRMED] Two current bugs this plan fixes rather than inherits:**
+
+1. `NotificationDrawer.jsx:47-48` calls `GET /notifications` with no params and ignores
+   the returned `{total, page, totalPages, hasMore}`. The server defaults to `limit=20`
+   (`notifications.js:81`). **A user with >20 pending requests can never reach the rest.**
+2. The bell badge is incremented by socket (`Header.jsx:125-134`) but **never decremented**
+   on accept or dismiss; the refetch only fires when the drawer closes
+   (`Header.jsx:121-123`).
+
+Also note the two badges use **different caps** today — `9+` at `Header.jsx:167` and
+`99+` at `NavBar.jsx:254`. Unify on one cap.
+
+### 2.4 Why this arrangement changes
+
+**[CONFIRMED current state]** The Letterbox (`NotificationDrawer`, full-screen
+`fixed inset:0 z1000`) and the conversation list (`Matches.jsx`, a tab) are **separate
+surfaces**, and the requests bell renders **only on the Deck tab**
+(`Header.jsx:150`). Settings renders **only on the Profile tab** (`Header.jsx:151`).
+v2 deliberately collapses requests into Chats and leaves the bell as an optional
+shortcut to the same Requests section.
+
+---
+
+## 3. VERIFIED CODE BASELINE
+
+Everything below was read in source. This section exists so a future session does not have
+to re-derive it — and so no one designs against an assumption that isn't true.
+
+### 3.1 Navigation architecture
+
+| Fact | Evidence |
+|---|---|
+| **There is no router.** `react-router-dom` is installed with **zero imports** | `client/package.json:22`; author comments at `AppShell.jsx:118-120`, `utils/chrome.js:23-25`, `sw.js:152-154` |
+| Five screens via `useState`: `splash / auth / reverify / onboarding / home` | `App.jsx:18-30` |
+| Four tabs via `useState` inside `home`. `activeTab` defaults to `'discover'`, **never persisted** | `AppShell.jsx:51,76` |
+| **Tab switching fully unmounts the page** — `AnimatePresence mode="wait"` keyed on `activeTab` | `AppShell.jsx:266` (desktop), `:326` (mobile) |
+| **Browser Back closes nothing.** Only 3 `window.history` calls exist app-wide | `AppShell.jsx:208`; `AccountSuspendedScreen.jsx:112-113` |
+| That screen **traps** Back by re-pushing forever | `AccountSuspendedScreen.jsx:111-116` |
+| Responsive breakpoint is a single `resize` listener at **768px** — no `matchMedia`, no debounce. Crossing it remounts the tree | `utils/useIsDesktop.js:4-20` |
+
+### 3.2 The two facts that shape the call architecture
+
+| Fact | Evidence | Consequence |
+|---|---|---|
+| **Chat and Settings are flat SIBLINGS of the page stage, not nested inside it** | `AppShell.jsx:347` vs `:333` (mobile); `:281` vs `:273` (desktop) | ✅ Opening a chat overlay does **NOT** unmount the page beneath it. A live call can survive opening chat — *if* chat is opened from the same tab. |
+| **`Chat`'s own root claims the entire viewport unconditionally** — `position: fixed; inset: 0`, `zIndex: 50`, no width/height clamp | `Chat.jsx:1081` | ❌ Chat **cannot** be embedded in a smaller panel without a geometry change. It has no intrinsic way to be sized by a parent. |
+
+Chat unmounts on close: draft text, scroll position, and pagination are all destroyed;
+messages survive in the React Query cache (`App.jsx:105`, 2-min staleTime).
+
+### 3.3 Socket layer
+
+| Fact | Evidence |
+|---|---|
+| One socket file only — `server/socket/chat.js` (266 lines) | `server/socket/` |
+| Auth reads cookie `matchalize_jwt` first, then `handshake.auth.token`. Identity attaches to **`socket.user`**, *not* `socket.data` | `chat.js:31-37,42-47`; `admin.js:328` depends on this |
+| Socket auth loads the **full** User document with no projection, and does **not** enforce `lastLogoutAt` | `chat.js:43` vs `middleware/auth.js:86,103-106` |
+| Per-event suspension recheck uses a **60-second cache** | `chat.js:12,93-118` |
+| **There is ZERO socket rate limiting.** `express-rate-limit` is HTTP-only, mounted at `app.use('/api/')` | `index.js:374`; socket.io listens on `/socket.io/` |
+| Only bound on socket traffic is engine.io's 1 MB `maxHttpBufferSize` | library default |
+| **No adapter configured** — default in-memory `Adapter`. Multi-instance unsafe | `index.js:221-245` |
+| **Load-bearing payload guard.** Never destructure in a handler parameter list; a destructuring throw becomes an `uncaughtException` that kills the process | `chat.js:151-162`; `index.js:568-576` |
+| `user-typing` emits **`socket.user.name`** — the client-sent `userName` is discarded | `chat.js:169` vs `Chat.jsx:506` |
+
+### 3.4 Data model facts
+
+| Fact | Evidence |
+|---|---|
+| `Alignment` has **4 fields**: `pairKey`, `users`, `isActive`, `unlockedByInteractionId`. **No `origin`** | `server/models/Alignment.js` |
+| `pairKey` is **unique per unordered pair** — a Deck align and a Roulette align for the same two people map to the **same row** | `Alignment.js:5-10` |
+| ⚠️ **`Interaction` already has an `origin` field** with `enum: ['block','unmatch','pass']` | `Interaction.js:27-31` |
+| `Notification` enum is `['new_letter','priority_telegram','new_align']` but **only `new_align` is ever written**; the other two are marked retired | `Notification.js:17-23`; sole writer `discover.js:1629-1634` |
+| `Notification.interactionRef` is **required** | `Notification.js:26-31` |
+| **No transactions anywhere.** MongoDB M0 and the local standalone mongod don't support them | verified; `render.yaml:74-75`; `MONGODB_URI` comment in `server/.env` |
+| An existing **retry-on-conflict pattern** to reuse: `DECK_RACE_RETRIES = 2` + `isConcurrentDeckRace` | `discover.js:1488-1516` |
+| `showCollege` is the **only** identity field with a working server-side strip | `publicCard.js:64-69`; `discover.js:1676-1679` |
+| `name` and `photos` are on the `CARD_FIELDS` allowlist and **always sent** | `publicCard.js:14-18` |
+
+### 3.5 The accept path — the defect this design must branch around
+
+**[CONFIRMED]** `POST /api/notifications/:id/accept` (`notifications.js:112-272`) currently:
+
+1. Block check **first**, returning an indistinguishable 404 (`:144-146`)
+2. 410 `USER_UNAVAILABLE` if sender is suspended/deleted (`:149-152`)
+3. Records an `accept_letter` Interaction (`:155-175`)
+4. **Atomic** `Alignment` upsert on `pairKey` (`:177-193`)
+5. **Unconditionally creates an `opening_letter` Message** (`:195-235`), reading
+   `senderProfile.photos[idx]` (`:208-216`) and `p.question` / `p.answer` (`:217-223`)
+6. Clears the notification (`:237-238`)
+7. Socket `match-notification` + push (`:247-265`)
+
+**Step 5 is the leak.** Accepting a hidden Roulette request through this path would copy
+the hidden party's photo and prompt text into the chat — precisely what the feature exists
+to prevent. See §5.
+
+### 3.6 Identity leak map — 22 inline render sites, no shared component
+
+**[CONFIRMED] There is no shared avatar / user-chip / name-label component.** Every surface
+re-derives name and avatar inline. A temporary name introduced anywhere would not
+propagate — and conversely a real name re-renders independently in 22 places.
+
+**The four leaks that no UI work can fix:**
+
+| Leak | Evidence |
+|---|---|
+| **Push lock-screen title is the sender's real name** | `messages.js:238` — `title: sender?.name` |
+| **Typing indicator re-derives the name from the DB** | `socket/chat.js:169` |
+| **`profile-updated` broadcasts real name + photos to EVERY socket** | `users.js:408-417` — `toPublicCard(user)` |
+| **No server-side strip for `name`/`photos`** — only `showCollege` has one | `publicCard.js:64-69` |
+
+Additional name-embedding push call sites: `discover.js:1649`, `notifications.js:260`,
+`alignments.js:252`. (Only `report.js:142-145` is clean.)
+
+Other surfaces: `Chat.jsx:745` (header), `Chat.jsx:196` (profile sheet),
+`NotificationDrawer.jsx:117,337`, `Matches.jsx:304`, and critically
+**`Matches.jsx:144` — the Chats search filters on the real name**, so a masked row is
+still findable by typing its real name. `alt` / `aria-label` attributes carry names to
+screen readers at `ProfileCard.jsx:1071`, `Matches.jsx:291`, `Chat.jsx:735,189`,
+`NotificationDrawer.jsx:153`.
+
+`_id` is **never displayed to any user** — only used as a React key, comparison, or URL
+segment.
+
+### 3.7 Three different partner-object shapes reach the same `<Chat>` component
+
+| Entry path | Object shape | `age` | `pronouns` | `branch` |
+|---|---|---|---|---|
+| Chats row | alignments `$lookup` (`alignments.js:121`) | fresh (recomputed from `dob`) | ❌ not sent | ❌ not sent |
+| Accept in Requests | notification populate (`notifications.js:93`) | **stale** — stored once at onboarding | ✅ sent | ❌ not sent |
+| Deck match modal | `targetProfile` (`discover.js:1664-1684`) | ❌ **not sent at all** | ✅ sent | ❌ not sent |
+
+Known rendering consequences: `branch` falls back to the literal `'General'`
+(`Chat.jsx:199`); `intent` falls back to **three fabricated chips**
+`['Long-term','Connection','Growth']` (`Chat.jsx:222`); `bio` is **sent but never
+rendered** anywhere in `Chat.jsx`.
+
+### 3.8 Deck eligibility — reusable, with one important omission
+
+`discover.js:254-276` defines exactly seven conditions, **inline and unexported**:
+
+```js
+{ isOnboarded: true, isVerified: true,
+  suspended: {$ne:true}, shadowbannedAt: null, isDeleted: {$ne:true} }
+// + conditional: gender $in interestedIn
+// + conditional: mutual interestedIn $or
+```
+
+**There is no `collegeCode` filter.** The Deck is platform-wide by deliberate decision
+(`discover.js:245-253`). `?campusOnly` was removed on purpose (`User.js:352-365`).
+
+⚠️ **`baseFilter` must be extracted to a shared module before Roulette can use it.**
+Otherwise a shadowbanned user could pass Roulette's gate while failing the Deck's.
+Proposed: `server/utils/eligibility.js`, used by both. Acceptance gate: the Deck response
+must be byte-identical before and after extraction.
+
+Also note the Deck **ignores live presence** — `_recency` uses the stale `lastActive`
+timestamp (`:308-336`). Roulette must invert this: live presence is the whole point.
+
+### 3.9 Deployment
+
+| Fact | Value | Evidence |
+|---|---|---|
+| Plan | **`free`** — 15-min spin-down | `render.yaml:19` |
+| Instances | 1 | no `numInstances` |
+| Disk | none | no `disk:` key |
+| WebSockets | supported on all Render tiers including free | Render pricing page |
+| Cheapest always-on | `0.5c-512mb` = **$7/mo** | verified 2026-10-16 |
+
+⚠️ **The free plan will kill live calls.** Roulette needs always-on sockets. This is a
+Stage 0 prerequisite.
+
+⚠️ **Upgrading compute ≠ adding instances.** Moving to `starter` keeps one process and
+breaks nothing. `numInstances: 2+` breaks presence, deck locks, real-time message
+delivery, and every rate limiter simultaneously — there is no Redis adapter.
+
+---
+
+## 4. SCHEMA PROPOSAL
+
+### 4.1 Naming collision — resolve first
+
+`Interaction.origin` already exists with `enum: ['block','unmatch','pass']`
+(`Interaction.js:27-31`). Putting `origin` on `Alignment` meaning `'deck'|'roulette'`
+creates two unrelated fields with the same name.
+
+> **Decision: use `source` everywhere. Never `origin`.**
+
+### 4.2 `Alignment` — additions only
+
+```js
+// ① INITIAL CONNECTION SOURCE — provenance only. NEVER authorizes access.
+source: { type: String, enum: ['deck','roulette'], default: 'deck' }
+
+// ② DIRECTIONAL PROFILE-ACCESS PERMISSIONS — the authorization truth.
+//    Absence of a grant = no access. Fail-closed by construction.
+profileGrants: [{
+  viewerId:  { type: ObjectId, ref:'User', required:true },  // who may look
+  subjectId: { type: ObjectId, ref:'User', required:true },  // at whose profile
+  source:    { type: String,
+               enum: ['legacy','deck','roulette_visible','roulette_reveal'],
+               required:true },
+  grantedAt: { type: Date, default: Date.now }
+}]
+
+// ③ STABLE CONVERSATION NICKNAME — copied once at creation, never mutated.
+conversationAliases: [{
+  userId: { type: ObjectId, ref:'User', required:true },  // this person
+  alias:  { type: String, trim:true, maxlength:24 }      // as the OTHER party sees them
+}]
+
+// ④ REVEAL-REQUEST STATE — single-document atomic state machine.
+revealRequest: {
+  state:       { type: String,
+                 enum: ['none','pending','accepted','declined','expired'],
+                 default: 'none' },
+  requestedBy: { type: ObjectId, ref:'User' },
+  requestedAt: Date,
+  resolvedAt:  Date,
+  consents:    [{ type: ObjectId, ref:'User' }]   // accumulated atomically
+}
+```
+
+**Index to add:** `{ 'profileGrants.viewerId': 1, 'profileGrants.subjectId': 1 }`
+
+### 4.3 `Notification` — additions only
+
+```js
+// ⑤ INDIVIDUAL REQUEST SOURCE + call-scoped expiry
+source:        { type: String, enum: ['deck','roulette'], default: 'deck' },
+callSessionId: { type: String, default: null },   // roulette only — enables expiry sweep
+expiresAt:     { type: Date,   default: null },   // null = never expires (Deck)
+```
+
+`type: 'new_align'` is reused for both origins. `interactionRef` stays required.
+
+### 4.4 `Interaction` — additions only
+
+```js
+source: { type: String, enum: ['deck','roulette'], default: 'deck' }
+```
+
+### 4.5 The uniform resolver — one rule, no special cases
+
+```
+canViewProfile(viewerId, alignmentId):
+    partner := the other user in alignment.users
+    return exists grant { viewerId, subjectId: partner }     // ← the ONLY rule
+
+displayNameFor(viewerId, alignmentId):
+    1. partner's alias in conversationAliases  → use it
+    2. partner has a grant for viewer          → partner's real name
+    3. otherwise                               → neutral generated label (never real name)
+```
+
+| Case | Alias? | Grant? | Result |
+|---|---|---|---|
+| Legacy Deck connection | no | yes (backfilled) | **real name** — behaviour unchanged |
+| New Deck connection | no | yes | **real name** — behaviour unchanged |
+| Hidden Roulette, pre-reveal | yes | no | **call name** |
+| Revealed Roulette | yes | yes | **call name** in the list; real name in the profile sheet |
+| Any row with a missing field | — | — | **no access, neutral label** — fail-closed |
+
+**Why backfill rather than a legacy special case:** a special case keyed on
+`source == null` becomes an accidental access grant the instant a new row is written
+without `source`. A backfilled grant table has no such hole. This satisfies "missing
+fields must not accidentally grant access" **structurally**, not by convention.
+
+### 4.6 Existing-data defaults
+
+`server/scripts/` already holds 12 migration scripts — this follows the house pattern.
+
+| Field | Existing rows | New hidden Roulette rows |
+|---|---|---|
+| `Alignment.source` | `'deck'` | `'roulette'` |
+| `Alignment.profileGrants` | **2 grants backfilled**, `source:'legacy'`, one per direction | **empty** |
+| `Alignment.conversationAliases` | **absent** — real name shown, unchanged | **both parties' call names**, copied once |
+| `Alignment.revealRequest.state` | `'none'` | `'none'` |
+| `Notification.source` | `'deck'` | `'roulette'` |
+| `Notification.expiresAt` | `null` | set to the call-end deadline |
+| `Interaction.source` | `'deck'` | `'roulette'` |
+
+**Rollback:** the migration is additive — `unset` the new fields.
+
+### 4.7 Atomicity without transactions
+
+⚠️ MongoDB M0 and the local standalone `mongod` do **not** support multi-document
+transactions. Verified: none are used anywhere today.
+
+Every transition must therefore be a **single-document atomic `findOneAndUpdate`** whose
+filter includes the expected prior state. On no match → re-read and retry, bounded.
+
+This is already an established pattern: `discover.js:1488-1516`. **Reuse it rather than
+inventing a second mechanism.**
+
+---
+
+## 5. ACCEPT BRANCHING — Roulette must not copy profile content into messages
+
+| `Notification.source` | Alignment creation | Opening letter | Push |
+|---|---|---|---|
+| `deck` | existing upsert (`:177-193`) | **existing behaviour** (`:195-235`) | unchanged |
+| `roulette` | same upsert + `source:'roulette'` + `conversationAliases` + **no grants** | **NONE** | must not embed a name |
+
+The accept endpoint returns `{ success, alignmentId, origin }` so the client renders the
+correct disclosure.
+
+**[CONFIRMED] also fix while here:** the 410 `USER_UNAVAILABLE` path is currently a
+**silent no-op** — `NotificationDrawer.jsx:70-72` only `console.error`s. The client
+pre-disables Accept when the sender is suspended/deleted (`:181`), but a suspension that
+lands after the drawer loaded produces a dead button with no feedback.
+
+---
+
+## 6. PRIVACY ENFORCEMENT LEDGER
+
+Incremental enforcement: each surface is fixed **before the relevant data can reach a
+partner**. Stages 2–6 never touch the existing chat surfaces, because no hidden connection
+can exist there until Stage 7.
+
+| # | Surface | Leaks | Enforced by |
+|---|---|---|---|
+| 1 | New roulette signaling events | — | Stage 1 contract → Stage 3 code |
+| 2 | `NotificationDrawer` row (`:117-118`) | `sender.name`, `photos[0]` | **Stage 8** |
+| 3 | `GET /api/alignments` payload (`:121`) | `name`, `photos`, `interestedIn`, `intent` | **Stage 8** |
+| 4 | `Matches.jsx:304` row name | real name | **Stage 8** |
+| 5 | `Matches.jsx:144` search filter | **real-name correlation leak** | **Stage 8** |
+| 6 | `Chat.jsx:745` header | real name | **Stage 8** |
+| 7 | `ChatProfileView` (`Chat.jsx:196`) | full profile, unguarded | **Stage 8** |
+| 8 | `socket/chat.js:169` typing | name from `socket.user` | **Stage 8** |
+| 9 | Push `messages.js:238` | **name as lock-screen TITLE** | **Stage 8** |
+| 10 | Push `notifications.js:260` | name in body | **Stage 8** |
+| 11 | `profile-updated` broadcast (`users.js:408-417`) | name + photos to **every** socket | **Stage 8** |
+| 12 | Avatar `alt` texts (4 sites) | name to screen readers | **Stage 8** |
+| 13 | Accept → opening letter | photo + prompt text | **Stage 7** |
+
+**Rows 2–13 are Stage 8's acceptance gate.** A hidden connection cannot be created in the
+shared Chats list until they are all contract-compliant.
+
+---
+
+## 7. ALIGN REQUEST LIFECYCLE
+
+### 7.1 Sending
+
+```text
+Send Align?
+
+If they accept, you can keep chatting.
+Your hidden profile will stay hidden.
+
+[Send Align]   [Cancel]
+```
+
+Adapt the wording when the sender is already using a visible profile.
+
+### 7.2 Receiving
+
+```text
+Moonwalker wants to stay connected.
+[Accept]   [Not now]
+```
+
+On acceptance:
+- Creates or retrieves **one** saved connection
+- Makes its chat available
+- **Does not reveal a hidden profile**
+- **Does not end the video**
+- Shows "You're aligned. Your chat is ready."
+
+### 7.3 Precedence rules — APPROVED
+
+> **A saved connection survives only if the server completes mutual acceptance before the
+> session closes. A still-pending request expires when the call closes. Late accepts are
+> rejected as expired. Duplicate or simultaneous accepts must return one connection/chat.
+> Use server-owned state transitions and test the races.**
+
+| Rule | Implementation |
+|---|---|
+| Survival | Accept transaction must commit **before** session close |
+| Expiry | On call end, mark still-pending requests cleared + `expiresAt` passed |
+| Late accept | Accept endpoint checks `expiresAt`; past → `EXPIRED`, no Alignment created |
+| Idempotency | Accept filters on `isCleared:false`; a second call finds nothing and returns the **same** `alignmentId` rather than erroring |
+| Race resolution | Single atomic `findOneAndUpdate` on `pairKey` (`notifications.js:177-193` already does this) |
+
+### 7.4 First-version request policy
+
+- One active request per pair per current conversation
+- No repeat requests after a decline in that conversation
+- **Pending requests expire when the call ends**
+- Accepted connections persist
+- Simultaneous outgoing requests **count as mutual acceptance**, provided both send
+  actions included the disclosure
+- The server resolves accept-versus-leave races
+- Expired or declined requests **cannot** unlock chat or identity
+- No new Align request after someone skips
+
+The shared Requests section may show a pending live request, but its state must update
+**immediately** when the call ends.
+
+**Missed connections are out of scope for v1.**
+
+---
+
+## 8. REVEAL STATE MACHINE
+
+### 8.1 Before reveal
+
+The saved conversation shows:
+- Stable conversation nickname
+- Generic avatar
+- "Profile hidden."
+- Messages
+- A separate **"Share profiles"** action
+
+### 8.2 Transitions (all single-document atomic)
+
+```text
+        A requests
+none ──────────────► pending   consents=[A]
+  ▲                     │
+  │                     │ B accepts (or A+B request simultaneously)
+  │                     ▼
+  │                  accepted   consents=[A,B]  → create 2 grants atomically
+  │                     │
+  │                     ├──► declined   (B declines)
+  │                     │       └─► new request allowed once; no repeat pressure
+  │                     │
+  │                     └──► expired    (7 days)  → same
+```
+
+| Transition | Atomic predicate | Result |
+|---|---|---|
+| request (none) | `revealRequest.state ∈ {none, declined, expired}` | `pending`, `consents=[me]` |
+| request (pending, other) | `state==='pending' && requestedBy != me` | **immediately** `accepted`, `consents=[both]` |
+| accept | `state==='pending' && !consents.includes(me)` | push me to consents; if `consents` has both → `accepted` + 2 grants |
+| decline | `state==='pending'` | `declined`, `resolvedAt` |
+
+On acceptance:
+- Update the connection's reveal permissions
+- Show approved profile names/photos
+- Allow opening the public profile
+- Keep the small historical nickname label in the list
+
+On rejection or expiry:
+- Continue the hidden-profile chat
+- **Do not** repeatedly pressure the recipient
+- **Do not** automatically close the connection
+
+**For visible/hidden connections:** explain that the already-visible profile has already
+been shared; the remaining hidden participant must still explicitly consent.
+
+### 8.3 Shared fields
+
+Reveal only approved public-profile fields. **Never** email, full DOB, precise location,
+security information, or moderation history.
+
+Unmatching or blocking removes access **through the connection**, but cannot erase what
+someone has already seen or saved elsewhere. State this honestly in the UI.
+
+---
+
+## 9. CROSS-ORIGIN INTERACTIONS
+
+### 9.1 Existing connections meeting in Roulette — APPROVED
+
+| Rule | Detail |
+|---|---|
+| An existing active Deck connection **may** meet in Roulette if otherwise eligible | |
+| Do **not** duplicate its chat | `pairKey` is unique per pair, so this is automatic |
+| Do **not** send a new Align request | |
+| **Preserve existing profile permissions** — hidden mode does **not** revoke previously granted access | |
+| Show **"You're already connected"** with **Open Chat** | |
+| **Exclude previously unmatched pairs** pending a separate reconnection policy | |
+| **Blocked pairs must never be matched** | Absolute, checked at pair time |
+
+### 9.2 Hidden Roulette contact later encountered through Deck
+
+`pairKey` is unique per unordered pair, so this is the **same Alignment row**. `source`
+stays `'roulette'` (provenance, immutable), and `profileGrants` is the authorization truth
+— which is exactly why §4.5's resolver has no `source` special case.
+
+**Policy: hidden mode is scoped to Roulette conversations.** If the same person appears in
+your Deck later, you see their normal public profile — that is how Deck works, and it is
+unrelated to the connection. **This must be disclosed before the user picks hidden mode**
+(§19).
+
+**What we do NOT do:** silently upgrade permissions, or silently reveal identity through a
+second surface.
+
+**Account-ID correlation limitation, stated plainly:** the server can trivially correlate a
+hidden session to a user record — that is unavoidable and not a defect. What this design
+prevents is **the partner** learning the identity. If someone screenshots a video and
+recognises you from the Deck, **no system prevents that, and we must not claim it does.**
+
+---
+
+## 10. NEARBY-FIRST PARTNER SELECTION
+
+### 10.1 Candidate pool
+
+Only consider students who:
+
+- Explicitly pressed Start
+- Are **currently connected and ready**
+- Meet eligibility requirements (§3.8, extracted to a shared module)
+- Are **not already assigned** to another call
+- Are **not blocked in either direction**
+- Satisfy the agreed intention/preferences
+- Fall within **both** participants' accepted search scope
+
+> **Never make an online Deck user callable unless they joined Roulette.**
+
+### 10.2 Location source
+
+- Use recent, consented **coarse** location where available — the existing helpers already
+  round to 2 dp (~1.1 km) before storage (`geo.js:96-103`)
+- Otherwise offer **college-area matching**, described honestly — *not* as "your current
+  location"
+- **Never** display coordinates or precise distances. The Deck already returns a band
+  label only (`geo.js:77-82`); reuse that
+
+### 10.3 Selection order
+
+Within the eligible nearby pool:
+
+1. Give meaningful priority to **waiting time**
+2. Prefer **proximity** among reasonably comparable candidates
+3. **Randomize** selection
+4. Avoid **recently met** partners where alternatives exist
+
+Do not always choose the closest person, and do not repeatedly deprioritize someone because
+their campus is farther away.
+
+*Rationale:* strict FIFO makes one user wait for everyone in turn. Instead, take the
+longest-waiting ~30% as the candidate band, then choose randomly within it using distance
+and repeat-penalty.
+
+### 10.4 No nearby partner
+
+```text
+Nobody compatible nearby right now.
+
+[Keep waiting]   [Search farther]   [Leave]
+```
+
+**No silent nationwide expansion.** The initial distance and expansion bands are
+configurable **test settings**, not established ideal distances.
+
+### 10.5 Tiny testing pool
+
+- **Blocks are never relaxed.**
+- Recent-partner avoidance is **not** a permanent block.
+- If recent partners are the only options, explicitly offer repeat matching.
+- **Do not hardcode a 24-hour exclusion** that makes two-account testing impossible.
+
+### 10.6 Intention: Social / Dating / Either
+
+Use **one** matching mechanism with compatibility rules, not three isolated queues.
+
+| Combination | Behaviour |
+|---|---|
+| Social + Social | Social conversation |
+| Social + Either | Social conversation |
+| Dating + Dating | Allowed only if mutual dating preferences fit |
+| Dating + Either | Allowed only if mutual dating preferences fit |
+| Social + Dating-only | **Do not pair** |
+| Either + Either | Social connection possible; romantic compatibility checked separately |
+
+- For **Social**, explain there is no assumption of romantic interest.
+- For **Dating**, use explicit reciprocal preferences. **Do not** infer compatibility from
+  gender alone or from the word "Either."
+- **Do not expose** someone's private preference settings to their partner.
+- Changes to intention take effect on the **next search**, never mid-call.
+
+⚠️ **[CONFIRMED]** `interestedIn` and `intent` are **currently in the alignments payload**
+(`alignments.js:121`) — they already reach the client. They must be **stripped**, not just
+hidden in the UI.
+
+---
+
+## 11. CALL LIFECYCLE
+
+### 11.1 Required states
+
+```text
+Idle → Preview → Searching → Pairing → Connecting
+                                         ↓
+                                     Connected
+                                         ↓
+                            Ended → Ready / Search again
+```
+
+Plus recovery states for: **permission denial**, **connection failure**, **temporary
+interruption**, **already connected**, **capacity reached**.
+
+### 11.2 Call ownership
+
+> **Keep call state outside disposable tab/page components.**
+
+**[CONFIRMED reason]** tab changes unmount pages (`AppShell.jsx:266,326`) while the Chat
+overlay is a sibling that leaves the underlying page mounted (`AppShell.jsx:347` vs `:333`).
+
+So call state must live **above** `renderPage()` — alongside `activeChat` and
+`settingsOpen` in `AppShell`, or in a provider wrapping it. **Not** inside the page
+component.
+
+### 11.3 Required safeguards
+
+| Safeguard | Note |
+|---|---|
+| One active Roulette session per account | |
+| Authorized call IDs and signaling | Server-generated sessionId; room membership server-granted only |
+| **Socket-event validation and rate limits from Stage 3** | ⚠️ **none exist today** |
+| Atomic pairing — nobody assigned twice | Compare-and-set on the waiting entry |
+| Late signals from old calls rejected | Every event carries `sessionId` |
+| Camera/microphone cleanup | `track.stop()` on unmount, `pagehide`, tab close, skip, leave |
+| Disconnect, refresh, tab-close handling | Re-queue partner with **original** wait start preserved |
+| Block/ban checks at entry **and** at pairing | ⚠️ the 60 s socket suspension cache (`chat.js:12`) means a fresh check is needed at pair time |
+| In-call report / block / leave | |
+| Post-call reporting **without** granting contact or profile access | |
+
+### 11.4 Next behaviour
+
+- **Next** ends the current call and searches again **for the person pressing it**.
+- The other person returns to a clear **"Conversation ended"** state with **"Find next"**.
+- Automatic next-search can be opted into later.
+- **Reporting or blocking never automatically reconnects someone to the reported person.**
+
+### 11.5 Navigation during a call (v1)
+
+- Opening the current call's chat **does not end the call**.
+- Attempting another main tab prompts **"Leave this call?"** → confirm ends the call before
+  navigating; cancel preserves it.
+- **Back closes an open panel first**, then offers to leave the call.
+  ⚠️ **[CONFIRMED] browser Back currently does nothing app-wide** — this must be built.
+- **Do not promise background video** while the browser or phone is locked. On iOS
+  backgrounding **drops the call** — no fix.
+
+---
+
+## 12. VIDEO ARCHITECTURE AND QUALITY
+
+### 12.1 Architecture
+
+```text
+Your backend:
+  eligibility + queue + pairing + signaling + session rules
+
+Media:
+  A ↔ B directly where possible          (free)
+  or
+  A ↔ managed TURN ↔ B                  ($0.05/GB after 1,000 GB free)
+```
+
+**No SFU.** Cloudflare's own documentation: *"If your use case is one-to-one
+communication… TURN by itself is usually sufficient. Adding an SFU is unnecessary
+complexity for that topology."* (verified 2026-07-14)
+
+**Why a relay does not give moderation.** WebRTC media is DTLS-encrypted end to end.
+Cloudflare: *"Cloudflare cannot access the contents of the media being relayed… only
+relays encrypted packets and cannot decrypt or inspect the media content."* **Buying TURN
+does not buy moderation.**
+
+### 12.2 Cloudflare TURN — verified 2026-10-16
+
+| Protocol | Address | Ports |
+|---|---|---|
+| STUN/UDP | `stun.cloudflare.com` | 3478 |
+| TURN/UDP | `turn.cloudflare.com` | 3478, 443 |
+| TURN/TCP | `turn.cloudflare.com` | 3478, 80 |
+| TURN/TLS | `turn.cloudflare.com` | 5349, 443 |
+
+**Credential generation — server-side only.**
+
+```
+POST https://rtc.live.cloudflare.com/v1/turn/keys/{TURN_KEY_ID}/credentials/generate-ice-servers
+Authorization: Bearer {TURN_KEY_API_TOKEN}
+Content-Type: application/json
+
+{"ttl": 86400}
+```
+
+Returns **201** with a ready-to-use `iceServers` array, passed straight to the browser.
+
+| Requirement | Detail |
+|---|---|
+| Provider API secret | Server-side env only. **Never** `VITE_*`, never in a client bundle |
+| Credential TTL | **Short-lived.** Max 48 h; on expiry Cloudflare **stops billing immediately**, then disconnects. Refresh via `setConfiguration()` |
+| Issuance endpoint | Behind `protect` + its own rate limiter |
+| Revocation | `POST …/credentials/{USERNAME}/revoke` → 204, stops billing instantly |
+| Custom identifiers | Tag each TURN username with userId → per-user accounting + abuse detection |
+
+**Constraints that affect design:**
+
+| Constraint | Impact |
+|---|---|
+| Max TTL 48 h | Long sessions need credential refresh |
+| ">50% of issued credentials should be used" | Over-issuing may be throttled |
+| **IPv6: relay addresses are IPv4-only** | An IPv6-only peer can only achieve **one-sided** relay. Expected on some mobile networks |
+| No RFC6062 TCP relay | A browser blocking UDP entirely cannot connect via TURN |
+| Per-allocation limits: >5 new IPs/sec, >5–10 kpps, >50–100 Mbps | **Per call, not account-wide.** No single call can abuse |
+| ICE restart | Explicitly recommended for maintenance resilience |
+
+**Do not create an account or enable chargeable usage without explicit approval.**
+
+### 12.3 Peer IP exposure
+
+In a direct P2P call, WebRTC ICE typically reveals a host or STUN-reflexive IP to the peer
+unless a TURN-only policy is enforced. **The current architecture addresses this nowhere**,
+because there is no architecture yet. If peer-IP privacy matters, TURN-only for media is
+the standard answer — at full bandwidth cost (no free direct path).
+
+### 12.4 Managed vs self-hosted coturn
+
+| | Cloudflare managed | Self-hosted coturn |
+|---|---|---|
+| Setup | Zero infrastructure | Provision VPS, ports, TLS, firewall |
+| Edge latency | Anycast, ~300+ cities | Single region |
+| Ops burden | None | Patches, abuse, monitoring |
+| Cost | $0.05/GB after 1 TB free | VPS + bandwidth, region-dependent |
+| Best when | You don't want to run infrastructure | Flat predictable cost at large scale |
+
+**Recommendation: Cloudflare managed for the pilot.** One founder, free-tier
+infrastructure, zero measurement history. Revisit around ~5M relayed minutes/month.
+
+### 12.5 Quality settings to test
+
+| Setting | Value | Note |
+|---|---|---|
+| Video ideal | **480p** (640×480) | |
+| Video max | **720p** (1280×720) | |
+| Frame rate | 24 fps ideal, 30 max | 24 is plenty for faces |
+| Video bitrate ceiling | **800 kbps** @480p, **1.2 Mbps** @720p | via `maxBitrate` — resolution ≠ bitrate |
+| Audio | Opus, **mono**, 32 kbps, `useinbandfec` | Stereo is wasted for speech |
+| Adaptive ladder | drop to 360p on loss; audio-only if sustained loss >5% | hysteresis to avoid oscillation |
+| Audio-only fallback | **A feature, not a failure.** Show a clear notice | |
+
+> **No automatic quality downgrade solely because TURN was selected.** Use measured
+> conditions and an explicitly approved cost policy.
+
+**Do not present a fixed "cost per resolution" as measured fact.** Quality, duration,
+one-/two-sided TURN, audio, and overhead assumptions must be stated separately. No call has
+ever been placed, so **no bandwidth figure in this document is measured.**
+
+Illustrative arithmetic only — **GB per relayed call-minute ≈ bitrate_Mbps × 0.9 ÷ 60**,
+with the free 1,000 GB/month allowance applying before $0.05/GB overage. Two people
+talking 15 minutes is **15 call-minutes**, not 30 — do not double-count participant-hours.
+
+---
+
+## 13. TEST-SETTINGS TABLE
+
+**These are test settings. None is a commercial allowance or proven capacity.**
+
+> **Roulette stays disabled until every required value is explicitly configured.**
+
+| Setting | Env var | Test default | Rationale |
+|---|---|---|---|
+| Feature switch | `ROULETTE_ENABLED` | **`false`** | Must be explicitly `true` |
+| Test account allowlist | `ROULETTE_TEST_ACCOUNTS` | **empty = nobody may queue** | Prevents a real account reaching a live queue |
+| Max concurrent calls | `ROULETTE_MAX_CONCURRENT` | **5** | Founder-specified |
+| Max queue size | `ROULETTE_MAX_QUEUE` | 25 | Bounds memory; overflow gets "busy" |
+| Max wait | `ROULETTE_MAX_WAIT_SEC` | 300 | Then offer leave |
+| Connection timeout | `ROULETTE_CONNECT_TIMEOUT_MS` | 20000 | |
+| Pairing-offer validity | `ROULETTE_PAIR_TIMEOUT_MS` | 45000 | |
+| Long-call policy | `ROULETTE_TEST_CALL_CEILING_MS` | **7200000 (2 h)** | **Runaway guard only**, deliberately far above any plausible product cap. A separate 30-min soak test proves no leak or stall |
+| TURN credential TTL | `ROULETTE_TURN_TTL_SEC` | 3600 | Well under Cloudflare's 48 h max |
+| Credential issuance | `ROULETTE_ICE_PER_HOUR` | 10 | Per user. Farm defence |
+| Emergency disable | `ROULETTE_ENABLED=false` | — | Refuses new pairs, emits `call:terminated`, revokes TURN credentials |
+
+### 13.1 Honest limits of the kill switch
+
+- A **billing alert is not a spending cap.** Real protection is the concurrency cap +
+  duration ceiling + admission control.
+- **Stopping new pairings does not stop cost on existing calls.** Media already flowing
+  continues until both sides stop.
+- Revoking TURN credentials stops egress billing **immediately** — but the call dies.
+- ⚠️ **A signaling command cannot guarantee termination of a modified client's direct media
+  connection.** With P2P, the server cannot force a peer to stop sending. This is inherent
+  to peer-to-peer media and must be described accurately, not papered over.
+
+---
+
+## 14. MODERATION
+
+- Reports enter the existing review workflow.
+- Preserve reporting context **without revealing profiles** to the other participant.
+- **Review how the existing report-count escalation interacts with Roulette.**
+  ⚠️ **[CONFIRMED] current behaviour: 3 reports → shadowban, 5 → suspension, with no human
+  review** (`report.js:65-82`). **Do not introduce permanent sanctions solely from an
+  unreviewed threshold without an approved policy.**
+- ⚠️ **[CONFIRMED] the QA harness deliberately seeds one persona with `shadowbannedAt` and
+  `contentFrozen: true`** (`seedSociety.mjs:169-172`) — automated shadowbans already appear
+  in test data.
+- **If safety controls fail, disable Roulette — not the controls.**
+
+**No recording, face recognition, content uploads, or sampled-frame submission is
+approved.** Neither is anything that resembles them by implication.
+
+---
+
+## 15. STAGED PLAN
+
+| Stage | Build | Gate — must be **proven**, not asserted |
+|---|---|---|
+| **0** | Baseline: commit current work, regenerate dumps, record test-settings table. **Upgrade Render to always-on** | CI green; `ROULETTE_ENABLED=false`; no prod/test mixing |
+| **1** | **Schema + privacy contract + resolver + migration script** | Resolver unit tests pass; backfill reversible; **no code path reaches a partner yet** |
+| **2** | Camera preview, permission denial, track cleanup | Denial handled; `track.stop()` verified on unmount, `pagehide`, tab close |
+| **3** | Authorized two-device call, **manual pairing**, STUN only | Only paired users exchange signaling; **malformed socket events do not crash the process** |
+| **4** | TURN fallback + route measurement | Direct / forced-relay / restrictive-network all classified; secret server-side; credential endpoint auth'd + rate-limited |
+| **5** | Nearby-compatible queue | All §16 queue tests pass |
+| **6** | Skip / recovery / safety | No orphaned sessions; report/block ends the call; camera cleanup on every exit path |
+| **7** | **Roulette Align + accept branching** | No opening letter for roulette source; expiry / decline / simultaneous-accept races pass |
+| **8** | **Unified Chats/Requests + embedded panel** | **Ledger rows 2–13 all compliant**; one inbox; call survives panel; Deck flows unregressed |
+| **9** | Mutual profile reveal | No reveal before consent; asymmetric matrix correct; every identity surface updates |
+| **10** | Device / load / private pilot | Measured reliability, wait time, relay %, capacity |
+
+**Stage 1 scope clarification:** Stage 1 means *define the privacy contract, schema, and
+tests first.* It does **not** mean finishing a sweeping rewrite of all UI components before
+testing a camera preview. Privacy changes are implemented **incrementally, before the
+relevant data can reach a partner** — see §6.
+
+**Every stage:**
+- Keep the feature behind a flag
+- Use isolated testing data
+- Report tests **actually run**
+- Keep a rollback path
+- **Do not silently alter Deck behaviour**
+- **Do not proceed past a gate with failures outstanding**
+
+**Must not regress:** profile discovery, matching, messaging, login, reporting, blocking.
+
+### 15.1 Files likely touched
+
+| Stage | Server | Client |
+|---|---|---|
+| 1 | `models/Alignment.js`, `models/Notification.js`, `models/Interaction.js`, `utils/eligibility.js`, `utils/partnerView.js`, `scripts/migrate-roulette-source.mjs`, `tests/` | — |
+| 2–4 | `socket/roulette.js`, `routes/roulette.js`, `utils/cloudflareTurn.js` | `pages/Roulette.jsx`, `utils/webrtc.js`, `utils/callState.jsx` |
+| 5–6 | `socket/rouletteQueue.js` | `components/Roulette*.jsx` |
+| 7–9 | `routes/notifications.js`, `routes/alignments.js`, `socket/chat.js`, `utils/push.js`, `routes/users.js` | `pages/Matches.jsx`, `components/NotificationDrawer.jsx`, `pages/Chat.jsx`, `components/AppShell.jsx` |
+
+---
+
+## 16. ACCEPTANCE TESTS
+
+### 16.1 Race tests
+
+| ID | Setup | Action | Assertion |
+|---|---|---|---|
+| **R1** | A,B paired | Both send Align; both accept in the same tick | **Exactly 1** Alignment, **1** chat, **same** `alignmentId`; zero duplicate grants |
+| **R2** | A sends Align | Call ends, then B accepts 1 s later | Rejected `EXPIRED`; **no** Alignment created |
+| **R3** | A sends Align | B accepts and call closes simultaneously | Accept either commits before close (**survives**) or after (**expires**). Never both, never neither |
+| **R4** | Not paired | A sends Align twice | One request row; second returns the same `notificationId` |
+| **R5** | Hidden → revealed | Both send reveal simultaneously | Single `accepted` state; **exactly 2** grants, created once |
+| **R6** | Reveal declined | Same person requests reveal again in the same connection | Rejected — no repeat pressure |
+
+### 16.2 Queue tests
+
+| ID | Setup | Action | Assertion |
+|---|---|---|---|
+| **Q1** | A in queue | A double-taps Start | One queue entry, one session, one partner |
+| **Q2** | A,B compatible | Match runs | Neither assigned twice |
+| **Q3** | A blocked by B | Both wait | **Never paired** — checked at pair time, not just queue time |
+| **Q4** | Small pool | Only recent partners available | Explicit "meet X again?" offered; **not** a silent hard block |
+| **Q5** | No compatible partner | Wait | "Nobody compatible nearby right now" + 3 options; **no** automatic expansion |
+| **Q6** | A skips B | B's session ends | "Conversation ended · Find next"; **no** new Align to A |
+| **Q7** | A unmatches B | Both later in Roulette | **Never paired** |
+| **Q8** | A,B already connected | Both in Roulette | Allowed; **no duplicate**, **no new Align**, "You're already connected · Open Chat"; existing grants preserved |
+
+### 16.3 Privacy contract tests
+
+| ID | Setup | Action | Assertion |
+|---|---|---|---|
+| **P1** | Hidden A,B paired | Inspect every partner-facing payload | **Zero** occurrences of A's real `name`, `photos[]`, `college`, `email`, `dob` |
+| **P2** | Hidden connection | A opens chat | Header shows **call name**; profile control **absent**, not merely disabled |
+| **P3** | Hidden connection | A types | Remote receives **no** name in the typing event |
+| **P4** | Hidden connection, B offline | Send message | Push **title and body** contain no real name |
+| **P5** | Hidden connection | A types B's real name in Chats search | **No result** |
+| **P6** | Hidden connection | Any profile-update save | `profile-updated` payload contains no real identity for a hidden partner |
+| **P7** | Hidden request accepted | Inspect chat messages | **Zero** opening-letter rows; no copied photo/prompt text |
+| **P8** | A visible, B hidden | Each views the other | A's profile reachable by B ✅; **A cannot** view B ✅ |
+| **P9** | Mutual reveal accepted | Both open profiles | Real name + photos appear; **2** grants exist; row label stays the call name |
+| **P10** | Screen-reader sweep | Hidden connection | No `alt` / `aria-label` contains the real name |
+| **P11** | Blocked pair | Any payload path | Neither name reaches the other, **including** push |
+
+### 16.4 Call-safety tests
+
+| ID | Action | Assertion |
+|---|---|---|
+| **C1** | Malformed / empty payload on every roulette socket event | Server survives; handler returns silently (pattern `chat.js:151-162`) |
+| **C2** | Late ICE candidate from a prior `sessionId` | Rejected |
+| **C3** | Socket dies without clean disconnect | Reaped within the reaper interval; partner re-queued with **original** wait start |
+| **C4** | Refresh mid-call | Camera stops; partner returned to READY |
+| **C5** | Network change mid-call | ICE restart; recover or cleanly end |
+| **C6** | Report during call | Call ends immediately; reported user **never** re-paired |
+| **C7** | Block during call | Call ends immediately; removed from any queue |
+| **C8** | Open chat panel during call | **Call continues** — verified: Chat is a sibling (`AppShell.jsx:347` vs `:333`) |
+| **C9** | Switch tab during call | "Leave this call?" → confirm ends, cancel preserves |
+| **C10** | Back with panel open | Closes panel first, then offers to leave |
+
+### 16.5 How to verify
+
+| Type | Covers | How |
+|---|---|---|
+| Unit / integration | R1–R6, Q1–Q8, P1, P7, P8 | `node:test` files in `server/tests/` |
+| Two devices | Q2, Q8, C2–C10 | Two real phones/laptops |
+| Network | C5, TURN path | One device campus Wi-Fi, one on mobile data |
+| Payload inspection | P1, P3–P6, P10, P11 | `curl` + socket client + devtools Network tab |
+| Comprehension | §19 | Fresh testers |
+
+⚠️ **P1 and P3–P6 cannot be verified from the client alone** — they require inspecting raw
+server responses and push payloads.
+
+---
+
+## 17. UNRESOLVED DECISIONS
+
+| # | Question | Recommendation |
+|---|---|---|
+| **1** | **Hidden-Roulette pair later aligns on the Deck.** Same `pairKey` → same row. Does a Deck align grant access, overwriting hidden state? | **No silent upgrade.** Keep `source` immutable; require the hidden party to explicitly accept a "share profiles" request. Otherwise "Profile hidden" breaks by using the app normally |
+| **2** | Should a Roulette Align permanently suppress that person's Deck card? | **Yes** — reuse the permanent-`archive` Interaction |
+| **3** | Conversation nickname: one shared, or one per viewer? | **One shared for v1.** Decision 9.1 removes the rename hazard |
+| **4** | Reveal-request expiry window? | **7 days**, then `expired`. One request per recipient per connection after |
+| **5** | Does hidden mode apply when meeting an existing connection? | **Scoped to Roulette.** Grants persist. Label the call: "You're already connected — profiles visible to each other" |
+| **6** | Intention (Social/Dating/Either): per-session or persistent? | **Per-session**, defaulting to last choice, visible and editable |
+| **7** | Does "Search farther" persist across sessions? | **No.** Re-consent every time |
+| **8** | Do any gender/orientation preferences apply to Roulette matching? | **None unless specified.** Social/Dating/Either is the only compatibility input |
+
+---
+
+## 18. EXPLICITLY OUT OF SCOPE
+
+- Group finder and double dates
+- Missed-connections contact after a skip
+- Payments and premium packages
+- Automatic recording / content inspection / NSFW detection
+- Full rebranding or internal-key renaming
+- Multi-server architecture without demonstrated need
+- Unlimited-use promises
+- App-wide background calling
+- Multiple independent request/chat systems
+- Call-duration and daily-session **commercial** caps — deliberately undecided
+
+**In scope** because the feature depends on them: authentication gaps, identity exposure,
+request handling, and call safety.
+
+---
+
+## 19. WHAT MUST BE DISCLOSED IN THE UI
+
+The honest full version of the privacy promise:
+
+> "Roulette does not display your profile until you choose to share it — **within Roulette
+> conversations.** If the same person appears in your Deck later, you will see their normal
+> public profile. That is how Deck works."
+
+**This must appear before the user chooses hidden mode**, not buried in a policy. It is the
+single most likely source of the "I thought my profile was hidden" failure in §20.
+
+**Also remove from the v1 placeholder screen** `[CONFIRMED]`:
+- `"Each session is anonymous until you choose to reveal yourself."` — false; the camera
+  is on (`Roulette.jsx:102`)
+- `"...that flows straight into your Matches."` — implies post-call matching that does not
+  exist (`Roulette.jsx:94`)
+- `Splash.jsx:1475` — `"The preview cards can be swiped horizontally."` — **no swipe
+  handler exists anywhere in the codebase**
+
+---
+
+## 20. COMPREHENSIBILITY CHECKS
+
+Before a broader student launch, ask fresh testers to:
+
+1. Start without revealing their profile
+2. Explain what their partner can see
+3. Send / accept Align
+4. Find the saved conversation afterward
+5. Share profiles mutually
+6. Decline, leave, block, and report
+7. Open and close chat without ending the call
+
+**Watch especially for these — they are design failures to correct, not user mistakes:**
+
+- "I thought Align revealed my profile."
+- "I thought accepting meant agreeing to dating."
+- "I couldn't find the request."
+- "I accidentally left while opening chat."
+- "I thought anonymous meant nobody could identify me."
+
+Note: "I couldn't find the request" is **already a live bug** — the bell is Deck-only today
+(`Header.jsx:150`), so requests are unreachable from three of four tabs.
+
+---
+
+## 21. THE ROUNDETTE ENTRY SCREEN
+
+One compact setup screen — **not** multiple compulsory onboarding pages.
+
+```text
+ROULETTE
+
+Meet college students around your area.
+
+So, what are you here for, huh?
+[Social]  [Dating]  [Either]
+
+Your call name
+[Moonwalker                    Edit]
+
+Profile hidden
+Your face is visible. Your profile is not displayed.
+
+[Preview & start]
+
+Preferences
+```
+
+**Defaults and rules:**
+
+- **Profile hidden is the initial default.**
+- Generate a temporary name; editing is optional.
+- Require a deliberate **intention** selection on first use.
+- Remember approved preferences for future visits, but keep them **visible and editable**.
+- "Show my profile" lives under **Preferences**, not another mandatory setup screen.
+- Temporary names must **not** impersonate official staff or contain abusive content.
+- Changing a name must **not** reset account restrictions, blocks, or report history.
+- Real-user access requires genuine account eligibility. Development login arrangements
+  must remain isolated — **[CONFIRMED] today the only isolation is the hard-asserted
+  `matchalize_test` database name** (`tests/lib/mongo.mjs:5,29-37`), with **no
+  `isSeed`/`isTest` flag anywhere**. Do not add one.
+
+### 21.1 Mobile call layout (starting point)
+
+```text
+┌─────────────────────────────┐
+│ Temporary name     Safety ⋮ │
+├─────────────────────────────┤
+│                             │
+│        Partner video        │
+│                             │
+├─────────────────────────────┤
+│       Smaller self-preview  │
+├─────────────────────────────┤
+│ Mic   Camera   Align   Chat │
+│        Next       Leave     │
+└─────────────────────────────┘
+```
+
+Prototype the stacked arrangement first. **Test relative tile sizes rather than assuming
+equal halves are best.**
+
+**Controls:** tap video to hide secondary controls; keep Leave and an obvious safety entry
+reachable; retain understandable camera/mic status; **no swipe-to-next in v1**; prevent
+hidden controls from receiving accidental taps.
+
+**Desktop:** keep video and chat side by side where space allows.
+
+⚠️ **[CONFIRMED] Chat cannot be embedded without a geometry change** — `Chat.jsx:1081` is
+`position: fixed; inset: 0` with no size clamp. This is a real Stage 8 task.
+
+---
+
+## 22. WHAT THIS PLAN DELIBERATELY CORRECTS FROM v1
+
+| v1 said | v2 says | Why |
+|---|---|---|
+| `Alignment.origin = 'discover' \| 'roulette'` | **`source`** | `Interaction.origin` already exists with a different enum |
+| "Skip = permanent (no re-queue)" | **Next re-searches** for the presser; other person gets "Conversation ended · Find next" | Matches the actual product flow |
+| Self-hosted coturn, ₹400–500/mo VPS | **Cloudflare managed TURN**, 1,000 GB free | Verified free tier; kills the coturn ops burden |
+| "free = 10 connections/day" as a monetization seam | **No invented caps.** Pilot limits are test settings | A 10/day cap is a commercial decision, not an engineering default |
+| Mandatory gender-ratio rails | **None unless specified** (§17 #8) | Not invented |
+| "anonymous until you reveal" | **Never say anonymous** — the camera is on | False promise |
+| No hidden-profile concept | **First-class**, with a directional grant model | The core of v2 |
+| Requests in a Deck-only bell | **Requests inside Chats** | Reachability |
+| A fixed cost-per-resolution table | **Assumptions stated separately; nothing labelled measured** | v1's table had arithmetic errors |
+
+---
+
+**Design documented. Not implemented. Stage 0 is the next action.**
+
+````
 
 ### ./errors.md
 
@@ -35473,6 +41702,12 @@ DOC_FILES = [
 # this whole script exists to prevent.
 DESIGN_SYSTEM_FILES = [
     "client/src/utils/theme.js",
+    # neu.js IS the canonical token layer (its own header calls itself the
+    # "single source of truth"), so it belongs in the chunk a designer is told
+    # to read before writing any UI. It was previously unmatched entirely:
+    # no GROUP_ORDER entry covered client/src/styles/, and the "never silently
+    # drop a file" invariant caught it.
+    "client/src/styles/neu.js",
     "client/src/components/ProfileCard.jsx",
     "client/src/components/Header.jsx",
     "client/src/pages/Splash.jsx",
@@ -35497,6 +41732,10 @@ GROUP_ORDER = [
     ("client-app", lambda p: p.startswith("client/src/")
                     and p.count("/") == 2),
     ("client-assets", lambda p: p.startswith("client/src/assets/")),
+    # Catch-all so a NEW file dropped in styles/ cannot silently fall through
+    # every matcher and trip the "matched no group" abort. Files listed in
+    # DESIGN_SYSTEM_FILES are consumed above; this catches the rest.
+    ("client-assets", lambda p: p.startswith("client/src/styles/")),
     ("client-utils", lambda p: p.startswith("client/src/utils/")),
     ("client-components", lambda p: p.startswith("client/src/components/")),
     ("client-pages", lambda p: p.startswith("client/src/pages/")),

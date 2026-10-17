@@ -1,7 +1,7 @@
 # Matchalize — Server Codebase Dump
 
 > Verbatim contents of all project source and configuration files.
-> Generated 2026-10-09 14:03.
+> Generated 2026-10-17 20:14.
 > Server source only. Excludes: .env, node_modules/, uploads/, dist/, build/, and package-lock.json.
 > Matchalize is an INTRA + INTER college network for all the colleges of India: users connect within their own campus (intra) AND across campuses (inter). Every user signs in via their own college academic email system (`.ac.in`), making each campus a private, verified community.
 
@@ -495,6 +495,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Config
 import connectDB from './config/db.js';
+import { seedGatedColleges } from './utils/campusSeed.js';
 import { socketHandler } from './socket/chat.js';
 
 // Routes
@@ -508,7 +509,6 @@ import adminRoutes from './routes/admin.js';
 import uploadRoutes from './routes/upload.js';
 import notificationRoutes from './routes/notifications.js';
 import reportRoutes from './routes/report.js';
-import waitlistRoutes from './routes/waitlist.js';
 import collegeRoutes from './routes/colleges.js';
 
 // Initialize Sentry (must run after dotenv.config so SENTRY_DSN is loaded)
@@ -553,6 +553,49 @@ const IS_PROD = NODE_ENV === 'production';
 if (!process.env.RESEND_API_KEY) {
   console.warn('⚠️  Resend API key not configured — OTP codes will be logged to console only (users won\'t receive emails)');
 }
+
+// 🛑 THE SILENT-FAILURE CHECK.
+//
+// An API key WITHOUT a verified sending domain is the worst combination in this
+// file, and it fails completely silently:
+//
+//   - Resend ACCEPTS the send. It returns HTTP 200. Nothing errors, anywhere.
+//   - `onboarding@resend.dev` is Resend's sandbox sender. It delivers ONLY to
+//     the address that owns the Resend account.
+//   - So the OTP is accepted, discarded, and never reaches the student. The
+//     server's success path runs exactly as it would if email had been
+//     delivered, because from this side, it was.
+//
+// The symptom is "signups silently don't work", which reads as a bug in the
+// app and costs hours of debugging code that is perfectly fine. Worse than the
+// missing-key case above: with NO key, `sendOTP` prints the code to the log
+// and someone can relay it. With a key but no domain, the code is gone and
+// nothing local knows where it went.
+if (process.env.RESEND_API_KEY) {
+  const sender = (process.env.RESEND_SENDER_EMAIL || '').trim().toLowerCase();
+  const isSandbox =
+    sender === 'onboarding@resend.dev'
+    || sender === 'onboarding@sendgrid.com'
+    || sender.endsWith('@resend.dev');
+
+  if (isSandbox) {
+    console.error(
+      '\n' +
+      '🛑🛑🛑  OTP EMAILS WILL NOT ARRIVE  🛑🛑🛑\n\n' +
+      `   RESEND_API_KEY is set, but RESEND_SENDER_EMAIL is "${sender}".\n` +
+      '   That is Resend\'s SANDBOX sender — it delivers only to the email\n' +
+      '   address that owns your Resend account. Resend will accept every\n' +
+      '   send and return 200. No error will appear. No student will get a\n' +
+      '   code, and nobody will be able to sign up.\n\n' +
+      '   Fix — pick one:\n' +
+      '     • Verify a domain (Resend → Domains → Add Domain) and set\n' +
+      '       RESEND_SENDER_EMAIL=you@yourdomain.com\n' +
+      '     • UNSET RESEND_API_KEY entirely. OTP codes then print to this\n' +
+      '       log and can be relayed by hand, which is fine for a small\n' +
+      '       pilot cohort.\n\n',
+    );
+  }
+}
 if (!process.env.OTP_HASH_SECRET) {
   console.warn('⚠️  OTP_HASH_SECRET not configured — falling back to JWT_SECRET for OTP hashing. Set a dedicated secret in production.');
 }
@@ -575,6 +618,17 @@ try {
 } catch (err) {
   console.error(`❌ Server failed to start: ${err.message}`);
   process.exit(1);
+}
+
+// 🏫 Seed any gated campus that does not exist yet.
+//
+// Runs AFTER connectDB (which has verified every index) and BEFORE the server
+// listens, so a picker query can never race it. Never throws — see the file for
+// why an empty picker is survivable and an unbootable server is not.
+try {
+  await seedGatedColleges();
+} catch (err) {
+  console.error(`⚠️  Campus seed skipped: ${err.message}`);
 }
 
 const app = express();
@@ -670,6 +724,32 @@ app.use(helmet({
       connectSrc: [
         "'self'",
         'https://*.onrender.com', 'wss://*.onrender.com',
+        // 🔒 THE FRONTEND ORIGIN, DERIVED.
+        //
+        // This was hardcoded to the Render wildcard above, which works only
+        // while the client is served from an *.onrender.com domain. Attach a
+        // custom domain — or serve the client from Vercel/Cloudflare Pages, or
+        // a different host entirely — and the browser blocks every API call
+        // and every socket handshake, with no server-side error to explain it:
+        // the request is never made.
+        //
+        // So the deployed FRONTEND_URL is added here, expanded to BOTH the
+        // https:// (REST) and wss:// (socket) transports. Deriving it from the
+        // same variable that drives the CORS allowlist means there is exactly
+        // one place to change when the domain changes, instead of a CSP list
+        // that quietly rots.
+        //
+        // Written as two independent replacements rather than a chained pair
+        // on purpose. `x.replace(/^http:/,'https:').replace(/^http:/,'ws:')`
+        // looks right and is not: the first pass turns `http:` into `https:`,
+        // which no longer matches the second pattern, so the wss:// origin is
+        // silently never emitted and sockets fail only in the browser.
+        ...(FRONTEND_URL
+          ? [
+              FRONTEND_URL.replace(/^http:/, 'https:'),
+              FRONTEND_URL.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:'),
+            ]
+          : []),
         // Loopback is dev-only. These four used to sit outside the IS_PROD
         // guard, which shipped them to production: harmless in practice (a
         // script would have to run on someone's own laptop to make use of
@@ -765,12 +845,31 @@ app.use('/api/config', configRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/report', reportRoutes);
-app.use('/api/waitlist', waitlistRoutes);
 app.use('/api/colleges', collegeRoutes);
 
 // JSON 404 for unknown API endpoints (must come AFTER all /api route mounts)
 app.use('/api', (req, res) => {
   res.status(404).json({ success: false, message: 'Endpoint not found' });
+});
+
+// 🔎 HEALTH — mounted BEFORE express.static so it always answers, and so a
+// keep-alive ping never downloads the SPA shell to prove the server is up.
+//
+// This route exists because of a specific Render behaviour: while a free web
+// service is asleep, Render answers /robots.txt itself and never forwards it.
+// A monitor pointed there reports green on a sleeping service. Point pings
+// here instead — it is a real route on this app.
+//
+// Deliberately cheap: it does NOT touch the database. If Atlas is briefly
+// unreachable the process is still listening and still able to serve, and a
+// liveness probe that fails on a dependency outage just triggers a pointless
+// restart of a healthy process. Readiness is a separate question from liveness.
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    uptime: Math.round(process.uptime()),
+    env: NODE_ENV,
+  });
 });
 
 // Protect local uploads fallback (Prod uses Cloudinary URLs, so this mostly protects dev/staging)
@@ -2673,96 +2772,6 @@ export default User;
 
 ```
 
-### ./server/models/Waitlist.js
-
-```
-import mongoose from 'mongoose';
-import crypto from 'crypto';
-
-const waitlistSchema = new mongoose.Schema(
-  {
-    email: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-      lowercase: true,
-    },
-    name: { type: String, trim: true, default: '' },
-    college: { type: String, default: 'IIT Bombay' },
-    collegeCode: { type: String, default: 'iitb' },
-    branch: { type: String, default: '' },
-    year: { type: String, default: '' },
-
-    // Unique 6-char referral code they share
-    referralCode: {
-      type: String,
-      required: true,
-      unique: true,
-      index: true,
-    },
-    // Who referred them (ObjectId or null)
-    referredBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      default: null,
-      ref: 'Waitlist',
-    },
-    // Current queue position (recomputed on referral events)
-    position: { type: Number, required: true, index: true },
-    // How many people they've referred
-    referralCount: { type: Number, default: 0 },
-    // Total spots jumped via referrals
-    spotsJumped: { type: Number, default: 0 },
-
-    status: {
-      type: String,
-      enum: ['pending', 'invited', 'registered'],
-      default: 'pending',
-    },
-    // Tier based on position
-    tier: {
-      type: String,
-      enum: ['charter', 'founding', 'original'],
-      default: 'original',
-    },
-
-    // Daily check-in streak (engagement loop)
-    lastCheckIn: { type: Date, default: null },
-    checkInStreak: { type: Number, default: 0 },
-
-    joinedAt: { type: Date, default: Date.now },
-    invitedAt: { type: Date, default: null },
-    registeredAt: { type: Date, default: null },
-  },
-  { timestamps: true }
-);
-
-// Single source of truth for tier thresholds (mirrored in frontend)
-waitlistSchema.statics.TIER_THRESHOLDS = { charter: 50, founding: 250 };
-
-// Generate a unique 6-char alphanumeric referral code (no I/O/0/1 to avoid confusion)
-waitlistSchema.statics.generateReferralCode = async function () {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code;
-  let exists = true;
-  while (exists) {
-    code = Array.from({ length: 6 }, () => chars[crypto.randomInt(chars.length)]).join('');
-    exists = await this.findOne({ referralCode: code });
-  }
-  return code;
-};
-
-waitlistSchema.methods.computeTier = function () {
-  const T = this.constructor.TIER_THRESHOLDS;
-  if (this.position <= T.charter) return 'charter';
-  if (this.position <= T.founding) return 'founding';
-  return 'original';
-};
-
-const Waitlist = mongoose.model('Waitlist', waitlistSchema);
-export default Waitlist;
-```
-
 ### ./server/models/index.js
 
 ```
@@ -2801,7 +2810,11 @@ export { default as OTP } from './OTP.js';
 export { default as Report } from './Report.js';
 export { default as Setting } from './Setting.js';
 export { default as User } from './User.js';
-export { default as Waitlist } from './Waitlist.js';
+/* Waitlist was removed for the IIT Bombay pilot. The invite list is the gate,
+   not a public queue, so the model, its routes, and its page are gone rather
+   than merely unmounted — an orphaned collection with indexes still being
+   verified at boot is worse than no collection. Restore all three together if
+   a staged launch ever needs them back. */
 ```
 
 ### ./server/scripts/audit-cloudinary-orphans.mjs
@@ -3333,6 +3346,117 @@ run().catch((err) => {
 });
 ```
 
+### ./server/scripts/drop-waitlist.mjs
+
+```
+import mongoose from 'mongoose';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const loadEnv = () => {
+  for (const p of [path.join(__dirname, '../.env'), path.join(process.cwd(), '.env')]) {
+    if (!fs.existsSync(p)) continue;
+    for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+      const idx = line.indexOf('=');
+      if (idx === -1) continue;
+      const key = line.slice(0, idx).trim();
+      if (!process.env[key]) process.env[key] = line.slice(idx + 1).trim();
+    }
+    return p;
+  }
+  return null;
+};
+
+/**
+ * 🧹 DROP THE ORPHANED WAITLIST COLLECTION.
+ *
+ * Removing the waitlist removed the code. This removes what the code left
+ * behind: a `waitlist` collection, and the indexes it created, still sitting
+ * in the database with nothing reading them.
+ *
+ * Why bother, since it is inert:
+ *   - It holds real email addresses that people submitted. Those addresses
+ *     were collected for a purpose that no longer exists, and leaving them is
+ *     the kind of thing that becomes a privacy question the day you notice.
+ *   - An orphaned indexed collection is invisible in every dashboard except a
+ *     database browser, which is precisely why it gets forgotten.
+ *
+ * ── WHY THIS IS DESTRUCTIVE, AND WHY IT STILL ASKS ──────────────────────────
+ * There is no undo without a backup. The dry-run default prints the exact row
+ * count and the addresses involved so that decision is an informed one rather
+ * than a reflex — and if the count is anything other than what you expected,
+ * that is a reason to stop and read the list before passing --execute.
+ *
+ *   node server/scripts/drop-waitlist.mjs            # report only
+ *   node server/scripts/drop-waitlist.mjs --execute  # drop it
+ */
+
+const EXECUTE = process.argv.includes('--execute');
+
+const run = async () => {
+  const envFile = loadEnv();
+  if (!process.env.MONGODB_URI) {
+    console.error('❌ MONGODB_URI not found. Set it in server/.env.');
+    process.exit(1);
+  }
+  console.log(`📄 env: ${envFile}`);
+  console.log(`🔍 mode: ${EXECUTE ? '⚠️  EXECUTE — collection will be DROPPED' : 'report only'}`);
+
+  await mongoose.connect(process.env.MONGODB_URI);
+  const db = mongoose.connection.db;
+  console.log(`🗄  db:  ${mongoose.connection.host}/${mongoose.connection.name}\n`);
+
+  const exists = await db.listCollections({ name: 'waitlist' }).hasNext();
+
+  if (!exists) {
+    console.log('✅ No `waitlist` collection in this database. Nothing to do.');
+    await mongoose.disconnect();
+    return;
+  }
+
+  const count = await db.collection('waitlist').countDocuments({});
+  const indexes = await db.collection('waitlist').indexes();
+  console.log(`collection: waitlist`);
+  console.log(`   documents: ${count}`);
+  console.log(`   indexes:   ${indexes.length}`);
+
+  if (count > 0) {
+    // These are real addresses people typed in. Print them so the decision to
+    // delete is made with the data in front of you, not in the abstract.
+    const rows = await db.collection('waitlist')
+      .find({}, { projection: { email: 1, name: 1, tier: 1, createdAt: 1 } })
+      .sort({ createdAt: 1 })
+      .limit(100)
+      .toArray();
+
+    console.log('\naddresses that will be deleted:');
+    for (const r of rows) {
+      const when = r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 10) : '?';
+      console.log(`   ${String(r.email || '(none)').padEnd(38)} ${when}  ${r.tier || ''}`);
+    }
+    if (rows.length < count) console.log(`   … and ${count - rows.length} more`);
+  }
+
+  if (!EXECUTE) {
+    console.log('\n📋 Report only. Re-run with --execute to drop the collection.');
+    await mongoose.disconnect();
+    return;
+  }
+
+  await db.collection('waitlist').drop();
+  console.log('\n✅ Dropped collection: waitlist (documents and indexes).');
+  await mongoose.disconnect();
+};
+
+run().catch((err) => {
+  console.error('❌ Failed:', err?.error?.message || err?.message || err);
+  process.exit(1);
+});
+```
+
 ### ./server/scripts/migrate-alignment.mjs
 
 ```
@@ -3498,7 +3622,12 @@ if (fs.existsSync(envPath)) {
 }
 
 const EXECUTE = process.argv.includes('--execute');
-const URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/matchalize';
+const URI = process.env.MONGODB_URI;
+if (!URI) {
+  console.error('❌ MONGODB_URI is not set. Refusing to guess a database.');
+  console.error('   Set it in server/.env — never run this against an unintended target.');
+  process.exit(1);
+}
 
 const mapping = Object.entries(DEPRECATED_INTENTS);
 if (mapping.length === 0) {
@@ -3606,7 +3735,12 @@ if (fs.existsSync(envPath)) {
 }
 
 const EXECUTE = process.argv.includes('--execute');
-const URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/matchalize';
+const URI = process.env.MONGODB_URI;
+if (!URI) {
+  console.error('❌ MONGODB_URI is not set. Refusing to guess a database.');
+  console.error('   Set it in server/.env — never run this against an unintended target.');
+  process.exit(1);
+}
 
 console.log(EXECUTE ? 'Mode: EXECUTE' : 'Mode: DRY RUN (pass --execute to apply)\n');
 
@@ -3864,6 +3998,146 @@ run().catch((err) => {
 });
 ```
 
+### ./server/scripts/seed-iitb.mjs
+
+```
+import mongoose from 'mongoose';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import College from '../models/College.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const loadEnv = () => {
+  for (const p of [path.join(__dirname, '../.env'), path.join(process.cwd(), '.env')]) {
+    if (!fs.existsSync(p)) continue;
+    for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+      const idx = line.indexOf('=');
+      if (idx === -1) continue;
+      const key = line.slice(0, idx).trim();
+      if (!process.env[key]) process.env[key] = line.slice(idx + 1).trim();
+    }
+    return p;
+  }
+  return null;
+};
+
+/**
+ * 🏫 SEED IIT BOMBAY — non-destructive.
+ *
+ * The safe sibling of reset-colleges.mjs, which DELETES every user and college
+ * before seeding. That is the wrong tool for a pilot launch: the moment you
+ * want to add the first campus is the same moment you have real signups you
+ * cannot afford to lose.
+ *
+ * This script only touches the `colleges` collection. It never reads or writes
+ * a single user row, so it is safe to run against a database that already has
+ * students in it — which is exactly the situation it is for.
+ *
+ *   node server/scripts/seed-iitb.mjs            # dry run, reports only
+ *   node server/scripts/seed-iitb.mjs --execute  # upsert the college
+ */
+
+const SEED = {
+  code: 'iitb',
+  name: 'Indian Institute of Technology Bombay',
+  // Exact-or-subdomain matching means every department address
+  // (cse.iitb.ac.in, mech.iitb.ac.in, …) verifies against this one entry.
+  domains: ['iitb.ac.in'],
+  city: 'Mumbai',
+  state: 'Maharashtra',
+  country: 'India',
+  active: true,
+  // IIT Bombay main campus, Powai. This is campus data — a building's public
+  // location — not a student's coordinates, so it carries none of the privacy
+  // weight of User.currentLatLng. Optional: without it, students at this campus
+  // rank as "unknown location" and sort last rather than being guessed at.
+  latLng: [19.124, 72.914],
+};
+
+const EXECUTE = process.argv.includes('--execute');
+
+const run = async () => {
+  const envFile = loadEnv();
+  if (!process.env.MONGODB_URI) {
+    console.error('❌ MONGODB_URI not found. Set it in server/.env.');
+    process.exit(1);
+  }
+  console.log(`📄 env: ${envFile}`);
+  console.log(`🔍 mode: ${EXECUTE ? '⚠️  EXECUTE' : 'report only'}`);
+  console.log(`🗄  db:  ${process.env.MONGODB_URI.split('@').pop()}\n`);
+
+  await mongoose.connect(process.env.MONGODB_URI);
+
+  const existing = await College.find({}).sort({ code: 1 }).lean();
+  console.log(`colleges currently in the database: ${existing.length}`);
+  for (const c of existing) {
+    const match = c.code === SEED.code ? '  ← this script' : '';
+    console.log(`   ${c.code.padEnd(10)} active=${String(c.active).padEnd(5)} ${c.name}${match}`);
+  }
+
+  const already = await College.findOne({ code: SEED.code }).lean();
+  if (already) {
+    // Report drift rather than silently overwriting. A difference here means
+    // an operator edited the college from /admin — the admin value may be the
+    // corrected one, so this prints and stops rather than winning.
+    const drift = ['name', 'active'].filter((k) => String(already[k]) !== String(SEED[k]));
+    const domainDrift = JSON.stringify([...(already.domains || [])].sort())
+      !== JSON.stringify([...SEED.domains].sort());
+
+    if (drift.length || domainDrift) {
+      console.log('\n⚠️  IIT Bombay already exists and differs from this script:');
+      if (drift.length) console.log(`     fields: ${drift.join(', ')}`);
+      if (domainDrift) {
+        console.log(`     domains: db has [${(already.domains || []).join(', ')}], script has [${SEED.domains.join(', ')}]`);
+      }
+      console.log('     Not overwriting. The value in the database is the live one.');
+      console.log('     To change it, edit the college from /admin.');
+      await mongoose.disconnect();
+      return;
+    }
+    console.log('\n✅ IIT Bombay already matches. Nothing to do.');
+    await mongoose.disconnect();
+    return;
+  }
+
+  if (!EXECUTE) {
+    console.log('\n📋 Would seed:');
+    console.log(`   ${SEED.name}  (${SEED.code})  @${SEED.domains[0]}`);
+    console.log('   Re-run with --execute to apply.');
+    await mongoose.disconnect();
+    return;
+  }
+
+  // Upsert so re-running does not collide with the unique code index.
+  await College.findOneAndUpdate({ code: SEED.code }, { $set: SEED }, { upsert: true, new: true });
+
+  const after = await College.countDocuments({});
+  console.log(`\n✅ Seeded ${SEED.name} (${SEED.code})`);
+  console.log(`   colleges now: ${after}`);
+
+  const gate = process.env.ALLOWED_COLLEGES;
+  if (gate) {
+    const allowed = gate.split(',').map((c) => c.trim().toLowerCase());
+    console.log(`\n🚪 ALLOWED_COLLEGES = "${gate}"`);
+    console.log(allowed.includes(SEED.code)
+      ? '   ✓ IIT Bombay can sign up.'
+      : `   ✗ IIT Bombay is NOT in the gate — nobody will be able to sign up.\n     Set ALLOWED_COLLEGES=${SEED.code}`);
+  } else {
+    console.log('\n🚪 ALLOWED_COLLEGES is not set — every active college can sign up.');
+    console.log(`   Set ALLOWED_COLLEGES=${SEED.code} to run this as an IIT-Bombay-only pilot.`);
+  }
+
+  await mongoose.disconnect();
+};
+
+run().catch((err) => {
+  console.error('❌ Seed failed:', err?.error?.message || err?.message || err);
+  process.exit(1);
+});
+```
+
 ### ./server/scripts/verify-deck-metrics.mjs
 
 ```
@@ -3933,7 +4207,7 @@ const section = (t) => console.log(`\n── ${t} ──`);
 /* Impressions are written without awaiting, so a read can race the write. */
 const settle = () => new Promise((r) => setTimeout(r, 700));
 
-await mongoose.connect(env.MONGO_URI || 'mongodb://127.0.0.1:27017/matchalize');
+await mongoose.connect(env.MONGODB_URI);
 const db = mongoose.connection.db;
 
 const viewer = await db.collection('users').findOne({ email: VIEWER_EMAIL });
@@ -4247,11 +4521,12 @@ const fmt = (b) => [...b].map(([k, n]) => `${k}:${n}`).join('  ');
 const top = (c, n = 4) => [...c].slice(0, n).map(([k, v]) => `${k} (${v})`).join(', ');
 
 async function main() {
-  await mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/matchalize');
+  await mongoose.connect(process.env.MONGODB_URI);
   const db = mongoose.connection.db;
 
-  const viewer = await db.collection('users').findOne({ collegeCode: 'iitd', isOnboarded: true });
-  if (!viewer) throw new Error('no iitd user seeded');
+  const viewerCode = process.env.VIEWER_COLLEGE || 'iitd';
+  const viewer = await db.collection('users').findOne({ collegeCode: viewerCode, isOnboarded: true });
+  if (!viewer) throw new Error(`no ${viewerCode} user seeded`);
 
   /* Own the starting state: no personal reading, campus basis, no saved deck. */
   await db.collection('users').updateOne(
@@ -4434,6 +4709,51 @@ import College from './models/College.js';
 import { computeScore } from './utils/ladder.js';
 
 dotenv.config({ path: './.env' });
+
+/**
+ * 🛑 FAKE DATA IS NOT PRODUCTION DATA.
+ *
+ * This script generates invented people — names, photos from a stock image
+ * service, bios, prompts — and DELETES every real user and college before doing
+ * it. It is a local development convenience and nothing else.
+ *
+ * The guard below is deliberately at the very top and deliberately fatal. The
+ * failure this prevents is not subtle: `deleteMany({})` runs against whatever
+ * `MONGODB_URI` points at, so one `npm run seed` typed against a copied Atlas
+ * string replaces a real cohort with imaginary students who will happily match
+ * with, message, and report each other.
+ *
+ * Two independent conditions, so this cannot be undone by accident:
+ *   1. NODE_ENV must not be 'production'.
+ *   2. --allow-fake-data must be passed explicitly.
+ *
+ * Condition 2 exists because NODE_ENV is often unset in a local shell (it is
+ * set in server/.env, which this script loads, but not in every environment
+ * that can reach this file), and "unset" must not read as "fine".
+ */
+if (process.env.NODE_ENV === 'production') {
+  console.error(
+    '\n🛑 REFUSING TO RUN. NODE_ENV=production.\n\n' +
+    '   This script deletes all users and colleges, then fills the database\n' +
+    '   with invented profiles and stock photos. That is local development\n' +
+    '   data. If it reached a deployed database, real students would be\n' +
+    '   matching and messaging people who do not exist.\n\n' +
+    '   If you genuinely need to reseed production, that is a decision that\n' +
+    '   should not be made by a stray `npm run seed`.\n',
+  );
+  process.exit(1);
+}
+
+if (!process.argv.includes('--allow-fake-data')) {
+  console.error(
+    '\n🛑 REFUSING TO RUN without --allow-fake-data.\n\n' +
+    '   This script DELETES every user and college in MONGODB_URI, then seeds\n' +
+    '   invented profiles with stock photos.\n\n' +
+    '   Check the database it is about to touch before agreeing:\n' +
+    '     node server/seedRealistic.js --allow-fake-data\n',
+  );
+  process.exit(1);
+}
 
 /**
  * SEED — realistic population across three tiers.
@@ -4677,7 +4997,12 @@ function buildUser(gender, college, i) {
 }
 
 async function main() {
-  await mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/matchalize');
+  if (!process.env.MONGODB_URI) {
+    console.error('❌ MONGODB_URI is not set. Refusing to seed an unknown database.');
+    console.error('   Set it in server/.env. NOTE: this script DELETES all users and colleges.');
+    process.exit(1);
+  }
+  await mongoose.connect(process.env.MONGODB_URI);
   const db = mongoose.connection.db;
 
   console.log('── Clearing ──');
@@ -5047,6 +5372,316 @@ export class AppError extends Error {
 
 ```
 
+### ./server/utils/campusGate.js
+
+```
+/**
+ * 🚪 CAMPUS GATE — which campuses may currently sign up.
+ *
+ * The closed, verified-student network is only meaningful if the gate is
+ * actually closed. An IIT Bombay pilot has no use for a student from another
+ * campus: the entire product thesis is a dense, verified pool, and one
+ * outsider in a small pool is a stranger, not a feature.
+ *
+ * Two independent mechanisms exist, and it is worth being precise about why
+ * BOTH are needed rather than either:
+ *
+ *   1. This gate (`ALLOWED_COLLEGES`). An allow-list applied at the point a
+ *      signup is authorised — `resolveCollege()` in routes/auth.js. This is the
+ *      security control. It does not care what the database contains.
+ *
+ *   2. `College.active` in the database, which decides what the picker shows.
+ *
+ * The reason this is not just "set every other college inactive" is that the
+ * database is mutable at runtime: an operator can activate a campus from
+ * /admin, or approve a CollegeRequest, and the pilot gate would silently stop
+ * applying. This file is configuration — it only changes when someone edits
+ * the environment and redeploys — so it is the layer that cannot be talked out
+ * of its job by a click in the admin panel.
+ *
+ * ── WHY AN ALLOW-LIST AND NOT A BLOCK-LIST ───────────────────────────────────
+ * A block-list ("these campuses are closed") has to be updated every time a new
+ * campus is added, and the failure mode is opening the gate: forget the entry,
+ * and the campus is quietly live. An allow-list fails closed instead — an
+ * unlisted campus is refused, so the mistake costs you one new user rather than
+ * an unintended public launch.
+ *
+ * ── UNSET MEANS OPEN ────────────────────────────────────────────────────────
+ * With no `ALLOWED_COLLEGES` set, every active college can sign up. That is
+ * the pre-pilot behaviour and it is the correct default for local development,
+ * where seeding one college and pointing the picker at it is already the
+ * intended workflow. The gate is opt-IN, so a developer who never hears of it
+ * gets a working app rather than a confusing one.
+ */
+
+/**
+ * The parsed allow-list, or null when no gate is configured.
+ *
+ * Normalised on read rather than at module load, because a test that mutates
+ * `process.env` between cases would otherwise read a stale snapshot frozen at
+ * import time. The cost is trivial: the list is a handful of strings and this
+ * is called on signup, not on a hot path.
+ *
+ * @returns {Set<string>|null} lowercased college codes, or null when open
+ */
+export const getAllowedColleges = () => {
+  const raw = process.env.ALLOWED_COLLEGES;
+
+  // Empty string and whitespace both mean "not configured". An operator who
+  // blanks the variable expects the app to behave as it did before, not to
+  // lock every student out of a campus they never named.
+  if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+
+  const codes = String(raw)
+    .split(',')
+    .map((c) => c.trim().toLowerCase())
+    .filter(Boolean);
+
+  // A variable containing only separators (" ,, ") parses to an empty list.
+  // That is NOT the same as unset: returning null here would open the gate
+  // when the operator clearly intended to restrict it. An empty set closes it.
+  return new Set(codes);
+};
+
+/**
+ * @param {string} collegeCode
+ * @returns {boolean} true when this college may sign up (always true when no
+ *                    gate is configured)
+ */
+export const isCollegeAllowed = (collegeCode) => {
+  const allowed = getAllowedColleges();
+  if (allowed === null) return true;
+  return allowed.has(String(collegeCode || '').trim().toLowerCase());
+};
+
+/**
+ * The message a student sees when their campus is outside the gate.
+ *
+ * Deliberately does NOT say "this app is invite-only" or "not available in your
+ * region". It tells them what to do: use the college email and try again, or
+ * that their campus is not yet open. Naming a hard boundary invites people to
+ * look for a way around it; naming the next step does not.
+ */
+export const COLLEGE_GATE_MESSAGE =
+  'Sign-ups for your college are not open yet. If you have a college email address, please try again.';
+
+/**
+ * Build the Mongo filter fragment that limits a college query to the gate.
+ *
+ * Used by the two list endpoints so the picker only ever shows colleges a
+ * student could actually verify against. Showing a selectable campus that
+ * signup then rejects is the worst version of this: the student picks it,
+ * types their real college email, and is told no at the last step.
+ *
+ * @returns {{code?: {$in: string[]}}} `{}` when the gate is open
+ */
+export const collegeGateFilter = () => {
+  const allowed = getAllowedColleges();
+  if (allowed === null) return {};
+  return { code: { $in: [...allowed] } };
+};
+```
+
+### ./server/utils/campusSeed.js
+
+```
+import mongoose from 'mongoose';
+import College from '../models/College.js';
+import { getAllowedColleges } from './campusGate.js';
+
+/**
+ * 🏫 BOOT-TIME CAMPUS SEED.
+ *
+ * Why this exists: on a free Render plan there is no shell, so there is no way
+ * to run a script against the database the first time. That collides with the
+ * app's own design — the college picker reads from the `colleges` collection,
+ * so an empty database means an empty picker, which means no signup, which
+ * means there is no account that could ever reach /admin to add the first
+ * college. The two halves each need the other to exist first.
+ *
+ * Seeding at boot breaks that cycle: the service comes up with a usable campus
+ * already present, and /admin becomes reachable the moment an operator logs in.
+ *
+ * ── WHAT IT DELIBERATELY DOES NOT DO ────────────────────────────────────────
+ * It inserts MISSING colleges only. It never updates or overwrites an existing
+ * row, because an existing row means an operator has already seen it and may
+ * have corrected its name, domains or coordinates from /admin. A boot seed that
+ * "ensured" its own values would silently undo that edit on every deploy — and
+ * it would do it silently, which is the worst time for it to happen.
+ *
+ * ── WHY IT IS TIED TO ALLOWED_COLLEGES ──────────────────────────────────────
+ * The catalogue below is a fixed list of real campuses, but seeding them all
+ * would repopulate a picker that is meant to show one campus during the pilot.
+ * Reading the gate means the set of campuses that exists and the set that can
+ * sign up can never drift apart: open a campus by adding its code to
+ * ALLOWED_COLLEGES, and it exists. Nothing else to remember.
+ */
+
+/**
+ * Known campuses, keyed by `College.code`.
+ *
+ * Domains are the whole verification mechanism, so they must be the real
+ * institutional domains — `iitb.ac.in` covers every department address via
+ * exact-or-subdomain matching (see utils/collegeDomain.js), so no per-department
+ * list is needed.
+ *
+ * latLng is the campus location, not a student's: it is a building's published
+ * coordinates and carries none of the privacy weight of User.currentLatLng.
+ * Optional in the schema — without it, students at that campus simply rank as
+ * "unknown location" rather than being guessed at.
+ */
+const CATALOGUE = {
+  iitb: {
+    name: 'Indian Institute of Technology Bombay',
+    domains: ['iitb.ac.in'],
+    city: 'Mumbai',
+    state: 'Maharashtra',
+    country: 'India',
+    latLng: [19.124, 72.914],
+  },
+  iitd: {
+    name: 'Indian Institute of Technology Delhi',
+    domains: ['iitd.ac.in'],
+    city: 'New Delhi',
+    state: 'Delhi',
+    country: 'India',
+    latLng: [28.545, 77.192],
+  },
+  iitk: {
+    name: 'Indian Institute of Technology Kanpur',
+    domains: ['iitk.ac.in'],
+    city: 'Kanpur',
+    state: 'Uttar Pradesh',
+    country: 'India',
+    latLng: [26.487, 80.331],
+  },
+  iitkgp: {
+    name: 'Indian Institute of Technology Kharagpur',
+    domains: ['iitkgp.ac.in'],
+    city: 'Kharagpur',
+    state: 'West Bengal',
+    country: 'India',
+    latLng: [22.256, 87.232],
+  },
+  iitm: {
+    name: 'Indian Institute of Technology Madras',
+    domains: ['iitm.ac.in'],
+    city: 'Chennai',
+    state: 'Tamil Nadu',
+    country: 'India',
+    latLng: [12.991, 80.235],
+  },
+  iitr: {
+    name: 'Indian Institute of Technology Roorkee',
+    domains: ['iitr.ac.in'],
+    city: 'Roorkee',
+    state: 'Uttarakhand',
+    country: 'India',
+    latLng: [29.869, 80.312],
+  },
+  iitg: {
+    name: 'Indian Institute of Technology Guwahati',
+    domains: ['iitg.ac.in'],
+    city: 'Guwahati',
+    state: 'Assam',
+    country: 'India',
+    latLng: [26.144, 91.736],
+  },
+  iith: {
+    name: 'Indian Institute of Technology Hyderabad',
+    domains: ['iith.ac.in'],
+    city: 'Hyderabad',
+    state: 'Telangana',
+    country: 'India',
+    latLng: [17.593, 78.271],
+  },
+  iitbhu: {
+    name: 'Indian Institute of Technology (BHU) Varanasi',
+    domains: ['iitbhu.ac.in'],
+    city: 'Varanasi',
+    state: 'Uttar Pradesh',
+    country: 'India',
+    latLng: [25.135, 83.0],
+  },
+  iitism: {
+    name: 'Indian Institute of Technology (ISM) Dhanbad',
+    domains: ['iitism.ac.in'],
+    city: 'Dhanbad',
+    state: 'Jharkhand',
+    country: 'India',
+    latLng: [23.815, 86.436],
+  },
+};
+
+/**
+ * Insert any gated campus that is missing.
+ *
+ * Never throws. A seed that prevents the server from booting would be strictly
+ * worse than an empty picker: the app is a social network, and it still works
+ * for every already-registered campus if this quietly does nothing. It logs what
+ * it did and returns what it created.
+ *
+ * @returns {Promise<{created: string[], skipped: string[]}>}
+ */
+export const seedGatedColleges = async () => {
+  const result = { created: [], skipped: [] };
+
+  const allowed = getAllowedColleges();
+  if (allowed === null) {
+    // No gate configured — the pre-pilot behaviour is every active college can
+    // sign up, and seeding the whole catalogue would quietly pre-load ten
+    // campuses nobody asked for. Nothing to do.
+    return result;
+  }
+
+  for (const code of allowed) {
+    const record = CATALOGUE[code];
+    if (!record) {
+      // A gated code with no catalogue entry is an operator error worth
+      // shouting about: the campus is allowed to sign up but nothing can tell
+      // the picker what it is called or which domains to verify against.
+      console.error(
+        `⚠️  ALLOWED_COLLEGES includes "${code}", which is not in the campus catalogue. ` +
+        `Add it to CATALOGUE in server/utils/campusSeed.js, or add the campus from /admin.`,
+      );
+      continue;
+    }
+
+    try {
+      // insertOne would throw E11000 on the unique code index if a concurrent
+      // instance seeded first — which is exactly what happens on a rolling
+      // deploy with two instances briefly running. updateOne with upsert is
+      // idempotent and needs no error handling.
+      const res = await College.updateOne(
+        { code },
+        { $setOnInsert: { code, ...record, active: true } },
+        { upsert: true },
+      );
+
+      if (res.upsertedCount > 0) {
+        result.created.push(code);
+        console.log(`🏫 Seeded campus "${record.name}" (${code}) from ALLOWED_COLLEGES.`);
+      } else {
+        result.skipped.push(code);
+      }
+    } catch (err) {
+      console.error(`⚠️  Could not seed campus "${code}": ${err.message}`);
+    }
+  }
+
+  if (result.created.length > 0) {
+    console.log(
+      `🏫 Boot seed created ${result.created.length} campus(es): ${result.created.join(', ')}. ` +
+      `Sign up at / with an email on that domain, then open /admin.`,
+    );
+  }
+
+  return result;
+};
+
+export default seedGatedColleges;
+```
+
 ### ./server/utils/email.js
 
 ```
@@ -5065,13 +5700,34 @@ export class AppError extends Error {
  * would turn the request form into an account-takeover primitive: submit
  * someone else's address, have a link sent to them, click it.
  */
+/**
+ * 📧 EMAIL TRANSPORT — Resend.
+ *
+ * ── WHY RESEND_SENDER_EMAIL MUST BE A BARE ADDRESS ──────────────────────────
+ * The `from` header is composed as `${senderName} <${senderEmail}>`, so
+ * RESEND_SENDER_EMAIL must be ONLY the address — `otp@huh.app`. Setting it to
+ * the full display form (`huh? <otp@huh.app>`) produces
+ *
+ *     from: "huh? <huh? <otp@huh.app>>"
+ *
+ * which Resend rejects with a validation error, and the failure surfaces only
+ * as an OTP that never arrives. The default below is deliberately bare for the
+ * same reason.
+ */
+const senderEmail = () => process.env.RESEND_SENDER_EMAIL || 'onboarding@resend.dev';
+const senderName = () => process.env.RESEND_SENDER_NAME || 'huh?';
+
+// ⚠️ `onboarding@resend.dev` is Resend's sandbox sender. It delivers ONLY to
+// the email address that owns the Resend account. Every real student is
+// silently unreachable while it is in use, and nothing errors — Resend accepts
+// the send and delivers it to the wrong place. Set a verified domain.
+const brand = () => senderName();
+
 export const sendCollegeLive = async (email, collegeName) => {
   const apiKey = process.env.RESEND_API_KEY;
-  const senderEmail = process.env.RESEND_SENDER_EMAIL || 'Matchalize <onboarding@resend.dev>';
-  const senderName = process.env.RESEND_SENDER_NAME || 'Matchalize';
 
   if (!apiKey) {
-    console.log(`[DEV MODE] College-live email for ${email}: ${collegeName} is now on Matchalize`);
+    console.log(`[DEV MODE] College-live email for ${email}: ${collegeName} is now on ${brand()}`);
     return true;
   }
 
@@ -5083,7 +5739,7 @@ export const sendCollegeLive = async (email, collegeName) => {
 
   const htmlContent = `
     <div style="font-family: 'Inter', sans-serif; background-color: #0A0A0C; color: #F5F5F7; padding: 40px 20px; text-align: center; max-width: 500px; margin: 0 auto; border-radius: 16px; border: 1px solid rgba(255,255,255,0.06);">
-      <h1 style="color: #D4A853; font-size: 28px; margin-bottom: 8px; font-weight: 700; letter-spacing: 2px;">MATCHALIZE</h1>
+      <h1 style="color: #D4A853; font-size: 28px; margin-bottom: 8px; font-weight: 700; letter-spacing: 2px;">${brand().toUpperCase()}</h1>
       <p style="color: #6E6E80; font-size: 14px; margin-bottom: 24px;">Your Campus. Your People.</p>
       <div style="background-color: #141418; border-radius: 12px; padding: 24px; margin-bottom: 24px; border: 1px solid rgba(255,255,255,0.03);">
         <p style="font-size: 18px; color: #F5F5F7; margin: 0 0 8px 0; font-weight: 600;">${safeName} is live</p>
@@ -5092,7 +5748,7 @@ export const sendCollegeLive = async (email, collegeName) => {
         </p>
       </div>
       <p style="font-size: 12px; color: #6E6E80; line-height: 1.5;">
-        Matchalize is for verified students only. You will need your campus email address to sign up.
+        ${brand()} is for verified students only. You will need your campus email address to sign up.
       </p>
     </div>
   `;
@@ -5104,9 +5760,9 @@ export const sendCollegeLive = async (email, collegeName) => {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: `${senderName} <${senderEmail}>`,
+      from: `${senderName()} <${senderEmail()}>`,
       to: [email],
-      subject: `${collegeName} is now on Matchalize`,
+      subject: `${collegeName} is now on ${brand()}`,
       html: htmlContent,
     }),
   });
@@ -5122,8 +5778,6 @@ export const sendCollegeLive = async (email, collegeName) => {
 
 export const sendOTP = async (email, otp) => {
   const apiKey = process.env.RESEND_API_KEY;
-  const senderEmail = process.env.RESEND_SENDER_EMAIL || 'Matchalize <onboarding@resend.dev>';
-  const senderName = process.env.RESEND_SENDER_NAME || 'Matchalize';
 
   if (!apiKey) {
     console.log(`\n----------------------------------------`);
@@ -5134,7 +5788,7 @@ export const sendOTP = async (email, otp) => {
 
   const htmlContent = `
     <div style="font-family: 'Inter', sans-serif; background-color: #0A0A0C; color: #F5F5F7; padding: 40px 20px; text-align: center; max-width: 500px; margin: 0 auto; border-radius: 16px; border: 1px solid rgba(255,255,255,0.06);">
-      <h1 style="color: #D4A853; font-size: 28px; margin-bottom: 8px; font-weight: 700; letter-spacing: 2px;">MATCHALIZE</h1>
+      <h1 style="color: #D4A853; font-size: 28px; margin-bottom: 8px; font-weight: 700; letter-spacing: 2px;">${brand().toUpperCase()}</h1>
       <p style="color: #6E6E80; font-size: 14px; margin-bottom: 24px;">Your Campus. Your People.</p>
       <div style="background-color: #141418; border-radius: 12px; padding: 24px; margin-bottom: 24px; border: 1px solid rgba(255,255,255,0.03);">
         <p style="font-size: 16px; color: #F5F5F7; margin-top: 0;">Here is your verification code:</p>
@@ -5152,9 +5806,9 @@ export const sendOTP = async (email, otp) => {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: `${senderName} <${senderEmail}>`,
+      from: `${senderName()} <${senderEmail()}>`,
       to: [email],
-      subject: 'Your Matchalize Login Code',
+      subject: `Your ${brand()} Login Code`,
       html: htmlContent,
     }),
   });
@@ -6751,6 +7405,7 @@ import { sendOTP } from '../utils/email.js';
 import { hashOtp, verifyOtp, normalizeEmail } from '../utils/otpHash.js';
 import College from '../models/College.js';
 import { emailMatchesCollege } from '../utils/collegeDomain.js';
+import { isCollegeAllowed, COLLEGE_GATE_MESSAGE } from '../utils/campusGate.js';
 import { verifyOtpLimiter, otpEmailLimiter, reverifyLimiter } from '../middleware/rateLimiters.js';
 
 const router = express.Router();
@@ -6794,7 +7449,52 @@ export const resolveCollege = async (collegeCode, email) => {
     return { ok: false, college, reason: 'Sign-ups for this college are currently closed.' };
   }
 
+  // 🔒 THE PILOT GATE.
+  //
+  // Checked AFTER the college exists and is active, so a student outside the
+  // gate gets the same closed-door message whether their campus is missing,
+  // deactivated, or simply not yet opened to the pilot. Before this line the
+  // three failure modes were indistinguishable to the caller and each leaked a
+  // little of the shape of the pilot.
+  //
+  // This is the security control. The picker hiding non-gated colleges (see
+  // collegeGateFilter in the list routes) is only cosmetic — it keeps the UI
+  // honest, but a student can post any collegeCode they like to /api/auth, so
+  // the check that matters has to live here, server-side, on the path that
+  // actually issues an OTP.
+  if (!isCollegeAllowed(code)) {
+    return { ok: false, college, reason: COLLEGE_GATE_MESSAGE };
+  }
+
   if (!emailMatchesCollege(email, college.domains)) {
+    // ── THE OPERATOR ESCAPE HATCH ────────────────────────────────────────────
+    //
+    // A single account, matched by exact address, is allowed to register
+    // without a college-domain email. This exists because adminProtect gates on
+    // `user.email === ADMIN_EMAIL`, and an admin whose address is a Gmail or an
+    // alumni mailbox can never satisfy an academic-domain check — so without
+    // this, setting ADMIN_EMAIL to anything other than a student address makes
+    // the entire admin panel permanently unreachable. There is no other way
+    // to recover it: the panel has no separate login.
+    //
+    // Deliberately narrow on all three axes:
+    //   • ONE address, exact match after trim+lowercase — never a domain.
+    //   • It still needs a valid college CODE that exists and is active, and
+    //     still has to clear the pilot gate. This bypasses the email check
+    //     only, not the college gate.
+    //   • It still requires a real OTP. Nothing about it skips verification;
+    //     it only lets a non-@iitb.ac.in mailbox receive that code.
+    //
+    // Unset ADMIN_EMAIL → the comparison is against undefined, matches
+    // nothing, and behaviour is exactly as before.
+    const adminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    if (adminEmail && email.toLowerCase() === adminEmail) {
+      console.warn(
+        `[admin-bootstrap] ${email} registered on "${code}" without a matching college domain.`,
+      );
+      return { ok: true, college };
+    }
+
     // The one error that names the college and its domain. Specific enough to
     // tell a student what went wrong; it leaks no user data — college domains
     // are public information and the student supplied the email themselves.
@@ -7270,6 +7970,7 @@ import College from '../models/College.js';
 import CollegeRequest from '../models/CollegeRequest.js';
 import { extractDomain } from '../utils/collegeDomain.js';
 import { collegeRequestLimiter } from '../middleware/rateLimiters.js';
+import { collegeGateFilter, getAllowedColleges } from '../utils/campusGate.js';
 
 const router = express.Router();
 
@@ -7299,7 +8000,11 @@ router.get('/', async (req, res) => {
     // verified through it are untouched.
     const q = String(req.query.q || '').trim();
 
-    const filter = { active: true };
+    // Gate first, then search. Both merge into one filter so the campus limit
+    // cannot be bypassed by supplying a `q` — an `$or` written after this would
+    // still be ANDed against `code`, so a gated-out campus stays invisible
+    // however it is searched for.
+    const filter = { active: true, ...collegeGateFilter() };
     if (q) {
       // Escaped so a student typing "(" can't turn into a regex that throws.
       const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
@@ -11375,295 +12080,6 @@ export default router;
 
 ```
 
-### ./server/routes/waitlist.js
-
-```
-import express from 'express';
-import { body } from '../middleware/validate.js';
-import { validate } from '../middleware/validate.js';
-import Waitlist from '../models/Waitlist.js';
-import { rateLimit } from 'express-rate-limit';
-
-const router = express.Router();
-
-// FIXED: Hardcoded launch date — no more drift
-const LAUNCH_DATE = new Date('2026-10-02T00:00:00Z');
-
-// Rate limit: 5 joins per 15 min per email (not IP — campuses share one NAT IP)
-const joinLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: Number(process.env.WAITLIST_JOIN_MAX) || 5,
-  keyGenerator: (req) => {
-    const email = (req.body?.email || '').toString().toLowerCase().trim();
-    return email || `no-email-${req.ip}`;
-  },
-  message: { message: 'Too many join attempts. Please wait a bit.' },
-  // Matches every other limiter in the app (see middleware/rateLimiters.js).
-  // Without these the client gets a 429 with no RateLimit headers, so it can't
-  // tell when the window resets and has no way to back off politely.
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-// Extract college details from email (matches pattern in auth.js)
-const extractCollege = (email) => {
-  const domain = email.split('@')[1]?.toLowerCase() || '';
-  const parts = domain.split('.');
-  // College code is ALWAYS the part immediately before ".ac.in"
-  const code = domain.endsWith('.ac.in') ? (parts[Math.max(0, parts.length - 3)] || parts[0]) : parts[0];
-  const map = {
-    iitb: 'IIT Bombay', iitd: 'IIT Delhi', iitk: 'IIT Kanpur',
-    iitkgp: 'IIT Kharagpur', iitm: 'IIT Madras', iitr: 'IIT Roorkee',
-    iitg: 'IIT Guwahati', iith: 'IIT Hyderabad', iitbhu: 'IIT BHU',
-  };
-  return { collegeCode: code, college: map[code] || domain };
-};
-
-// Variable-ratio reward engine. The slot machine.
-// Weighted toward small bonuses with rare jackpots.
-const computeReferralBonus = (referrerCurrentCount) => {
-  const roll = Math.random();
-  let bonus;
-  if (roll < 0.50) bonus = 2 + Math.floor(Math.random() * 2);       // 50%: 2-3 spots
-  else if (roll < 0.80) bonus = 4 + Math.floor(Math.random() * 3);  // 30%: 4-6 spots
-  else if (roll < 0.95) bonus = 7 + Math.floor(Math.random() * 4);  // 15%: 7-10 spots
-  else bonus = 11 + Math.floor(Math.random() * 5);                  // 5%: 11-15 spots (JACKPOT)
-
-  // Early evangelist bonus: first 10 referrals get +5 extra
-  if (referrerCurrentCount < 10) bonus += 5;
-  return bonus;
-};
-
-// Proper block-shift: moves everyone in [newPosition, oldPosition) up by 1,
-// then recomputes tiers for the affected block + the referrer.
-const shiftPositionsUp = async (referrerId, oldPosition, newPosition) => {
-  if (newPosition >= oldPosition) return; // No shift needed
-
-  // 1. Shift everyone in the gap up by 1
-  await Waitlist.updateMany(
-    {
-      _id: { $ne: referrerId },
-      position: { $gte: newPosition, $lt: oldPosition },
-    },
-    { $inc: { position: 1 } }
-  );
-
-  // 2. Recompute tiers for the shifted block + the referrer
-  const T = Waitlist.TIER_THRESHOLDS;
-  const affected = await Waitlist.find({
-    position: { $gte: newPosition, $lte: oldPosition },
-  }).lean();
-
-  const ops = affected.map((entry) => {
-    const tier = entry.position <= T.charter ? 'charter'
-               : entry.position <= T.founding ? 'founding'
-               : 'original';
-    return {
-      updateOne: {
-        filter: { _id: entry._id },
-        update: { $set: { tier } },
-      },
-    };
-  });
-  if (ops.length > 0) await Waitlist.bulkWrite(ops);
-};
-
-// ─── JOIN THE WAITLIST ───
-router.post(
-  '/join',
-  joinLimiter,
-  [
-    body('email')
-      .isEmail().withMessage('Valid email required')
-      .custom((value) => {
-        const normalized = value.trim().toLowerCase();
-        if (!normalized.endsWith('.ac.in')) {
-          throw new Error('Only academic (.ac.in) emails are accepted');
-        }
-        return true;
-      }),
-    body('name').optional().isString().trim().isLength({ max: 60 }),
-    body('referralCode').optional().isString().trim().isLength({ min: 6, max: 6 }),
-  ],
-  validate,
-  async (req, res) => {
-    try {
-      const email = req.body.email.trim().toLowerCase();
-      const { name, referralCode } = req.body;
-
-      // Duplicate check
-      const existing = await Waitlist.findOne({ email });
-      if (existing) {
-        return res.status(409).json({
-          message: 'You are already in the cohort.',
-          position: existing.position,
-          referralCode: existing.referralCode,
-        });
-      }
-
-      // Process referral if provided
-      let referrer = null;
-      let bonusSpots = 0;
-      let oldPosition = null;
-
-      if (referralCode) {
-        referrer = await Waitlist.findOne({ referralCode: referralCode.toUpperCase() });
-        if (referrer) {
-          // Self-referral guard
-          if (referrer.email === email) {
-            return res.status(400).json({ message: 'Nice try. You cannot refer yourself.' });
-          }
-
-          // THE SLOT MACHINE MOMENT
-          bonusSpots = computeReferralBonus(referrer.referralCount);
-          oldPosition = referrer.position;
-          const newPosition = Math.max(1, referrer.position - bonusSpots);
-
-          referrer.position = newPosition;
-          referrer.referralCount += 1;
-          referrer.spotsJumped += bonusSpots;
-          referrer.tier = referrer.computeTier();
-          await referrer.save();
-
-          // Proper block-shift
-          await shiftPositionsUp(referrer._id, oldPosition, newPosition);
-        }
-      }
-
-      // Assign position (end of queue)
-      const totalBefore = await Waitlist.countDocuments();
-      const position = totalBefore + 1;
-      const newReferralCode = await Waitlist.generateReferralCode();
-      const { college, collegeCode } = extractCollege(email);
-
-      const T = Waitlist.TIER_THRESHOLDS;
-      const entry = await Waitlist.create({
-        email,
-        name: name || '',
-        college, collegeCode,
-        referralCode: newReferralCode,
-        referredBy: referrer?._id || null,
-        position,
-        tier: position <= T.charter ? 'charter' : position <= T.founding ? 'founding' : 'original',
-      });
-
-      res.status(201).json({
-        success: true,
-        position: entry.position,
-        referralCode: entry.referralCode,
-        tier: entry.tier,
-        totalWaiting: position,
-        referralBonus: referrer ? {
-          referrerName: referrer.name || 'A fellow IITian',
-          spotsJumped: bonusSpots,
-          newPosition: referrer.position,
-        } : null,
-      });
-    } catch (error) {
-      console.error('Waitlist join error:', error);
-      res.status(500).json({ message: 'The archives encountered an error. Please try again.' });
-    }
-  }
-);
-
-// ─── CHECK STATUS (by referral code — no auth needed) ───
-router.get('/status/:code', async (req, res) => {
-  try {
-    const entry = await Waitlist.findOne({ referralCode: req.params.code.toUpperCase() }).lean();
-    if (!entry) return res.status(404).json({ message: 'Code not found' });
-    const total = await Waitlist.countDocuments();
-    res.json({
-      position: entry.position,
-      tier: entry.tier,
-      totalWaiting: total,
-      ahead: entry.position - 1,
-      referralCount: entry.referralCount,
-      spotsJumped: entry.spotsJumped,
-      spotsToTop100: entry.position > 100 ? entry.position - 100 : 0,
-      spotsToTop50: entry.position > 50 ? entry.position - 50 : 0,
-      status: entry.status,
-      joinedAt: entry.joinedAt,
-      checkInStreak: entry.checkInStreak,
-      name: entry.name,
-    });
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to fetch status' });
-  }
-});
-
-// ─── PUBLIC STATS (for social proof counter) ───
-router.get('/stats', async (req, res) => {
-  try {
-    const [total, charter, founding, last24h, recentJoins] = await Promise.all([
-      Waitlist.countDocuments(),
-      Waitlist.countDocuments({ position: { $lte: 50 } }),
-      Waitlist.countDocuments({ position: { $gt: 50, $lte: 250 } }),
-      Waitlist.countDocuments({ joinedAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } }),
-      Waitlist.find().sort({ joinedAt: -1 }).limit(12).select('name branch year joinedAt').lean(),
-    ]);
-    res.json({
-      total, charter, founding, last24h,
-      // Real joins for transparent social proof
-      recentJoins: recentJoins.map(j => ({
-        name: j.name || 'An IITian',
-        branch: j.branch || '',
-        year: j.year || '',
-        joinedAt: j.joinedAt,
-      })),
-      // Fixed launch date (move to Setting model later)
-      launchDate: LAUNCH_DATE.toISOString(),
-    });
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to fetch stats' });
-  }
-});
-
-// ─── DAILY CHECK-IN (engagement loop) ───
-router.post('/checkin/:code', async (req, res) => {
-  try {
-    const entry = await Waitlist.findOne({ referralCode: req.params.code.toUpperCase() });
-    if (!entry) return res.status(404).json({ message: 'Code not found' });
-
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-    // Already checked in today
-    if (entry.lastCheckIn && new Date(entry.lastCheckIn).setHours(0,0,0,0) >= today.getTime()) {
-      return res.json({ streak: entry.checkInStreak, alreadyCheckedIn: true });
-    }
-
-    // Maintain or reset streak
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const lastCheckInDay = entry.lastCheckIn ? new Date(entry.lastCheckIn).setHours(0,0,0,0) : null;
-    entry.checkInStreak = (lastCheckInDay === yesterday.getTime()) ? entry.checkInStreak + 1 : 1;
-    entry.lastCheckIn = now;
-
-    // Reward: every 3-day streak = jump 2 spots
-    let reward = null;
-    if (entry.checkInStreak > 0 && entry.checkInStreak % 3 === 0) {
-      const jump = 2;
-      const oldPosition = entry.position;
-      const newPosition = Math.max(1, entry.position - jump);
-      entry.position = newPosition;
-      entry.spotsJumped += jump;
-      entry.tier = entry.computeTier();
-      await entry.save();
-      await shiftPositionsUp(entry._id, oldPosition, newPosition);
-      reward = { spotsJumped: jump, newPosition };
-    } else {
-      await entry.save();
-    }
-
-    res.json({ streak: entry.checkInStreak, position: entry.position, reward });
-  } catch (error) {
-    res.status(500).json({ message: 'Check-in failed' });
-  }
-});
-
-export default router;
-```
-
 ### ./server/tests/lib/env.mjs
 
 ```
@@ -12338,11 +12754,6 @@ const definitions = [
     blurb: 'Back on the admin dashboard: live campus stats, active bans, and the safety ledger reflecting everything the run did.',
   },
   {
-    id: 's13',
-    name: 'The Waitlist',
-    blurb: 'A student without a launch date joins the waitlist and claims their founding spot.',
-  },
-  {
     id: 's14',
     name: 'The Splash',
     blurb: 'The cinematic entry — tagline, and the automatic pass into the archives.',
@@ -12681,25 +13092,6 @@ async function runS12({ browser, cfg, world, log }) {
   return closeContext({ context, videoDir: dir, name: 's12' });
 }
 
-async function runS13({ browser, cfg, world, log }) {
-  const dir = path.join(SCENES_DIR, 's13');
-  const { context, page } = await makeContext(browser, dir, 's13');
-  await page.goto(`${QA_ORIGIN}/waitlist`, { waitUntil: 'domcontentloaded' });
-  await page.locator('text=/wait.?list/i').first().waitFor({ timeout: 20000 }).catch(() => {});
-  await sleep(1500);
-  try {
-    await page.locator('input[placeholder="Your name (optional)"]').fill('Farhan Ali');
-    await page.locator('input[placeholder="you@iitb.ac.in"]').fill('farhan.ali@iitb.ac.in');
-    await page.locator('button:has-text("Claim your founding spot")').tap();
-    await page.getByText('SPOT CLAIMED', { exact: false }).first().waitFor({ timeout: 15000 });
-    await sleep(2500);
-  } catch (e) {
-    log(`  [warn] s13 waitlist join failed: ${e.message}`);
-  }
-  await sleep(2000);
-  return closeContext({ context, videoDir: dir, name: 's13' });
-}
-
 async function runS14({ browser, cfg, world, log }) {
   const dir = path.join(SCENES_DIR, 's14');
   const { context, page } = await makeContext(browser, dir, 's14');
@@ -12740,7 +13132,6 @@ export const runners = {
   s10: runS10,
   s11: runS11,
   s12: runS12,
-  s13: runS13,
   s14: runS14,
   s15: runS15,
 };

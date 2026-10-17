@@ -1,7 +1,7 @@
-# Chunk 23 — Server Tests
+# Chunk 24 — Server Tests
 
-> Matchalize · `server-tests` · files 23 of 25 chunks · 9 file(s) · 62 KB · ~18,283 tokens
-> Generated 2026-10-09 14:03.
+> Matchalize · `server-tests` · files 24 of 27 chunks · 9 file(s) · 61 KB · ~17,976 tokens
+> Generated 2026-10-17 20:14.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -690,11 +690,6 @@ const definitions = [
     blurb: 'Back on the admin dashboard: live campus stats, active bans, and the safety ledger reflecting everything the run did.',
   },
   {
-    id: 's13',
-    name: 'The Waitlist',
-    blurb: 'A student without a launch date joins the waitlist and claims their founding spot.',
-  },
-  {
     id: 's14',
     name: 'The Splash',
     blurb: 'The cinematic entry — tagline, and the automatic pass into the archives.',
@@ -1033,25 +1028,6 @@ async function runS12({ browser, cfg, world, log }) {
   return closeContext({ context, videoDir: dir, name: 's12' });
 }
 
-async function runS13({ browser, cfg, world, log }) {
-  const dir = path.join(SCENES_DIR, 's13');
-  const { context, page } = await makeContext(browser, dir, 's13');
-  await page.goto(`${QA_ORIGIN}/waitlist`, { waitUntil: 'domcontentloaded' });
-  await page.locator('text=/wait.?list/i').first().waitFor({ timeout: 20000 }).catch(() => {});
-  await sleep(1500);
-  try {
-    await page.locator('input[placeholder="Your name (optional)"]').fill('Farhan Ali');
-    await page.locator('input[placeholder="you@iitb.ac.in"]').fill('farhan.ali@iitb.ac.in');
-    await page.locator('button:has-text("Claim your founding spot")').tap();
-    await page.getByText('SPOT CLAIMED', { exact: false }).first().waitFor({ timeout: 15000 });
-    await sleep(2500);
-  } catch (e) {
-    log(`  [warn] s13 waitlist join failed: ${e.message}`);
-  }
-  await sleep(2000);
-  return closeContext({ context, videoDir: dir, name: 's13' });
-}
-
 async function runS14({ browser, cfg, world, log }) {
   const dir = path.join(SCENES_DIR, 's14');
   const { context, page } = await makeContext(browser, dir, 's14');
@@ -1092,7 +1068,6 @@ export const runners = {
   s10: runS10,
   s11: runS11,
   s12: runS12,
-  s13: runS13,
   s14: runS14,
   s15: runS15,
 };

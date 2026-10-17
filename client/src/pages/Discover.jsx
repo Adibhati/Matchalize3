@@ -33,22 +33,22 @@ import LocationNotice from '../components/LocationNotice';
 import DiscoverRebuildOverlay from '../components/DiscoverRebuildOverlay';
 import { RotateCw, Compass, AlertTriangle, X, Undo2, Heart } from 'lucide-react';
 
-/* Exact visual language from Splash.jsx. Keep token names compatible with neu. */
+/* Neubrutalist design tokens inspired by the supplied reference; preserve neu token compatibility. */
 const t = {
   ...neu,
-  ink: '#111211',
-  ink2: '#383832',
-  ink3: '#77766F',
-  paper: '#F1EDE2',
-  card: '#F8F5EC',
-  desk: '#111211',
-  yellow: '#E0A15E',
-  coral: '#C96F68',
-  green: '#779477',
-  pink: '#A3A3A1',
-  red: '#A84F4A',
-  hair: 'rgba(17,18,17,.22)',
-  line: 'rgba(241,237,226,.2)',
+  ink: '#171414',
+  ink2: '#393130',
+  ink3: '#6E6160',
+  paper: '#FFF9F4',
+  card: '#FFFCF8',
+  desk: '#FFF9F4',
+  yellow: '#FFE76A',
+  coral: '#FF7399',
+  green: '#B8F0C7',
+  pink: '#C8A7FF',
+  red: '#D9485D',
+  hair: '#171414',
+  line: 'rgba(23, 20, 20, .22)',
   fontHeavy: "'Barlow Condensed', sans-serif",
   fontBody: "'Space Grotesk', sans-serif",
   fontMono: "'IBM Plex Mono', monospace",
@@ -923,15 +923,19 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
 const DECK_CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
+  /* Keep the iOS safe-area/status-bar backdrop in warm cream, not a full-bleed pink band. */
+  html, body, #root { background-color: #FFF9F4 !important; }
+
   .slam-btn,
   .deck-action-btn {
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
-    transition:
-      transform .18s cubic-bezier(.2,.8,.2,1),
-      background-color .18s ease,
-      border-color .18s ease,
-      opacity .18s ease;
+    transition: transform .14s ease, box-shadow .14s ease, background-color .14s ease, border-color .14s ease, opacity .14s ease;
+    border: 2px solid #171414;
+    border-radius: 16px;
+    box-shadow: 4px 4px 0 #171414;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 
   .slam-btn {
@@ -941,14 +945,13 @@ const DECK_CSS = `
     gap: 9px;
     min-height: 48px;
     padding: 13px 20px;
-    border: 1px solid #111211;
-    border-radius: 3px;
     font-family: ${t.fontMono};
     font-size: 11px;
     font-weight: 700;
-    letter-spacing: .09em;
+    letter-spacing: .07em;
     text-transform: uppercase;
     cursor: pointer;
+    color: ${t.ink};
   }
 
   .deck-action-btn {
@@ -958,31 +961,31 @@ const DECK_CSS = `
   }
 
   .deck-action-btn:disabled {
-    opacity: .3;
+    opacity: .34;
     cursor: not-allowed;
     box-shadow: none !important;
+    transform: none !important;
   }
 
   .deck-action-btn:focus-visible,
   .slam-btn:focus-visible {
-    outline: 2px solid ${t.yellow};
+    outline: 3px solid ${t.pink};
     outline-offset: 4px;
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .deck-action-btn:hover:not(:disabled) {
-      transform: translateY(-3px);
-    }
-
+    .deck-action-btn:hover:not(:disabled),
     .slam-btn:hover {
-      transform: translateY(-2px);
-      filter: brightness(1.035);
+      transform: translate(-2px, -2px);
+      box-shadow: 6px 6px 0 #171414;
+      filter: saturate(1.04);
     }
   }
 
   .deck-action-btn:active:not(:disabled),
   .slam-btn:active {
-    transform: scale(.97) !important;
+    transform: translate(3px, 3px) !important;
+    box-shadow: 1px 1px 0 #171414 !important;
   }
 
   kbd.deck-kbd {
@@ -992,10 +995,11 @@ const DECK_CSS = `
     min-width: 23px;
     min-height: 22px;
     padding: 2px 5px;
-    border: 1px solid ${t.hair};
-    border-radius: 3px;
+    border: 2px solid #171414;
+    border-radius: 7px;
     background: ${t.paper};
     color: ${t.ink};
+    box-shadow: 2px 2px 0 #171414;
     font: 600 10px ${t.fontMono};
   }
 
@@ -1006,39 +1010,26 @@ const DECK_CSS = `
     min-width: 0;
   }
 
-  @media (max-width: 760px) {
-    .deck-hints-desktop {
-      display: none !important;
-    }
+  .deck-action-btn.deck-align-btn {
+    background: ${t.yellow};
+  }
 
-    .discover-mobile-stage {
-      padding: 0 !important;
-    }
+  @media (max-width: 760px) {
+    .deck-hints-desktop { display: none !important; }
+    .discover-mobile-stage { padding: 0 !important; }
   }
 
   @media (max-height: 680px) and (min-width: 761px) {
-    .discover-desktop-stage {
-      padding-top: 8px !important;
-      padding-bottom: 4px !important;
-    }
-
-    .discover-desktop-actions {
-      padding-top: 6px !important;
-      padding-bottom: 8px !important;
-    }
+    .discover-desktop-stage { padding-top: 8px !important; padding-bottom: 4px !important; }
+    .discover-desktop-actions { padding-top: 6px !important; padding-bottom: 8px !important; }
   }
 
   @media (max-width: 380px) {
-    .discover-desktop-actions {
-      gap: 8px;
-    }
+    .discover-desktop-actions { gap: 8px; }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .slam-btn,
-    .deck-action-btn {
-      transition: none !important;
-    }
+    .slam-btn, .deck-action-btn { transition: none !important; }
   }
 `;
 
@@ -1052,7 +1043,7 @@ const styles = {
     width: '100%',
     padding: 12,
     boxSizing: 'border-box',
-    backgroundColor: t.desk,
+    background: '#FFF9F4',
     position: 'relative',
   },
 
@@ -1065,7 +1056,7 @@ const styles = {
     width: '100%',
     padding: 20,
     boxSizing: 'border-box',
-    backgroundColor: t.desk,
+    background: '#FFF9F4',
     position: 'relative',
   },
 
@@ -1075,7 +1066,7 @@ const styles = {
     minWidth: 0,
     display: 'flex',
     flexDirection: 'column',
-    backgroundColor: t.desk,
+    background: '#FFF9F4',
     position: 'relative',
     overflow: 'hidden',
     userSelect: 'none',
@@ -1132,9 +1123,10 @@ const styles = {
     height: '100%',
     minHeight: 0,
     minWidth: 0,
-    backgroundColor: t.desk,
-    border: '1px solid rgba(241,237,226,.2)',
-    borderRadius: 5,
+    background: '#FFF9F4',
+    border: '2px solid #171414',
+    borderRadius: 22,
+    boxShadow: '7px 7px 0 #171414',
     overflow: 'hidden',
     isolation: 'isolate',
   },
@@ -1169,13 +1161,15 @@ const styles = {
     width: 52,
     height: 52,
     minWidth: 52,
-    borderRadius: 5,
+    borderRadius: 16,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
-    border: `1px solid ${t.paper}`,
-    boxShadow: 'none',
+    border: `2px solid ${t.ink}`,
+    boxShadow: '4px 4px 0 #171414',
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
     fontFamily: t.fontMono,
     fontSize: 11,
     fontWeight: 700,
@@ -1189,7 +1183,7 @@ const styles = {
     marginLeft: 8,
     fontFamily: t.fontMono,
     fontSize: 9,
-    color: 'rgba(241,237,226,.6)',
+    color: t.ink3,
     whiteSpace: 'nowrap',
   },
 
@@ -1197,9 +1191,11 @@ const styles = {
     width: '100%',
     maxWidth: 340,
     backgroundColor: t.paper,
-    border: `1px solid ${t.paper}`,
-    borderRadius: 4,
-    boxShadow: '0 14px 36px rgba(0,0,0,.2)',
+    border: `2px solid ${t.ink}`,
+    borderRadius: 22,
+    boxShadow: '6px 6px 0 #171414',
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
     padding: '30px 24px 26px',
     textAlign: 'left',
     display: 'flex',
@@ -1210,9 +1206,9 @@ const styles = {
   stateTile: {
     width: 48,
     height: 48,
-    borderRadius: 4,
-    border: `1px solid ${t.ink}`,
-    boxShadow: 'none',
+    borderRadius: 12,
+    border: `2px solid ${t.ink}`,
+    boxShadow: '3px 3px 0 #171414',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1243,10 +1239,10 @@ const styles = {
   slamBtn: {
     padding: '13px 22px',
     background: t.coral,
-    color: t.ink,
-    border: `1px solid ${t.ink}`,
-    borderRadius: 2,
-    boxShadow: 'none',
+    color: '#171414',
+    border: `2px solid ${t.ink}`,
+    borderRadius: 13,
+    boxShadow: '4px 4px 0 #171414',
   },
 
   rebuiltNotice: {
@@ -1261,9 +1257,11 @@ const styles = {
     zIndex: 40,
     pointerEvents: 'none',
     padding: '8px 14px',
-    borderRadius: 2,
-    background: t.paper,
-    border: `1px solid ${t.paper}`,
+    borderRadius: 12,
+    background: '#FFF9F4',
+    border: `2px solid ${t.ink}`,
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
     color: t.ink,
     fontFamily: t.fontMono,
     fontSize: 9,
@@ -1286,9 +1284,11 @@ const styles = {
     zIndex: 30,
     pointerEvents: 'none',
     padding: '6px 10px',
-    background: t.paper,
-    border: `1px solid ${t.paper}`,
-    borderRadius: 2,
+    background: '#FFF9F4',
+    border: `2px solid ${t.ink}`,
+    borderRadius: 12,
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
     color: t.ink,
     fontFamily: t.fontMono,
     fontSize: 9,
@@ -1301,7 +1301,9 @@ const styles = {
   modalScrim: {
     position: 'fixed',
     inset: 0,
-    backgroundColor: 'rgba(17,18,17,.78)',
+    backgroundColor: 'rgba(23, 20, 20, .62)',
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
     zIndex: 99998,
   },
 
@@ -1313,9 +1315,11 @@ const styles = {
     width: '90%',
     maxWidth: 340,
     backgroundColor: t.paper,
-    border: `1px solid ${t.ink}`,
-    borderRadius: 4,
-    boxShadow: '0 18px 48px rgba(0,0,0,.25)',
+    border: `2px solid ${t.ink}`,
+    borderRadius: 24,
+    boxShadow: '8px 8px 0 #171414',
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
     padding: '30px 24px 24px',
     textAlign: 'left',
     zIndex: 99999,
@@ -1330,7 +1334,7 @@ const styles = {
     height: 12,
     borderRadius: 0,
     background: t.yellow,
-    border: `1px solid ${t.ink}`,
+    border: `2px solid ${t.ink}`,
   },
 
   confettiCoral: {
@@ -1341,7 +1345,7 @@ const styles = {
     height: 10,
     borderRadius: 0,
     background: t.coral,
-    border: `1px solid ${t.ink}`,
+    border: `2px solid ${t.ink}`,
   },
 
   confettiSage: {
@@ -1352,7 +1356,7 @@ const styles = {
     height: 10,
     borderRadius: 0,
     background: t.green,
-    border: `1px solid ${t.ink}`,
+    border: `2px solid ${t.ink}`,
   },
 
   confettiConcrete: {
@@ -1363,7 +1367,7 @@ const styles = {
     height: 12,
     borderRadius: 0,
     background: t.pink,
-    border: `1px solid ${t.ink}`,
+    border: `2px solid ${t.ink}`,
   },
 
   matchIcon: {
@@ -1374,8 +1378,9 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     background: t.yellow,
-    border: `1px solid ${t.ink}`,
-    borderRadius: 4,
+    border: `2px solid ${t.ink}`,
+    borderRadius: 15,
+    boxShadow: '4px 4px 0 #171414',
   },
 
   matchTitle: {
@@ -1408,10 +1413,10 @@ const styles = {
     width: '100%',
     padding: 15,
     background: t.coral,
-    color: t.ink,
-    border: `1px solid ${t.ink}`,
-    borderRadius: 2,
-    boxShadow: 'none',
+    color: '#171414',
+    border: `2px solid ${t.ink}`,
+    borderRadius: 13,
+    boxShadow: '4px 4px 0 #171414',
     fontFamily: t.fontMono,
     fontSize: 10,
     fontWeight: 700,
@@ -1425,8 +1430,8 @@ const styles = {
     padding: 15,
     background: 'transparent',
     color: t.ink,
-    border: `1px solid ${t.hair}`,
-    borderRadius: 2,
+    border: `2px solid ${t.ink}`,
+    borderRadius: 13,
     fontFamily: t.fontMono,
     fontSize: 10,
     fontWeight: 700,

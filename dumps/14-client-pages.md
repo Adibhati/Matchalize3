@@ -1,933 +1,1871 @@
 # Chunk 14 — Client Pages
 
-> Matchalize · `client-pages` · files 14 of 25 chunks · 1 file(s) · 41 KB · ~12,026 tokens
-> Generated 2026-10-09 14:03.
+> Matchalize · `client-pages` · files 14 of 27 chunks · 2 file(s) · 54 KB · ~15,683 tokens
+> Generated 2026-10-17 20:14.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
-> - `./client/src/pages/Onboarding.jsx`
+> - `./client/src/pages/Discover.jsx`
+> - `./client/src/pages/Matches.jsx`
 
 ---
-### ./client/src/pages/Onboarding.jsx
+### ./client/src/pages/Discover.jsx
 
 ```
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
-import { Camera, LogOut, ChevronRight, ChevronLeft, Check, MoreVertical, X } from 'lucide-react';
+
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import neu from '../styles/neu';
+import { motion, AnimatePresence } from 'framer-motion';
+import ProfileCard from '../components/ProfileCard';
+import { closeAllPopouts } from '../components/PopoutItem';
+import DeckActions from '../components/DeckActions';
+import ProfileCardSkeleton from '../components/ProfileCardSkeleton';
 import { api } from '../utils/api';
-import { toast } from '../utils/toast';
-import { triggerHaptic } from '../utils/haptics';
-import { readLocationOnce, LOCATION_UNAVAILABLE } from '../utils/geolocation';
 import { useAuth } from '../utils/AuthContext';
 import { useAppConfig } from '../utils/AppConfigContext';
+import { canInteract, readLadder } from '../utils/ladder';
+import ShadowbanBanner from '../components/ShadowbanBanner';
+import LearnMoreSheet from '../components/LearnMoreSheet';
+import { triggerHaptic } from '../utils/haptics';
+import { toast } from '../utils/toast';
+import {
+  discoverStore,
+  initDiscoverStore,
+  saveDiscoverStore,
+  resetDiscoverStore,
+} from '../utils/discoverStore';
+import { useIsDesktop } from '../utils/useIsDesktop';
+import {
+  syncLocationIfPermitted,
+  releaseEphemeralLocation,
+  watchGeolocationPermission,
+  GEO_PERMISSION,
+} from '../utils/locationSync';
+import shuffle from '../utils/shuffle';
+import socket from '../utils/socket';
+import LocationNotice from '../components/LocationNotice';
+import DiscoverRebuildOverlay from '../components/DiscoverRebuildOverlay';
+import { RotateCw, Compass, AlertTriangle, X, Undo2, Heart } from 'lucide-react';
 
-/**
- * 📝 ONBOARDING — seven screens, one question each, publish at 45.
- *
- * Design: neobrutalism — ink borders, hard offset shadows on BUTTONS ONLY,
- * straight edges (no tilt anywhere), directional slide transitions.
- * Photo step shows a local preview instantly and compresses before upload.
- *
- * ⚠️ THE 18-40 GATE IS NOT NEGOTIABLE. /users/setup re-derives age
- * server-side from `dob`; the client computes it only for the preview.
- */
-
-const T = {
-  bg: '#F4EFE3',
-  card: '#FFFFFF',
-  ink: '#191919',
-  ink2: '#5F5B52',
-  ink3: '#A39E92',
-  yellow: '#FFD43D',
-  yellowDeep: '#FFC91F',
-  green: '#5BD98A',
-  orange: '#FF6B4A',
-  red: '#E5484D',
-  fontHeavy: "'Archivo Black', 'Arial Black', sans-serif",
-  fontBody: "'Inter', -apple-system, 'Segoe UI', sans-serif",
-  fontMono: "'Space Mono', 'Courier New', monospace",
+/* Neubrutalist design tokens inspired by the supplied reference; preserve neu token compatibility. */
+const t = {
+  ...neu,
+  ink: '#171414',
+  ink2: '#393130',
+  ink3: '#6E6160',
+  paper: '#FFF9F4',
+  card: '#FFFCF8',
+  desk: '#FFF9F4',
+  yellow: '#FFE76A',
+  coral: '#FF7399',
+  green: '#B8F0C7',
+  pink: '#C8A7FF',
+  red: '#D9485D',
+  hair: '#171414',
+  line: 'rgba(23, 20, 20, .22)',
+  fontHeavy: "'Barlow Condensed', sans-serif",
+  fontBody: "'Space Grotesk', sans-serif",
+  fontMono: "'IBM Plex Mono', monospace",
 };
 
-const STEPS = [
-  {
-    key: 'name', title: 'What shall we call you?',
-    hint: 'First names work best.',
-  },
-  {
-    key: 'dob', title: "When's your birthday?",
-    hint: 'You must be 18 or older to join.',
-    foot: 'Others only ever see your age.',
-  },
-  {
-    key: 'photo', title: 'Add a photo',
-    hint: "It's the first thing people see. One is enough for now.",
-  },
-  { key: 'gender', title: 'How do you identify?' },
-  {
-    key: 'interestedIn', title: 'Who do you want to meet?',
-    hint: 'Pick as many as apply.',
-  },
-  { key: 'year', title: 'Undergrad or postgrad?' },
-  {
-    key: 'intent', title: 'What are you here for?',
-    hint: 'This shapes who appears in your deck.',
-  },
-  {
-    /* 📍 Deliberately LAST and optional. It only ever adds a ranking signal; the
-       deck works without it, and declining is not recorded as a refusal — the
-       field is simply absent from the setup payload and the server leaves
-       location off. */
-    key: 'location', title: 'Show people near you?',
-    hint: 'Optional. You can change this anytime in Settings.',
-    foot: 'Nothing is tracked in the background. We check once when you open the app.',
-    optional: true,
-  },
-];
-
-const FOOT_DEFAULT = 'You can change this anytime in Settings.';
-
-/* ⚠️ NO INTENT CAP. There was `MAX_INTENTS = 2` here and it is gone, matching
-   the removal in server/config/appData.js. Interests still cap at 10, but that
-   limit lives in the shared app config rather than here, because nothing needs
-   to hardcode it to get this right. */
-
-const CSS = `
-  /* Root is the scroller (html/body are locked in index.css): centered when
-     content fits, scrollable when it doesn't. Dot-grid on cream = the floor
-     everything sits on. */
-  .ob-root { height: 100vh; height: 100dvh; width: 100%; display: flex;
-    flex-direction: column; overflow-y: auto; overflow-x: hidden;
-    overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
-    background-color: ${T.bg};
-    background-image: radial-gradient(rgba(25,25,25,.10) 1.2px, transparent 1.3px);
-    background-size: 22px 22px;
-    box-sizing: border-box; position: relative;
-    --card: ${T.card}; --ink: ${T.ink}; --ink2: ${T.ink2}; --ink3: ${T.ink3};
-    --yellow: ${T.yellow}; --yellowDeep: ${T.yellowDeep}; --green: ${T.green};
-    --orange: ${T.orange}; --red: ${T.red};
-    --heavy: ${T.fontHeavy}; --body: ${T.fontBody}; --mono: ${T.fontMono}; }
-  .ob-root * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
-  .ob-root ::selection { background: ${T.yellow}; color: ${T.ink}; }
-
-  /* ── fixed header — identical on every step: back left, ⋮ right ── */
-  .ob-head { position: sticky; top: 0; z-index: 50; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: space-between;
-    padding: max(12px, env(safe-area-inset-top)) 14px 12px;
-    background-color: ${T.bg};
-    background-image: radial-gradient(rgba(25,25,25,.10) 1.2px, transparent 1.3px);
-    background-size: 22px 22px;
-    border-bottom: 2.5px solid ${T.ink}; }
-  .ob-headspacer { width: 46px; flex-shrink: 0; }
-
-  .ob-hbtn { width: 46px; height: 46px; flex-shrink: 0; display: flex; align-items: center;
-    justify-content: center; cursor: pointer; border: 2.5px solid var(--ink);
-    border-radius: 999px; background: var(--card); color: var(--ink);
-    box-shadow: 3px 3px 0 var(--ink);
-    transition: transform .1s ease, box-shadow .1s ease, background .15s ease; }
-  .ob-hbtn:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink);
-    background: var(--yellow); }
-
-  /* logout lives behind the ⋮ — invisible until asked for */
-  .ob-scrim { position: fixed; inset: 0; z-index: 90; cursor: default; }
-  .ob-menu { position: absolute; top: calc(100% + 8px); right: 0; z-index: 100;
-    min-width: 190px; padding: 6px; background: var(--card);
-    border: 2.5px solid var(--ink); border-radius: 14px;
-    box-shadow: 5px 5px 0 var(--ink); overflow: hidden; }
-  .ob-menuitem { display: flex; align-items: center; gap: 9px; width: 100%;
-    padding: 13px; background: none; border: none; cursor: pointer; text-align: left;
-    border-radius: 9px; font-family: var(--body); font-size: 14.5px; font-weight: 700;
-    color: var(--red); transition: background .12s ease; }
-  .ob-menuitem:active { background: rgba(229,72,77,.12); }
-
-  /* ── body ── */
-  .ob-fit { margin: auto; width: 100%; max-width: 440px;
-    padding: 14px 22px calc(32px + env(safe-area-inset-bottom));
-    display: flex; flex-direction: column; gap: 20px; }
-
-  .ob-title { font-family: var(--heavy); font-size: clamp(30px, 9vw, 41px); font-weight: 400;
-    line-height: 1.1; letter-spacing: -.01em; color: var(--ink); margin: 0; width: fit-content;
-    max-width: 100%; padding: 2px 8px 5px 0;
-    background-image: linear-gradient(180deg, transparent 60%, var(--yellow) 60%);
-    -webkit-box-decoration-break: clone; box-decoration-break: clone; }
-
-  .ob-hint { font-family: var(--body); font-size: 15px; font-weight: 500;
-    color: var(--ink2); margin: -8px 0 0; line-height: 1.55; }
-
-  .ob-field { display: flex; flex-direction: column; gap: 16px; }
-
-  .ob-input { width: 100%; height: 62px; padding: 0 18px; background: var(--card);
-    border: 2.5px solid var(--ink); border-radius: 16px;
-    font-family: var(--body); font-size: 18px; font-weight: 600; color: var(--ink);
-    outline: none; -webkit-appearance: none; appearance: none;
-    box-shadow: 4px 4px 0 var(--ink);
-    transition: transform .12s ease, box-shadow .12s ease, background .15s ease; }
-  .ob-input::placeholder { color: var(--ink3); font-weight: 500; }
-  .ob-input:focus { background: #FFFBEA; transform: translate(-2px, -2px);
-    box-shadow: 6px 6px 0 var(--ink); }
-  .ob-dob { font-family: var(--mono); font-size: 20px; font-weight: 700; }
-  .ob-slash { font-family: var(--mono); font-size: 22px; font-weight: 700;
-    color: var(--ink); flex-shrink: 0; }
-
-  /* age sticker — green when in band, red-shadowed when not */
-  .ob-age { align-self: flex-start; font-family: var(--mono); font-size: 14px; font-weight: 700;
-    padding: 9px 16px; background: var(--card); color: var(--red);
-    border: 2.5px solid var(--ink); border-radius: 999px; box-shadow: 3px 3px 0 var(--red); }
-  .ob-age.ok { background: var(--green); color: var(--ink); box-shadow: 3px 3px 0 var(--ink); }
-
-  .ob-chips { display: flex; flex-wrap: wrap; gap: 12px; }
-  /* 📍 Location step. Reads as an explanation plus one decision, not a form
-     field — the copy is what earns the permission, so it gets real space. */
-  .ob-location { display: flex; flex-direction: column; gap: 16px;
-    align-items: flex-start; max-width: 460px; }
-  .ob-location-copy { margin: 0; font-family: ${T.fontBody}; font-size: 15px;
-    line-height: 1.55; color: ${T.ink2}; }
-  .ob-location-ok { margin: 0; display: flex; align-items: center; gap: 8px;
-    font-family: ${T.fontBody}; font-size: 15px; font-weight: 600; color: ${T.ink}; }
-  .ob-loc-btn { appearance: none; border: 0; cursor: pointer; display: block;
-    width: 100%; font-family: ${T.fontHeavy}; font-size: 15px; letter-spacing: .01em;
-    padding: 13px 22px; border-radius: 999px;
-    background: ${T.yellow}; color: ${T.ink};
-    box-shadow: 0 2px 0 ${T.yellowDeep}; }
-  .ob-loc-btn:disabled { opacity: .55; cursor: default; }
-  /* The fallback is a real choice, so it gets the same target size and a
-     visible border — it must not read as a footnote under the primary button,
-     or the "required" step becomes a trap with a quiet exit. */
-  .ob-loc-alt { appearance: none; cursor: pointer; display: block; width: 100%;
-    font-family: ${T.fontBody}; font-size: 14px; font-weight: 600;
-    padding: 12px 22px; border-radius: 999px;
-    background: transparent; color: ${T.ink2};
-    border: 2px solid ${T.ink3}; }
-  .ob-loc-alt:disabled { opacity: .55; cursor: default; }
-  .ob-loc-alt:active { background: ${T.paper2}; }
-  .ob-loc-note { margin: 0; font-family: ${T.fontMono}; font-size: 12px;
-    color: ${T.ink3}; }
-  .ob-chip { padding: 14px 22px; min-height: 54px; border-radius: 999px;
-    border: 2.5px solid var(--ink); background: var(--card); color: var(--ink); cursor: pointer;
-    font-family: var(--body); font-size: 16px; font-weight: 700;
-    display: inline-flex; align-items: center; gap: 8px;
-    box-shadow: 3px 3px 0 var(--ink);
-    transition: transform .1s ease, box-shadow .1s ease, background .15s ease; }
-  .ob-chip:active:not(:disabled) { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink); }
-  .ob-chip.on { background: var(--yellow); }
-  .ob-chip:disabled { opacity: .4; cursor: not-allowed; }
-
-  /* ── photo area — NO shadow, NO press effect. The zone itself stays quiet;
-     only the real buttons on top of it (cross / add) react to clicks. ── */
-  .ob-photo { width: 100%; aspect-ratio: 4 / 5; max-height: 46vh; max-height: 46dvh;
-    border-radius: 22px; border: 2.5px dashed var(--ink3); background: var(--card);
-    overflow: hidden; position: relative; display: flex; align-items: center;
-    justify-content: center; padding: 0; cursor: pointer; }
-  .ob-photo.filled { border-style: solid; border-color: var(--ink); cursor: default; }
-  .ob-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .ob-photoempty { display: flex; flex-direction: column; align-items: center; gap: 16px;
-    color: var(--ink2); font-family: var(--body); font-size: 14.5px; font-weight: 600;
-    padding: 20px; text-align: center; }
-  .ob-cam { width: 66px; height: 66px; display: flex; align-items: center; justify-content: center;
-    background: var(--orange); border: 2.5px solid var(--ink); border-radius: 999px;
-    box-shadow: 3px 3px 0 var(--ink); color: var(--ink); }
-
-  /* invisible full-area hit zone so tap-to-change stays a real <button> */
-  .ob-photohit { position: absolute; inset: 0; z-index: 1; background: transparent;
-    border: none; padding: 0; margin: 0; cursor: pointer; -webkit-appearance: none; appearance: none; }
-
-  /* the cross — a real button, so it keeps the press effect */
-  .ob-photox { position: absolute; top: 12px; right: 12px; z-index: 3;
-    width: 40px; height: 40px; border-radius: 999px; background: var(--card);
-    border: 2.5px solid var(--ink); box-shadow: 3px 3px 0 var(--ink);
-    display: flex; align-items: center; justify-content: center;
-    cursor: pointer; color: var(--ink);
-    transition: transform .1s ease, box-shadow .1s ease, background .15s ease; }
-  .ob-photox:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink);
-    background: var(--red); color: #fff; }
-
-  /* uploading pill — sits over the local preview while the compressed
-     file is in flight */
-  .ob-uploading { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
-    z-index: 3; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
-    padding: 9px 16px; background: var(--yellow); border: 2.5px solid var(--ink);
-    border-radius: 999px; box-shadow: 3px 3px 0 var(--ink);
-    font-family: var(--body); font-size: 13px; font-weight: 800; color: var(--ink); }
-  .ob-spin { width: 12px; height: 12px; border-radius: 999px;
-    border: 2.5px solid var(--ink); border-top-color: transparent;
-    animation: obspin .7s linear infinite; }
-  @keyframes obspin { to { transform: rotate(360deg); } }
-
-  .ob-cta { width: 100%; height: 64px; border: 2.5px solid var(--ink); border-radius: 999px;
-    background: var(--yellow); color: var(--ink); cursor: pointer; font-family: var(--body);
-    font-size: 17px; font-weight: 800; letter-spacing: .01em; flex-shrink: 0;
-    display: inline-flex; align-items: center; justify-content: center; gap: 10px;
-    box-shadow: 5px 5px 0 var(--ink);
-    transition: transform .1s ease, box-shadow .1s ease, opacity .15s ease, background .15s ease; }
-  .ob-cta:active:not(:disabled) { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--ink); }
-  .ob-cta:disabled { opacity: .45; cursor: default; }
-  .ob-cta svg { transition: transform .15s ease; }
-
-  .ob-foot { font-family: var(--mono); font-size: 12px; font-weight: 400;
-    color: var(--ink3); text-align: center; margin: 0; line-height: 1.6; }
-
-  .ob-banner { background: var(--card); border-radius: 14px; padding: 13px 15px;
-    border: 2.5px solid var(--ink); box-shadow: 4px 4px 0 var(--red); }
-  .ob-banner p { margin: 0; font-family: var(--body); font-size: 14px;
-    font-weight: 600; color: var(--ink); line-height: 1.5; }
-
-  .ob-root input, .ob-root textarea, .ob-root select { -webkit-user-select: auto; user-select: auto; }
-  .ob-root img { pointer-events: none; }
-
-  .ob-input:focus-visible, .ob-chip:focus-visible, .ob-cta:focus-visible,
-  .ob-photo:focus-visible, .ob-photohit:focus-visible, .ob-photox:focus-visible,
-  .ob-hbtn:focus-visible, .ob-menuitem:focus-visible {
-    outline: 3px solid var(--ink); outline-offset: 3px; }
-
-  @media (hover: hover) and (pointer: fine) {
-    .ob-hbtn:hover { background: var(--yellow); }
-    .ob-menuitem:hover { background: rgba(229,72,77,.1); }
-    .ob-chip:hover:not(:disabled):not(.on) { background: #FFFBEA; }
-    .ob-chip.on:hover { background: var(--yellowDeep); }
-    .ob-cta:hover:not(:disabled) { background: var(--yellowDeep); }
-    .ob-cta:hover:not(:disabled) svg { transform: translateX(4px); }
-    .ob-photo:hover:not(.filled) { border-color: var(--ink); }
-    .ob-photohit:hover { background: rgba(25,25,25,.04); }
-    .ob-photox:hover { background: var(--red); color: #fff; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .ob-root * { transition: none !important; animation: none !important; }
-  }
-`;
-
-/* ── screen transition — straight directional slide, springy landing,
-   staggered kids. Forward slides left, back slides right. No rotation. ── */
-const useScreenVariants = (reduceMotion) => ({
-  screen: {
-    enter: (d) => (reduceMotion
-      ? { opacity: 1, x: 0 }
-      : { opacity: 0, x: d * 90 }),
-    center: {
-      opacity: 1, x: 0,
-      transition: { type: 'spring', stiffness: 330, damping: 32, staggerChildren: 0.06, delayChildren: 0.03 },
+const slideVariants = {
+  enter: (direction = 'up') => ({
+    opacity: 0,
+    y: direction === 'down' ? -34 : 34,
+    scale: 0.985,
+    zIndex: 1,
+  }),
+  center: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    zIndex: 2,
+    transition: {
+      type: 'spring',
+      stiffness: 280,
+      damping: 27,
+      mass: 0.85,
     },
-    exit: (d) => (reduceMotion
-      ? { opacity: 0, transition: { duration: 0.12 } }
-      : { opacity: 0, x: d * -80, transition: { duration: 0.18, ease: 'easeIn' } }),
   },
-  item: {
-    enter: () => (reduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 18 }),
-    center: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 420, damping: 30 } },
-  },
-});
+  exit: (direction = 'up') => ({
+    opacity: 0,
+    y: direction === 'down' ? 42 : -42,
+    scale: 0.985,
+    zIndex: 1,
+    transition: {
+      duration: 0.19,
+      ease: [0.22, 1, 0.36, 1],
+    },
+  }),
+};
 
-/* ── client-side photo compression — this is what makes uploads fast.
-     Downscales to max 1280px on the long edge and re-encodes as JPEG q85,
-     which cuts a typical phone photo (~3-6MB) down to ~200-400KB.
-     Skips tiny files, never upscales, falls back to the original on any
-     decode failure (e.g. HEIC the browser can't paint). ── */
-const MAX_DIM = 1280;
-const JPEG_QUALITY = 0.85;
-const SKIP_BELOW = 400 * 1024; // already small — upload as-is
+const springTransition = {
+  type: 'spring',
+  stiffness: 280,
+  damping: 27,
+  mass: 0.85,
+};
 
-const compressImage = (file) =>
-  new Promise((resolve, reject) => {
-    if (!file.type.startsWith('image/')) { reject(new Error('not an image')); return; }
-    if (file.size < SKIP_BELOW) { resolve(file); return; }
-    const src = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(src);
-      try {
-        const scale = Math.min(1, MAX_DIM / Math.max(img.width, img.height));
-        const w = Math.max(1, Math.round(img.width * scale));
-        const h = Math.max(1, Math.round(img.height * scale));
-        const canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
-        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        canvas.toBlob((blob) => {
-          if (!blob) { resolve(file); return; }
-          // if compression somehow didn't help, ship the original
-          resolve(blob.size < file.size ? new File([blob], 'photo.jpg', { type: 'image/jpeg' }) : file);
-        }, 'image/jpeg', JPEG_QUALITY);
-      } catch { resolve(file); }
+const MAX_GATE_RETRIES = 2;
+
+const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
+  const isDesktop = useIsDesktop();
+  const [profiles, setProfiles] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [fetchingMore, setFetchingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [deckExhausted, setDeckExhausted] = useState(false);
+  const [rebuiltAt, setRebuiltAt] = useState(0);
+  const [slideDirection, setSlideDirection] = useState('up');
+  const [undoNonce, setUndoNonce] = useState(0);
+  const [merging, setMerging] = useState(false);
+  const [locationDenied, setLocationDenied] = useState(false);
+  const [showAlignmentModal, setShowAlignmentModal] = useState(false);
+  const [alignedProfile, setAlignedProfile] = useState(null);
+
+  const actionPendingRef = useRef(false);
+  const servedRef = useRef(0);
+  const rebuiltTimer = useRef(null);
+  const { user: myUser } = useAuth();
+
+  const [locationRead, setLocationRead] = useState(null);
+
+  useEffect(() => {
+    if (!myUser?._id) return;
+    let alive = true;
+
+    api.get('/users/location')
+      .then((r) => {
+        if (alive) setLocationRead(r ?? null);
+      })
+      .catch(() => {});
+
+    return () => {
+      alive = false;
     };
-    img.onerror = () => { URL.revokeObjectURL(src); resolve(file); };
-    img.src = src;
-  });
+  }, [myUser?._id]);
 
-const Onboarding = ({ onComplete }) => {
-  const reduceMotion = useReducedMotion();
+  const [showLearnMore, setShowLearnMore] = useState(false);
+  const shadowbanScore = myUser?.shadowbanScore || 0;
   const config = useAppConfig();
-  const { logout, login } = useAuth();
-  const fileRef = useRef(null);
-  const rootRef = useRef(null);
-  const previewRef = useRef(null); // live blob URL while a photo is in flight
-  const V = useScreenVariants(reduceMotion);
 
-  const [step, setStep] = useState(0);
-  const [dir, setDir] = useState(0);
-  const [uploading, setUploading] = useState(false);
-  const [publishing, setPublishing] = useState(false);
-  const [error, setError] = useState('');
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [preview, setPreview] = useState(null);
+  const [rebuildOverlay, setRebuildOverlay] = useState(false);
+  const rebuildOverlayTimer = useRef(null);
 
-  const [formData, setFormData] = useState({
-    name: '', dob: '', gender: '', year: '', intent: [], interestedIn: [],
-    photos: [], prompts: [], interests: [], currentLatLng: undefined,
-  });
+  const [myProfile, setMyProfile] = useState(null);
+  const [myProfileState, setMyProfileState] = useState('loading');
+  const myProfileScore = myProfile?.profileScore ?? 0;
+  const deckGated = !canInteract(myProfileScore, config);
 
-  /* ── resume an interrupted run ──
-     Retries on reconnect; recovery only fills fields that are still empty,
-     so it can never clobber an answer the student gave after a failed load. */
-  const resumeDraft = useCallback(async () => {
+  const loadMyProfile = useCallback(async () => {
+    setMyProfileState((s) => (s === 'error' ? 'loading' : s));
+
     try {
-      const res = await api.get('/users/onboarding/resume');
-      if (!res?.data || !Object.keys(res.data).length) return;
-      const saved = res.data;
-      setFormData((prev) => ({
-        ...prev,
-        ...saved,
-        name: prev.name || saved.name || '',
-        gender: prev.gender || saved.gender || '',
-        year: prev.year || saved.year || '',
-        dob: prev.dob || saved.dob || '',
-        photos: prev.photos?.length ? prev.photos : (Array.isArray(saved.photos) ? saved.photos : prev.photos),
-        intent: prev.intent?.length ? prev.intent : (Array.isArray(saved.intent) ? saved.intent : prev.intent),
-        interestedIn: prev.interestedIn?.length ? prev.interestedIn : (Array.isArray(saved.interestedIn) ? saved.interestedIn : prev.interestedIn),
-        interests: prev.interests?.length ? prev.interests : (Array.isArray(saved.interests) ? saved.interests : prev.interests),
-        prompts: prev.prompts?.length ? prev.prompts : (Array.isArray(saved.prompts) ? saved.prompts : prev.prompts),
-      }));
-      const idx = Number(saved.__step);
-      if (Number.isFinite(idx) && idx >= 0 && idx < STEPS.length) setStep(idx);
+      const me = await api.get('/auth/me');
+      setMyProfile(me);
+      setMyProfileState('ready');
+      return me;
     } catch {
-      // Draft unavailable — the next online/visible event retries.
+      setMyProfileState('error');
+      return null;
     }
   }, []);
 
   useEffect(() => {
-    resumeDraft();
-    const onOnline = () => resumeDraft();
-    const onVisible = () => { if (document.visibilityState === 'visible') resumeDraft(); };
+    loadMyProfile();
+  }, [loadMyProfile]);
+
+  useEffect(() => {
+    const onOnline = () => loadMyProfile();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadMyProfile();
+    };
+
     window.addEventListener('online', onOnline);
     document.addEventListener('visibilitychange', onVisible);
+
     return () => {
       window.removeEventListener('online', onOnline);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [resumeDraft]);
+  }, [loadMyProfile]);
 
-  /* Autosave, debounced; step included so resume knows where the user was. */
+  const gateRetries = useRef(0);
+
   useEffect(() => {
-    const { name, gender, dob } = formData;
-    if (!name && !gender && !dob) return undefined;
-    const t = setTimeout(() => {
-      api.put('/users/onboarding/save', { step: step + 1, data: { ...formData, __step: step } })
-        .catch(() => {});
-    }, 800);
-    return () => clearTimeout(t);
-  }, [formData, step]);
+    if (myProfileState !== 'error') return undefined;
+    if (gateRetries.current >= MAX_GATE_RETRIES) return undefined;
 
-  /* Escape closes the overflow menu */
+    gateRetries.current += 1;
+    const timer = setTimeout(() => loadMyProfile(), 2500);
+
+    return () => clearTimeout(timer);
+  }, [myProfileState, loadMyProfile]);
+
   useEffect(() => {
-    if (!menuOpen) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [menuOpen]);
+    if (myProfileState === 'ready') gateRetries.current = 0;
+  }, [myProfileState]);
 
-  const update = (patch) => setFormData((f) => ({ ...f, ...patch }));
+  const deckFetchInFlight = useRef(null);
 
-  const toggleIn = (field, item, max = null) => {
-    setFormData((f) => {
-      const arr = f[field] || [];
-      const on = arr.includes(item);
-      if (on) return { ...f, [field]: arr.filter((i) => i !== item) };
-      if (max && arr.length >= max) { triggerHaptic('heavy'); return f; }
-      // 'Everyone' is mutually exclusive with specific choices.
-      const next = field === 'interestedIn'
-        ? ['Everyone']
-        : (item === 'Everyone' ? [] : arr.filter((i) => i !== 'Everyone'));
-      return { ...f, [field]: [...next, item] };
-    });
-    triggerHaptic('light');
-  };
+  const fetchProfiles = useCallback(async (append = false) => {
+    if (deckFetchInFlight.current) return deckFetchInFlight.current;
 
-  /* ── DOB — three auto-advancing boxes. Age is COMPUTED, never typed, and
-     only for the on-screen preview. ── */
-  const dobParts = (formData.dob || '--').split('-');
-  const dobY = dobParts[0] === '--' ? '' : dobParts[0];
-  const dobM = dobParts[1] === '--' ? '' : dobParts[1];
-  const dobD = dobParts[2] === '--' ? '' : dobParts[2];
-  const dayRef = useRef(null); const monRef = useRef(null); const yrRef = useRef(null);
+    const run = (async () => {
+      if (!append) {
+        setLoading(true);
+        setError(null);
+        resetDiscoverStore();
+      } else {
+        setFetchingMore(true);
+      }
 
-  const age = (() => {
-    if (dobY.length !== 4 || dobM.length !== 2 || dobD.length !== 2) return null;
-    const today = new Date();
-    const birth = new Date(`${dobY}-${dobM}-${dobD}`);
-    if (Number.isNaN(birth.getTime())) return null;
-    let a = today.getFullYear() - birth.getFullYear();
-    const m = today.getMonth() - birth.getMonth();
-    return (m < 0 || (m === 0 && today.getDate() < birth.getDate())) ? a - 1 : a;
-  })();
+      try {
+        const servedCount = append ? servedRef.current : 0;
+        const q = `/discover?limit=10&served=${servedCount}`;
+        const data = await api.get(q);
+        const newProfiles = shuffle(data.users || []);
 
-  const setDob = (part, raw) => {
-    const num = raw.replace(/\D/g, '');
-    let d = dobD; let m = dobM; let y = dobY;
-    if (part === 'd') {
-      d = num.slice(0, 2);
-      if (d.length === 2) { if (+d > 31) d = '31'; if (+d === 0) d = '01'; monRef.current?.focus(); }
-    }
-    if (part === 'm') {
-      m = num.slice(0, 2);
-      if (m.length === 2) { if (+m > 12) m = '12'; if (+m === 0) m = '01'; yrRef.current?.focus(); }
-    }
-    if (part === 'y') y = num.slice(0, 4);
-    update({ dob: `${y}-${m}-${d}` });
-  };
+        servedRef.current = Number.isFinite(data.served)
+          ? data.served
+          : servedCount + newProfiles.length;
 
-  /* ── photo ── */
-  const clearPreview = () => {
-    if (previewRef.current) { URL.revokeObjectURL(previewRef.current); previewRef.current = null; }
-    setPreview(null);
-  };
+        if (append) {
+          if (newProfiles.length === 0) {
+            setHasMore(false);
+            setDeckExhausted(!!data.deckExhausted);
+            discoverStore.hasMore = false;
+            saveDiscoverStore();
+            return;
+          }
 
-  const pickPhoto = () => { triggerHaptic('light'); fileRef.current?.click(); };
+          setProfiles((prev) => {
+            const next = [...prev, ...newProfiles];
+            discoverStore.profiles = next;
+            discoverStore.hasMore = data.hasMore;
+            saveDiscoverStore();
+            return next;
+          });
+        } else if (newProfiles.length > 0) {
+          setProfiles(newProfiles);
+          setCurrentIndex(0);
+          discoverStore.profiles = newProfiles;
+          discoverStore.currentIndex = 0;
+          discoverStore.hasMore = data.hasMore;
+          saveDiscoverStore();
+        }
 
-  const removePhoto = () => {
-    triggerHaptic('light');
-    clearPreview();
-    update({ photos: [] });
-  };
+        setHasMore(data.hasMore);
+        setDeckExhausted(!!data.deckExhausted);
 
-  const onFile = async (e) => {
-    const f = e.target.files?.[0];
-    e.target.value = '';
-    if (!f) return;
-    setUploading(true);
-    setError('');
-    triggerHaptic('medium');
+        if (data.rebuiltWindow && append) {
+          setRebuiltAt(Date.now());
+          clearTimeout(rebuiltTimer.current);
+          rebuiltTimer.current = setTimeout(() => setRebuiltAt(0), 4000);
+        }
+      } catch (err) {
+        console.error('Failed to fetch deck profiles:', err);
+        if (!append) setError(err.message || 'Something went wrong');
+      } finally {
+        setLoading(false);
+        setFetchingMore(false);
+      }
+    })();
 
-    // Show the chosen photo INSTANTLY from a local blob while it uploads —
-    // no waiting on the network to see your picture.
-    const localUrl = URL.createObjectURL(f);
-    previewRef.current = localUrl;
-    setPreview(localUrl);
+    deckFetchInFlight.current = run;
 
     try {
-      const toUpload = await compressImage(f); // smaller payload = much faster upload
-      const { url } = await api.upload(toUpload);
-      update({ photos: [url] });   // slot 0 is the hero; slots 1–3 live in Profile
-      triggerHaptic('success');
-    } catch {
-      toast.error('Upload failed. Check your connection, or try a smaller image.');
-      triggerHaptic('heavy');
+      await run;
     } finally {
-      setUploading(false);
-      clearPreview(); // real URL (or nothing, on failure) takes over
+      deckFetchInFlight.current = null;
     }
-  };
 
-  /* ── 📍 location (required, one-shot, with a real fallback) ──
-     These must be declared BEFORE the `done` object because `done`
-     references `locationReading` and `locDeclined`. */
-  const [locBusy, setLocBusy] = useState(false);
-  const [locationReading, setLocationReading] = useState(false);
-  const [locError, setLocError] = useState('');
-  /* An EXPLICIT decline, distinct from never having tried. Without this flag a
-     refusal and an untouched step look identical, and the user could not tell
-     whether "required" meant "required" or "skippable". */
-  const [locDeclined, setLocDeclined] = useState(false);
+    return run;
+  }, []);
 
-  /* ── per-screen completion ── */
-  const done = {
-    name: !!formData.name.trim(),
-    dob: age !== null && age >= 18 && age <= 40,
-    photo: !!formData.photos[0],
-    gender: !!formData.gender,
-    interestedIn: formData.interestedIn.length > 0,
-    year: !!formData.year,
-    intent: formData.intent.length > 0,
-    /* 📍 REQUIRED, BUT AS AN EXPLICIT CHOICE — not a permission to skip past.
+  const refreshLocation = useCallback(async () => {
+    const res = await syncLocationIfPermitted();
 
-       The step blocks until the user either shares a reading or deliberately
-       picks the campus fallback. Both paths out of this screen work and neither
-       is a dead end, so this is not Next held hostage for a permission they may
-       never grant: declining is a real choice with a stated consequence, which
-       is why the fallback button says what it costs instead of hiding behind
-       "Not now". */
-    location: locationReading || locDeclined,
-  };
-  const stepDone = (i) => done[STEPS[i].key];
-  const allDone = STEPS.every((st) => done[st.key]);
+    if (!res.ok) {
+      if (res.reason === 'denied') setLocationDenied(true);
 
-  const grantLocation = useCallback(async () => {
-    if (locBusy) return;
-    setLocBusy(true);
-    setLocError('');
-    const res = await readLocationOnce();
-    setLocBusy(false);
-    if (res.ok) {
-      /* Held in memory only. It goes out once, in the setup payload, and the
-         server rounds it before storing. */
-      setFormData((f) => ({ ...f, currentLatLng: res.latLng }));
-      setLocationReading(true);
+      toast.error(
+        res.reason === 'denied'
+          ? 'Location permission was denied. Enable it in browser settings.'
+          : res.reason === 'insecure-context'
+            ? 'Location only works on a secure connection.'
+            : "Couldn't get a location reading. Try again, or check phone GPS settings.",
+      );
       return;
     }
-    setLocError(
-      res.reason === LOCATION_UNAVAILABLE.DENIED
-        ? 'Location permission was declined.'
-        : res.reason === LOCATION_UNAVAILABLE.INSECURE
-          ? 'Location needs a secure (https) connection.'
-          : "We couldn't get a location reading.",
-    );
-  }, [locBusy]);
 
-  /* ── publish — posts exactly the publish band; the server scores it ── */
-  const publish = async () => {
-    if (!allDone || uploading || publishing) { triggerHaptic('heavy'); return; }
-    setPublishing(true);
-    setError('');
-    triggerHaptic('heavy');
-    try {
-      const res = await api.post('/users/setup', {
-        ...formData,
-        age,
-        prompts: (formData.prompts || []).slice(0, 3),
-      });
-      await api.delete('/users/onboarding/clear').catch(() => {});
-
-      const stored = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
-      const updated = res?.user || res?.data?.user || res || {
-        ...stored, isSetup: true, isOnboarded: true, profileCompleted: true, onboardingCompleted: true,
-      };
-      login(updated);
-      onComplete();
-    } catch (err) {
-      if (!err?.toasted) toast.error('Could not publish your profile. Check your connection and try again.');
-      setPublishing(false);
+    if (!res.moved) {
+      toast.info('Your location is already current.');
+      return;
     }
-  };
 
-  const next = () => {
-    if (!stepDone(step)) { triggerHaptic('heavy'); return; }
-    triggerHaptic('light');
-    setError('');
-    setDir(1);
-    setStep((s) => Math.min(s + 1, STEPS.length - 1));
-    rootRef.current?.scrollTo({ top: 0 });
-  };
-  const back = () => {
-    triggerHaptic('light');
-    setError('');
-    setDir(-1);
-    setStep((s) => Math.max(0, s - 1));
-    rootRef.current?.scrollTo({ top: 0 });
-  };
+    resetDiscoverStore();
+    setProfiles([]);
+    setCurrentIndex(0);
+    setHasMore(true);
+    setDeckExhausted(false);
+    setRebuiltAt(Date.now());
+    servedRef.current = 0;
 
-  const s = STEPS[step];
-  const isLast = step === STEPS.length - 1;
+    await fetchProfiles(false);
+    toast.success('Location updated. Showing people near you.');
+  }, [fetchProfiles]);
 
-  const genders = config?.genders || ['Male', 'Female', 'Non-binary', 'Other'];
-  const showOptions = [...genders, 'Everyone'];
-  const intentOptions = config?.intents || [];
+  const rebuildDeckForLocation = useCallback(async () => {
+    clearTimeout(rebuiltTimer.current);
+    clearTimeout(rebuildOverlayTimer.current);
+    resetDiscoverStore();
+    setProfiles([]);
+    setCurrentIndex(0);
+    setHasMore(true);
+    setDeckExhausted(false);
+    servedRef.current = 0;
 
-  const banner = (
-    <AnimatePresence>
-      {error && (
-        <motion.div key="b" role="alert"
-          initial={reduceMotion ? false : { opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0 }}
-          transition={{ duration: 0.2 }} style={{ overflow: 'hidden' }}>
-          <div className="ob-banner"><p>{error}</p></div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
+    rebuildOverlayTimer.current = setTimeout(
+      () => setRebuildOverlay(true),
+      250,
+    );
+
+    try {
+      await fetchProfiles(false);
+    } finally {
+      clearTimeout(rebuildOverlayTimer.current);
+      setRebuildOverlay(false);
+    }
+  }, [fetchProfiles]);
+
+  useEffect(() => {
+    if (!navigator?.permissions?.query) return;
+    let alive = true;
+
+    navigator.permissions.query({ name: 'geolocation' })
+      .then((r) => {
+        if (!alive) return;
+        setLocationDenied(r.state === GEO_PERMISSION.DENIED);
+      })
+      .catch(() => {});
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        await releaseEphemeralLocation();
+        const res = await syncLocationIfPermitted();
+
+        if (!alive || !res.ok || !res.moved) return;
+
+        resetDiscoverStore();
+        setProfiles([]);
+        setCurrentIndex(0);
+        setHasMore(true);
+        setDeckExhausted(false);
+        servedRef.current = 0;
+      } catch {
+        // Location maintenance must not interrupt Discover.
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => watchGeolocationPermission((state) => {
+    setLocationDenied(state === GEO_PERMISSION.DENIED);
+  }), []);
+
+  useEffect(() => () => {
+    clearTimeout(rebuiltTimer.current);
+    clearTimeout(rebuildOverlayTimer.current);
+  }, []);
+
+  const refreshMerged = useCallback(async () => {
+    setMerging(true);
+
+    try {
+      const data = await api.get('/discover?limit=20');
+      const fresh = data.users || [];
+      if (fresh.length === 0) return;
+
+      const byId = new Map(fresh.map((p) => [String(p._id), p]));
+
+      setProfiles((prev) => {
+        if (prev.length === 0) return prev;
+        let changed = false;
+
+        const next = prev.map((p) => {
+          const f = byId.get(String(p._id));
+          if (!f) return p;
+          changed = true;
+
+          return {
+            ...f,
+            hybridScore: f.hybridScore ?? p.hybridScore,
+            distanceBand: f.distanceBand ?? p.distanceBand,
+          };
+        });
+
+        if (!changed) return prev;
+
+        discoverStore.profiles = next;
+        saveDiscoverStore();
+        return next;
+      });
+    } catch {
+      // Keep the cached deck usable if reconciliation fails.
+    } finally {
+      setMerging(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const userId = myUser?._id;
+    if (!userId) return;
+
+    const restored = initDiscoverStore(userId);
+
+    if (restored && discoverStore.profiles.length > 0) {
+      setProfiles(discoverStore.profiles);
+      setCurrentIndex(discoverStore.currentIndex);
+      setHasMore(discoverStore.hasMore);
+      setLoading(false);
+      return;
+    }
+
+    fetchProfiles(false);
+  }, [myUser?._id, fetchProfiles, refreshMerged]);
+
+  useEffect(() => {
+    const onProfileUpdated = (card) => {
+      if (!card?._id) return;
+
+      setProfiles((prev) => {
+        const idx = prev.findIndex(
+          (p) => String(p._id) === String(card._id),
+        );
+        if (idx === -1) return prev;
+
+        const next = [...prev];
+        next[idx] = {
+          ...card,
+          hybridScore: card.hybridScore ?? prev[idx].hybridScore,
+          distanceBand: card.distanceBand ?? prev[idx].distanceBand,
+        };
+
+        discoverStore.profiles = next;
+        saveDiscoverStore();
+        return next;
+      });
+    };
+
+    socket.on('profile-updated', onProfileUpdated);
+    return () => socket.off('profile-updated', onProfileUpdated);
+  }, []);
+
+  const handleNextProfile = useCallback((direction = 'up', isAction = false) => {
+    if (direction === 'down') {
+      if (currentIndex <= 0) return;
+
+      const next = Math.max(0, currentIndex - 1);
+      setCurrentIndex(next);
+      discoverStore.currentIndex = next;
+      saveDiscoverStore();
+      setSlideDirection('down');
+      return;
+    }
+
+    if (currentIndex >= profiles.length) return;
+    setSlideDirection(direction);
+
+    if (!isAction) {
+      const passedProfile = profiles[currentIndex];
+
+      if (passedProfile) {
+        api.post(`/discover/pass/${passedProfile._id}`).catch(console.error);
+        triggerHaptic('light');
+      }
+    }
+
+    const next = currentIndex + 1;
+    setCurrentIndex(next);
+    discoverStore.currentIndex = next;
+    discoverStore.profiles = profiles;
+    saveDiscoverStore();
+
+    if (
+      profiles.length - currentIndex <= 6
+      && hasMore
+      && !deckExhausted
+      && !fetchingMore
+    ) {
+      fetchProfiles(true);
+    }
+  }, [
+    currentIndex, profiles, hasMore, deckExhausted, fetchingMore, fetchProfiles,
+  ]);
+
+  const handleAction = useCallback(async (action, payload = {}) => {
+    if (actionPendingRef.current) return;
+    if (currentIndex >= profiles.length) return;
+
+    const profile = profiles[currentIndex];
+    if (!profile) return;
+
+    if (action !== 'pass' && deckGated) {
+      triggerHaptic('medium');
+      closeAllPopouts();
+
+      const need = readLadder(config).interact;
+      const fresh = await loadMyProfile();
+
+      toast.info(
+        fresh && Number.isFinite(fresh.profileScore)
+          ? `Profile strength: ${fresh.profileScore}%. You need ${need}% to interact.`
+          : `Finish your profile to interact — you need ${need}%.`,
+        { label: 'Profile', onClick: () => onGoToProfile?.() },
+      );
+      return;
+    }
+
+    actionPendingRef.current = true;
+
+    try {
+      if (action === 'align') {
+        triggerHaptic('heavy');
+        const response = await api.post(`/discover/align/${profile._id}`, payload);
+
+        if (response.matched) {
+          setAlignedProfile({
+            ...response.user,
+            alignmentId: response.alignmentId,
+          });
+          setShowAlignmentModal(true);
+        }
+      } else if (action === 'pass') {
+        triggerHaptic('medium');
+        await api.post(`/discover/pass/${profile._id}`);
+        setUndoNonce((n) => n + 1);
+      }
+
+      handleNextProfile('up', true);
+    } catch (err) {
+      if (err.code === 'GATED') {
+        toast.info(
+          `Finish your profile to interact — you need ${readLadder(config).interact}%.`,
+          { label: 'Profile', onClick: () => onGoToProfile?.() },
+        );
+        return;
+      }
+      console.error('Action failed:', err);
+    } finally {
+      actionPendingRef.current = false;
+    }
+  }, [
+    currentIndex,
+    profiles,
+    handleNextProfile,
+    deckGated,
+    config,
+    loadMyProfile,
+    onGoToProfile,
+  ]);
+
+  useEffect(() => {
+    if (!isDesktop) return;
+    const next = profiles[currentIndex + 1]?.photos?.[0];
+    if (!next) return;
+
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = next;
+  }, [isDesktop, profiles, currentIndex]);
+
+  useEffect(() => {
+    if (!isDesktop) return;
+
+    const onKey = (e) => {
+      const tag = (e.target?.tagName || '').toLowerCase();
+      if (
+        tag === 'input'
+        || tag === 'textarea'
+        || e.target?.isContentEditable
+      ) return;
+
+      if (showAlignmentModal) {
+        if (e.key === 'Escape') {
+          setShowAlignmentModal(false);
+          setAlignedProfile(null);
+        }
+        return;
+      }
+
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const k = e.key;
+
+      if (k === 'ArrowRight' || k === 'l' || k === 'L') {
+        e.preventDefault();
+        triggerHaptic('heavy');
+        handleAction('align', {});
+      } else if (k === 'ArrowLeft' || k === 'p' || k === 'P') {
+        e.preventDefault();
+        triggerHaptic('medium');
+        handleAction('pass');
+      } else if (k === 'ArrowDown' || k === 'b' || k === 'B') {
+        e.preventDefault();
+        triggerHaptic('light');
+        handleNextProfile('down');
+      }
+    };
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isDesktop, showAlignmentModal, handleAction, handleNextProfile]);
+
+  if (loading) {
+    return (
+      <div style={styles.loadingRoot}>
+        <ProfileCardSkeleton />
+        <DiscoverRebuildOverlay show={rebuildOverlay} />
+        <style>{DECK_CSS}</style>
+      </div>
+    );
+  }
+
+  if (error && !loading) {
+    return (
+      <div style={styles.stateRoot}>
+        <style>{DECK_CSS}</style>
+        <div style={styles.stateCard}>
+          <div style={{ ...styles.stateTile, background: t.coral }}>
+            <AlertTriangle size={22} strokeWidth={2.2} color={t.ink} />
+          </div>
+          <h3 style={styles.stateTitle}>The deck hit a snag</h3>
+          <p style={styles.stateBody}>{error}</p>
+          <button
+            onClick={() => fetchProfiles(false)}
+            className="slam-btn"
+            style={styles.slamBtn}
+          >
+            <RotateCw size={14} strokeWidth={2.5} /> Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!profiles || profiles.length === 0 || currentIndex >= profiles.length) {
+    return (
+      <div style={styles.stateRoot}>
+        <style>{DECK_CSS}</style>
+        <div style={styles.stateCard}>
+          <div style={{ ...styles.stateTile, background: t.yellow }}>
+            <Compass size={22} strokeWidth={2.2} color={t.ink} />
+          </div>
+
+          <h3 style={styles.stateTitle}>You're all caught up</h3>
+          <p style={styles.stateBody}>
+            {deckExhausted
+              ? "You've seen everyone who fits right now. New people join all the time — check back later."
+              : "You've reviewed everyone for now. Check back later — new people land all the time."}
+          </p>
+
+          {!deckExhausted && (
+            <button
+              onClick={() => fetchProfiles(false)}
+              className="slam-btn"
+              style={styles.slamBtn}
+            >
+              <RotateCw size={14} strokeWidth={2.5} /> Refresh
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="ob-root" ref={rootRef}>
-      <style>{CSS}</style>
+    <div style={{ ...styles.viewportRoot, ...(isDesktop ? styles.viewportRootDesktop : null) }}>
+      <style>{DECK_CSS}</style>
 
-      {/* ── fixed header: back left, ⋮ right. Same on every step. ── */}
-      <header className="ob-head">
-        {step > 0 ? (
-          <button type="button" className="ob-hbtn" aria-label="Previous question" onClick={back}>
-            <ChevronLeft size={22} strokeWidth={2.8} />
-          </button>
-        ) : <span className="ob-headspacer" />}
+      <ShadowbanBanner
+        score={shadowbanScore}
+        onLearnMore={() => setShowLearnMore(true)}
+      />
+      {showLearnMore && (
+        <LearnMoreSheet onClose={() => setShowLearnMore(false)} />
+      )}
 
-        <div style={{ position: 'relative' }}>
-          <button
-            type="button"
-            className="ob-hbtn"
-            aria-label="More options"
-            aria-expanded={menuOpen}
-            onClick={() => { triggerHaptic('light'); setMenuOpen((v) => !v); }}
+      {myUser && locationRead && (
+        <LocationNotice
+          college={myUser.college}
+          variant={locationRead.active ? 'active' : 'fallback'}
+          onLocationChanged={async (moved) => {
+            if (!moved) return;
+            await rebuildDeckForLocation();
+          }}
+        />
+      )}
+
+      <AnimatePresence>
+        {rebuiltAt > 0 && Date.now() - rebuiltAt < 4000 && (
+          <motion.div
+            key="rebuilt"
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            role="status"
+            style={styles.rebuiltNotice}
           >
-            <MoreVertical size={20} strokeWidth={2.8} />
-          </button>
+            Showing newer profiles
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-          <AnimatePresence>
-            {menuOpen && (
-              <>
-                <div className="ob-scrim" onClick={() => setMenuOpen(false)} aria-hidden="true" />
-                <motion.div
-                  className="ob-menu"
-                  initial={reduceMotion ? false : { opacity: 0, scale: 0.9, y: -6 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.9, y: -6 }}
-                  transition={{ duration: 0.13, ease: 'easeOut' }}
-                >
-                  <button
-                    type="button"
-                    className="ob-menuitem"
-                    onClick={() => {
-                      if (window.confirm('Log out? Your progress is saved as a draft.')) {
-                        triggerHaptic('medium');
-                        logout();
-                      }
-                    }}
-                  >
-                    <LogOut size={15} strokeWidth={2.8} /> Log out
-                  </button>
-                </motion.div>
-              </>
+      <DiscoverRebuildOverlay show={rebuildOverlay} />
+
+      {merging && !loading && (
+        <div aria-live="polite" style={styles.mergingNotice}>
+          Updating…
+        </div>
+      )}
+
+      <div
+        className={isDesktop ? 'discover-desktop-stage' : 'discover-mobile-stage'}
+        style={{
+          ...styles.stageContainer,
+          ...(isDesktop ? styles.stageContainerDesktopNoPad : null),
+        }}
+      >
+        <div style={isDesktop ? styles.deckColumnDesktop : styles.deckColumnMobile}>
+          <AnimatePresence custom={slideDirection}>
+            {profiles[currentIndex] && (
+              <motion.div
+                key={profiles[currentIndex]._id || profiles[currentIndex].id}
+                custom={slideDirection}
+                variants={slideVariants}
+                initial="enter"
+                animate="center"
+                exit="exit"
+                transition={springTransition}
+                style={styles.cardMotionLayer}
+              >
+                <ProfileCard
+                  profile={profiles[currentIndex]}
+                  onAction={handleAction}
+                  onSheetNearHeader={onSheetNearHeader}
+                  isGated={deckGated}
+                />
+              </motion.div>
             )}
           </AnimatePresence>
         </div>
-      </header>
 
-      {/* ── the question — straight slide between steps ── */}
-      <div className="ob-fit">
-        <AnimatePresence mode="wait" custom={dir} initial={false}>
-          <motion.div
-            key={s.key}
-            custom={dir}
-            variants={V.screen}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            style={{ display: 'flex', flexDirection: 'column', gap: 18 }}
-          >
-            <motion.h1 className="ob-title" variants={V.item}>{s.title}</motion.h1>
-            {s.hint && <motion.p className="ob-hint" variants={V.item}>{s.hint}</motion.p>}
-
-            <motion.div className="ob-field" variants={V.item}>
-              {/* ── NAME ── */}
-              {s.key === 'name' && (
-                <input
-                  className="ob-input"
-                  value={formData.name}
-                  onChange={(e) => update({ name: e.target.value.slice(0, 60) })}
-                  placeholder="Your name"
-                  autoCapitalize="words"
-                  autoCorrect="off"
-                  spellCheck="false"
-                  autoComplete="off"
-                  aria-label="Your name"
-                  onKeyDown={(e) => { if (e.key === 'Enter') next(); }}
-                />
-              )}
-
-              {/* ── DOB ── */}
-              {s.key === 'dob' && (
-                <>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <input ref={dayRef} className="ob-input ob-dob"
-                      style={{ textAlign: 'center', flex: 1, minWidth: 0 }} value={dobD}
-                      onChange={(e) => setDob('d', e.target.value)} onKeyDown={(e) => {
-                        if (e.key === 'Backspace' && !dobD) return;
-                        if (e.key === 'Enter' && age) next();
-                      }} placeholder="DD" inputMode="numeric" maxLength={2} aria-label="Day" />
-                    <span className="ob-slash">/</span>
-                    <input ref={monRef} className="ob-input ob-dob"
-                      style={{ textAlign: 'center', flex: 1, minWidth: 0 }} value={dobM}
-                      onChange={(e) => setDob('m', e.target.value)} onKeyDown={(e) => {
-                        if (e.key === 'Backspace' && !dobM) dayRef.current?.focus();
-                        if (e.key === 'Enter' && age) next();
-                      }} placeholder="MM" inputMode="numeric" maxLength={2} aria-label="Month" />
-                    <span className="ob-slash">/</span>
-                    <input ref={yrRef} className="ob-input ob-dob"
-                      style={{ textAlign: 'center', flex: 1, minWidth: 0 }} value={dobY}
-                      onChange={(e) => setDob('y', e.target.value)} onKeyDown={(e) => {
-                        if (e.key === 'Backspace' && !dobY) monRef.current?.focus();
-                        if (e.key === 'Enter' && age) next();
-                      }} placeholder="YYYY" inputMode="numeric" maxLength={4} aria-label="Year" />
-                  </div>
-                  {age !== null && (
-                    <span className={`ob-age${age >= 18 && age <= 40 ? ' ok' : ''}`}>Age {age}</span>
-                  )}
-                </>
-              )}
-
-              {/* ── PHOTO ── the zone stays still; only the cross / add buttons press.
-                   Shows the local preview instantly, then swaps in the uploaded URL.
-                   Cross = remove; tapping the photo = change. ── */}
-              {s.key === 'photo' && (
-                <>
-                  {(formData.photos[0] || preview) ? (
-                    <div className="ob-photo filled">
-                      <img src={formData.photos[0] || preview} alt="Your photo" />
-                      {uploading && (
-                        <span className="ob-uploading">
-                          <span className="ob-spin" aria-hidden="true" /> Uploading…
-                        </span>
-                      )}
-                      {!uploading && (
-                        <>
-                          <button type="button" className="ob-photohit" onClick={pickPhoto}
-                            aria-label="Change your photo" />
-                          <button type="button" className="ob-photox" onClick={removePhoto}
-                            aria-label="Remove photo">
-                            <X size={17} strokeWidth={3} />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  ) : (
-                    <button type="button" className="ob-photo" onClick={pickPhoto}
-                      disabled={uploading} aria-label="Add your photo">
-                      <span className="ob-photoempty">
-                        <span className="ob-cam"><Camera size={28} strokeWidth={2.2} /></span>
-                        Tap to add a photo
-                      </span>
-                    </button>
-                  )}
-                  <input ref={fileRef} type="file" accept="image/*" onChange={onFile} style={{ display: 'none' }} />
-                </>
-              )}
-
-              {/* ── GENDER ── required: discover.js filters the deck on it ── */}
-              {s.key === 'gender' && (
-                <div className="ob-chips">
-                  {genders.map((g) => (
-                    <button key={g} type="button"
-                      className={`ob-chip${formData.gender === g ? ' on' : ''}`}
-                      onClick={() => { update({ gender: g }); triggerHaptic('light'); }}>
-                      {formData.gender === g && <Check size={15} strokeWidth={3.2} />}
-                      {g}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {/* ── SHOW ME ── multi-select; 'Everyone' is the escape hatch ── */}
-              {s.key === 'interestedIn' && (
-                <div className="ob-chips">
-                  {showOptions.map((g) => (
-                    <button key={g} type="button"
-                      className={`ob-chip${formData.interestedIn.includes(g) ? ' on' : ''}`}
-                      onClick={() => toggleIn('interestedIn', g)}>
-                      {formData.interestedIn.includes(g) && <Check size={15} strokeWidth={3.2} />}
-                      {g}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {/* ── YEAR ── */}
-              {s.key === 'year' && (
-                <div className="ob-chips">
-                  {(config?.years || ['UG', 'PG']).map((y) => (
-                    <button key={y} type="button"
-                      className={`ob-chip${formData.year === y ? ' on' : ''}`}
-                      onClick={() => { update({ year: y }); triggerHaptic('light'); }}>
-                      {formData.year === y && <Check size={15} strokeWidth={3.2} />}
-                      {y}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {s.key === 'location' && (
-                /* 📍 REQUIRED, BUT NEVER A TRAP.
-                   The prompt only fires from the button below, never on mount —
-                   browsers penalise an unsolicited permission request, and this
-                   is the first thing they would see if it fired automatically.
-
-                   Both buttons leave this screen. Declining is stated in terms of
-                   what the feed will actually do, because "Not now" would be a
-                   lie here: the feed is not neutral without a reading, it is
-                   campus-ranked. Coordinates go into the setup payload only if
-                   the read actually succeeded. */
-                <div className="ob-location">
-                  {locationReading ? (
-                    <p className="ob-location-ok">
-                      <Check size={15} strokeWidth={3.2} /> Location shared. We'll
-                      show you people near you first.
-                    </p>
-                  ) : locDeclined ? (
-                    <>
-                      <p className="ob-location-ok">
-                        <Check size={15} strokeWidth={3.2} /> No problem — we'll rank
-                        your feed using your college location.
-                      </p>
-                      <p className="ob-location-copy">
-                        You can switch to your real location any time in Settings.
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="ob-location-copy">
-                        We'll use your location to show you people who are actually
-                        nearby — not just people from your college. It is rounded
-                        to about a kilometre and never shown to anyone else.
-                      </p>
-                      <button type="button" className="ob-loc-btn"
-                        onClick={grantLocation} disabled={locBusy}>
-                        {locBusy ? 'Finding you…' : 'Use my location'}
-                      </button>
-                      <button type="button" className="ob-loc-alt"
-                        onClick={() => { setLocDeclined(true); setLocError(''); triggerHaptic('light'); }}
-                        disabled={locBusy}>
-                        Use my college location instead
-                      </button>
-                      {locError && (
-                        <p className="ob-loc-note">
-                          {locError} You can turn this on later in Settings, or use
-                          your college location instead.
-                        </p>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-
-              {s.key === 'intent' && (
-                <div className="ob-chips">
-                  {intentOptions.map((it) => (
-                    <button key={it} type="button"
-                      className={`ob-chip${formData.intent.includes(it) ? ' on' : ''}`}
-                      onClick={() => toggleIn('intent', it)}>
-                      {formData.intent.includes(it) && <Check size={15} strokeWidth={3.2} />}
-                      {it}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </motion.div>
-          </motion.div>
-        </AnimatePresence>
-
-        {banner}
-
-        {/* ── primary action ── */}
-        {isLast ? (
-          <button type="button" className="ob-cta" onClick={publish}
-            disabled={!allDone || uploading || publishing}>
-            {publishing ? 'Publishing…' : 'Publish & start matching'}
-            <ChevronRight size={18} strokeWidth={3} />
-          </button>
-        ) : (
-          <button type="button" className="ob-cta" onClick={next} disabled={!stepDone(step)}>
-            Continue <ChevronRight size={18} strokeWidth={3} />
-          </button>
+        {!isDesktop && (
+          <DeckActions
+            onPass={() => handleAction('pass')}
+            onAlign={() => handleAction('align', {})}
+            canAlign={!!profiles[currentIndex]}
+            onUndo={() => handleNextProfile('down')}
+            canGoBack={currentIndex > 0}
+            undoNonce={undoNonce}
+            onRefreshLocation={locationDenied ? undefined : refreshLocation}
+          />
         )}
+      </div>
 
-        {/* ── the quiet footnote — bottom, always ── */}
-        <p className="ob-foot">{s.foot || FOOT_DEFAULT}</p>
+      {isDesktop && (
+        <div
+          className="discover-desktop-actions"
+          style={styles.desktopActionBar}
+          role="toolbar"
+          aria-label="Discovery actions"
+        >
+          <button
+            className="deck-action-btn"
+            title="Previous profile (↓ or B)"
+            aria-label="Previous profile"
+            disabled={currentIndex <= 0}
+            onClick={() => handleNextProfile('down')}
+            style={{ ...styles.deckBtn, background: t.paper, color: t.ink }}
+          >
+            <Undo2 size={19} strokeWidth={2.2} />
+          </button>
+
+          <button
+            className="deck-action-btn"
+            title="Pass (← or P)"
+            aria-label="Pass"
+            onClick={() => handleAction('pass')}
+            style={{ ...styles.deckBtn, background: t.card, color: t.ink }}
+          >
+            <X size={21} strokeWidth={2.4} />
+          </button>
+
+          <button
+            className="deck-action-btn deck-align-btn"
+            title="Align with this profile (→ or L)"
+            aria-label="Align with this profile"
+            onClick={() => handleAction('align', {})}
+            style={{
+              ...styles.deckBtn,
+              width: 104,
+              background: t.yellow,
+              color: t.ink,
+              borderColor: t.yellow,
+            }}
+          >
+            ALIGN <span aria-hidden="true">↗</span>
+          </button>
+
+          <div
+            className="deck-hints-desktop"
+            aria-hidden="true"
+            style={styles.deckHints}
+          >
+            <span><kbd className="deck-kbd">←</kbd> pass</span>
+            <span><kbd className="deck-kbd">→</kbd> align</span>
+            <span><kbd className="deck-kbd">↓</kbd> back</span>
+          </div>
+        </div>
+      )}
+
+      <AnimatePresence>
+        {showAlignmentModal && alignedProfile && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.25 }}
+              style={styles.modalScrim}
+              onClick={() => {
+                setShowAlignmentModal(false);
+                setAlignedProfile(null);
+              }}
+            />
+
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.94, opacity: 0, y: 16 }}
+              transition={{
+                type: 'spring',
+                damping: 22,
+                stiffness: 300,
+              }}
+              style={styles.matchModal}
+            >
+              <span aria-hidden="true" style={styles.confettiAmber} />
+              <span aria-hidden="true" style={styles.confettiCoral} />
+              <span aria-hidden="true" style={styles.confettiSage} />
+              <span aria-hidden="true" style={styles.confettiConcrete} />
+
+              <motion.div
+                initial={{ scale: 0.5, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{
+                  delay: 0.1,
+                  type: 'spring',
+                  damping: 14,
+                  stiffness: 280,
+                }}
+                style={styles.matchIcon}
+              >
+                <Heart size={40} strokeWidth={2.2} color={t.ink} fill={t.ink} />
+              </motion.div>
+
+              <h2 style={styles.matchTitle}>
+                Aligned<span style={{ color: t.coral }}>!</span>
+              </h2>
+
+              <p style={styles.matchBody}>
+                You and {alignedProfile.name} found common ground. The chat is now open.
+              </p>
+
+              <div style={styles.matchActions}>
+                <button
+                  className="slam-btn"
+                  onClick={() => {
+                    triggerHaptic('heavy');
+                    setShowAlignmentModal(false);
+                    if (onOpenChat && alignedProfile) {
+                      onOpenChat({
+                        _id: alignedProfile.alignmentId,
+                        user: alignedProfile,
+                      });
+                    }
+                    setAlignedProfile(null);
+                  }}
+                  style={styles.openChatButton}
+                >
+                  Open chat
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowAlignmentModal(false);
+                    setAlignedProfile(null);
+                  }}
+                  style={styles.keepBrowsingButton}
+                >
+                  Keep browsing
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
+const DECK_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+  /* Keep the iOS safe-area/status-bar backdrop in warm cream, not a full-bleed pink band. */
+  html, body, #root { background-color: #FFF9F4 !important; }
+
+  .slam-btn,
+  .deck-action-btn {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    transition: transform .14s ease, box-shadow .14s ease, background-color .14s ease, border-color .14s ease, opacity .14s ease;
+    border: 2px solid #171414;
+    border-radius: 16px;
+    box-shadow: 4px 4px 0 #171414;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .slam-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    min-height: 48px;
+    padding: 13px 20px;
+    font-family: ${t.fontMono};
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    cursor: pointer;
+    color: ${t.ink};
+  }
+
+  .deck-action-btn {
+    flex-shrink: 0;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .deck-action-btn:disabled {
+    opacity: .34;
+    cursor: not-allowed;
+    box-shadow: none !important;
+    transform: none !important;
+  }
+
+  .deck-action-btn:focus-visible,
+  .slam-btn:focus-visible {
+    outline: 3px solid ${t.pink};
+    outline-offset: 4px;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .deck-action-btn:hover:not(:disabled),
+    .slam-btn:hover {
+      transform: translate(-2px, -2px);
+      box-shadow: 6px 6px 0 #171414;
+      filter: saturate(1.04);
+    }
+  }
+
+  .deck-action-btn:active:not(:disabled),
+  .slam-btn:active {
+    transform: translate(3px, 3px) !important;
+    box-shadow: 1px 1px 0 #171414 !important;
+  }
+
+  kbd.deck-kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 23px;
+    min-height: 22px;
+    padding: 2px 5px;
+    border: 2px solid #171414;
+    border-radius: 7px;
+    background: ${t.paper};
+    color: ${t.ink};
+    box-shadow: 2px 2px 0 #171414;
+    font: 600 10px ${t.fontMono};
+  }
+
+  .discover-mobile-stage,
+  .discover-desktop-stage {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  .deck-action-btn.deck-align-btn {
+    background: ${t.yellow};
+  }
+
+  @media (max-width: 760px) {
+    .deck-hints-desktop { display: none !important; }
+    .discover-mobile-stage { padding: 0 !important; }
+  }
+
+  @media (max-height: 680px) and (min-width: 761px) {
+    .discover-desktop-stage { padding-top: 8px !important; padding-bottom: 4px !important; }
+    .discover-desktop-actions { padding-top: 6px !important; padding-bottom: 8px !important; }
+  }
+
+  @media (max-width: 380px) {
+    .discover-desktop-actions { gap: 8px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .slam-btn, .deck-action-btn { transition: none !important; }
+  }
+`;
+
+const styles = {
+  loadingRoot: {
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    padding: 12,
+    boxSizing: 'border-box',
+    background: '#FFF9F4',
+    position: 'relative',
+  },
+
+  stateRoot: {
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    padding: 20,
+    boxSizing: 'border-box',
+    background: '#FFF9F4',
+    position: 'relative',
+  },
+
+  viewportRoot: {
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    background: '#FFF9F4',
+    position: 'relative',
+    overflow: 'hidden',
+    userSelect: 'none',
+    WebkitUserSelect: 'none',
+  },
+
+  viewportRootDesktop: {
+    alignItems: 'center',
+    width: '100%',
+  },
+
+  stageContainer: {
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+    display: 'flex',
+    alignItems: 'stretch',
+    justifyContent: 'center',
+    width: '100%',
+    position: 'relative',
+    zIndex: 2,
+    padding: '0 0 8px',
+    boxSizing: 'border-box',
+  },
+
+  stageContainerDesktop: {
+    width: '100%',
+    maxWidth: 580,
+    padding: '14px 20px 8px',
+    margin: '0 auto',
+    boxSizing: 'border-box',
+  },
+
+  stageContainerDesktopNoPad: {
+    width: '100%',
+    maxWidth: 580,
+    padding: '14px 20px 8px',
+    margin: '0 auto',
+    boxSizing: 'border-box',
+  },
+
+  deckColumnMobile: {
+    position: 'relative',
+    width: '100%',
+    height: '100%',
+    minHeight: 0,
+    minWidth: 0,
+    overflow: 'hidden',
+  },
+
+  deckColumnDesktop: {
+    position: 'relative',
+    width: '100%',
+    height: '100%',
+    minHeight: 0,
+    minWidth: 0,
+    background: '#FFF9F4',
+    border: '2px solid #171414',
+    borderRadius: 22,
+    boxShadow: '7px 7px 0 #171414',
+    overflow: 'hidden',
+    isolation: 'isolate',
+  },
+
+  cardMotionLayer: {
+    position: 'absolute',
+    inset: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+    minWidth: 0,
+    willChange: 'transform, opacity',
+    backfaceVisibility: 'hidden',
+  },
+
+  desktopActionBar: {
+    position: 'relative',
+    zIndex: 3,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    padding: '10px 20px 16px',
+    width: '100%',
+    maxWidth: 580,
+    margin: '0 auto',
+    boxSizing: 'border-box',
+    flexShrink: 0,
+  },
+
+  deckBtn: {
+    width: 52,
+    height: 52,
+    minWidth: 52,
+    borderRadius: 16,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    border: `2px solid ${t.ink}`,
+    boxShadow: '4px 4px 0 #171414',
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
+    fontFamily: t.fontMono,
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '.08em',
+  },
+
+  deckHints: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    marginLeft: 8,
+    fontFamily: t.fontMono,
+    fontSize: 9,
+    color: t.ink3,
+    whiteSpace: 'nowrap',
+  },
+
+  stateCard: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: t.paper,
+    border: `2px solid ${t.ink}`,
+    borderRadius: 22,
+    boxShadow: '6px 6px 0 #171414',
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
+    padding: '30px 24px 26px',
+    textAlign: 'left',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+  },
+
+  stateTile: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    border: `2px solid ${t.ink}`,
+    boxShadow: '3px 3px 0 #171414',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+
+  stateTitle: {
+    fontFamily: t.fontHeavy,
+    fontSize: 28,
+    lineHeight: .95,
+    fontWeight: 800,
+    color: t.ink,
+    letterSpacing: '-.015em',
+    textTransform: 'uppercase',
+    margin: '0 0 10px',
+  },
+
+  stateBody: {
+    fontFamily: t.fontBody,
+    fontSize: 13,
+    fontWeight: 500,
+    lineHeight: 1.7,
+    maxWidth: 270,
+    margin: '0 0 24px',
+    color: t.ink2,
+  },
+
+  slamBtn: {
+    padding: '13px 22px',
+    background: t.coral,
+    color: '#171414',
+    border: `2px solid ${t.ink}`,
+    borderRadius: 13,
+    boxShadow: '4px 4px 0 #171414',
+  },
+
+  rebuiltNotice: {
+    position: 'absolute',
+    top: 8,
+    left: 12,
+    right: 12,
+    width: 'fit-content',
+    maxWidth: 'calc(100% - 24px)',
+    marginInline: 'auto',
+    boxSizing: 'border-box',
+    zIndex: 40,
+    pointerEvents: 'none',
+    padding: '8px 14px',
+    borderRadius: 12,
+    background: '#FFF9F4',
+    border: `2px solid ${t.ink}`,
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
+    color: t.ink,
+    fontFamily: t.fontMono,
+    fontSize: 9,
+    lineHeight: 1.4,
+    letterSpacing: '.06em',
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    overflowWrap: 'anywhere',
+  },
+
+  mergingNotice: {
+    position: 'absolute',
+    top: 8,
+    left: 12,
+    right: 12,
+    width: 'fit-content',
+    maxWidth: 'calc(100% - 24px)',
+    marginInline: 'auto',
+    boxSizing: 'border-box',
+    zIndex: 30,
+    pointerEvents: 'none',
+    padding: '6px 10px',
+    background: '#FFF9F4',
+    border: `2px solid ${t.ink}`,
+    borderRadius: 12,
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
+    color: t.ink,
+    fontFamily: t.fontMono,
+    fontSize: 9,
+    lineHeight: 1.4,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    overflowWrap: 'anywhere',
+  },
+
+  modalScrim: {
+    position: 'fixed',
+    inset: 0,
+    backgroundColor: 'rgba(23, 20, 20, .62)',
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
+    zIndex: 99998,
+  },
+
+  matchModal: {
+    position: 'fixed',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: '90%',
+    maxWidth: 340,
+    backgroundColor: t.paper,
+    border: `2px solid ${t.ink}`,
+    borderRadius: 24,
+    boxShadow: '8px 8px 0 #171414',
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none',
+    padding: '30px 24px 24px',
+    textAlign: 'left',
+    zIndex: 99999,
+    overflow: 'hidden',
+  },
+
+  confettiAmber: {
+    position: 'absolute',
+    top: 18,
+    left: 20,
+    width: 12,
+    height: 12,
+    borderRadius: 0,
+    background: t.yellow,
+    border: `2px solid ${t.ink}`,
+  },
+
+  confettiCoral: {
+    position: 'absolute',
+    top: 26,
+    right: 24,
+    width: 10,
+    height: 10,
+    borderRadius: 0,
+    background: t.coral,
+    border: `2px solid ${t.ink}`,
+  },
+
+  confettiSage: {
+    position: 'absolute',
+    bottom: 78,
+    left: 28,
+    width: 10,
+    height: 10,
+    borderRadius: 0,
+    background: t.green,
+    border: `2px solid ${t.ink}`,
+  },
+
+  confettiConcrete: {
+    position: 'absolute',
+    bottom: 88,
+    right: 30,
+    width: 12,
+    height: 12,
+    borderRadius: 0,
+    background: t.pink,
+    border: `2px solid ${t.ink}`,
+  },
+
+  matchIcon: {
+    width: 72,
+    height: 72,
+    margin: '0 0 20px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: t.yellow,
+    border: `2px solid ${t.ink}`,
+    borderRadius: 15,
+    boxShadow: '4px 4px 0 #171414',
+  },
+
+  matchTitle: {
+    fontFamily: t.fontHeavy,
+    fontSize: 34,
+    lineHeight: .9,
+    fontWeight: 800,
+    color: t.ink,
+    margin: '0 0 10px',
+    letterSpacing: '-.015em',
+    textTransform: 'uppercase',
+  },
+
+  matchBody: {
+    fontFamily: t.fontBody,
+    fontSize: 13,
+    fontWeight: 500,
+    color: t.ink2,
+    margin: '0 0 24px',
+    lineHeight: 1.7,
+  },
+
+  matchActions: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+  },
+
+  openChatButton: {
+    width: '100%',
+    padding: 15,
+    background: t.coral,
+    color: '#171414',
+    border: `2px solid ${t.ink}`,
+    borderRadius: 13,
+    boxShadow: '4px 4px 0 #171414',
+    fontFamily: t.fontMono,
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: '.12em',
+    textTransform: 'uppercase',
+    cursor: 'pointer',
+  },
+
+  keepBrowsingButton: {
+    width: '100%',
+    padding: 15,
+    background: 'transparent',
+    color: t.ink,
+    border: `2px solid ${t.ink}`,
+    borderRadius: 13,
+    fontFamily: t.fontMono,
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: '.12em',
+    textTransform: 'uppercase',
+    cursor: 'pointer',
+  },
+};
+
+export default Discover;
+
+```
+
+### ./client/src/pages/Matches.jsx
+
+```
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import neu from '../styles/neu';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { motion, AnimatePresence } from 'framer-motion';
+import { api } from '../utils/api';
+import { toast } from '../utils/toast';
+import { useAuth } from '../utils/AuthContext';
+import socket from '../utils/socket';
+import { SkeletonBox } from '../components/Skeleton';
+import { Heart, MoreVertical, Search, X } from 'lucide-react';
+import { triggerHaptic } from '../utils/haptics';
+import { DECK_CONTENT_TOP } from '../utils/deckChrome';
+
+/* The shared neo-brutalist canon (src/styles/neu.js) */
+const t = neu;
+
+const MATCHES_CSS = `
+  .match-card { will-change: transform;
+    transition: transform .08s steps(2), box-shadow .08s steps(2), background .08s steps(2);
+    contain: layout style; }
+  .match-card:active { transform: translate(3px, 3px) !important; box-shadow: 0 0 0 #191919 !important; }
+
+  .match-menu-btn { display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 11px 12px; background: none; border: none; cursor: pointer; text-align: left;
+    font-family: ${t.fontMono}; font-size: 12px; font-weight: 700; letter-spacing: .1em;
+    text-transform: uppercase; color: ${t.red}; border-radius: 8px; transition: none; }
+  .match-menu-btn:active { background: ${t.red}; color: #fff; }
+
+  .match-search input::placeholder { color: ${t.ink3}; opacity: 1; }
+  .match-search:focus-within { border-color: ${t.ink} !important; box-shadow: 3px 3px 0 ${t.ink}; }
+
+  @media (hover: hover) and (pointer: fine) {
+    .match-card:hover { transform: translate(-1px, -1px);
+      box-shadow: 6px 6px 0 #191919; }
+    .match-menu-btn:hover { background: rgba(229,72,77,.08); }
+    .match-clear:hover { background: ${t.hair}; }
+  }
+
+  .match-card:focus-visible, .match-menu-btn:focus-visible, .match-clear:focus-visible {
+    outline: 3px solid ${t.yellow}; outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .match-card { transition: none !important; transform: none !important; }
+  }
+`;
+
+const Matches = ({ onOpenChat }) => {
+  const queryClient = useQueryClient();
+  const [search, setSearch] = useState('');
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const [isFocused, setIsFocused] = useState(false);
+
+  const { user } = useAuth();
+  const myId = user?._id;
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['matches'],
+    queryFn: () => api.get('/alignments'),
+  });
+
+  const matches = useMemo(() => data?.matches || [], [data]);
+
+  // WhatsApp-style real-time updates: bump the match to the top and refresh its preview
+  useEffect(() => {
+    const onNew = (msg) => {
+      queryClient.setQueryData(['matches'], (old) => {
+        if (!old?.matches) return old;
+        const list = [...old.matches];
+        const idx = list.findIndex((m) => m._id === msg.alignmentId);
+        if (idx === -1) return old;
+        const m = list[idx];
+        const updated = {
+          ...m,
+          lastMessage: {
+            text: msg.text,
+            senderId: msg.senderId,
+            createdAt: msg.createdAt,
+            readAt: msg.readAt ?? null,
+            type: msg.type,
+            image: msg.image,
+          },
+          yourTurn: msg.senderId !== myId,
+        };
+        list.splice(idx, 1);
+        list.unshift(updated);
+        return { ...old, matches: list };
+      });
+    };
+    socket.on('new-message', onNew);
+    return () => socket.off('new-message', onNew);
+  }, [queryClient, myId]);
+
+  // Real-time unmatch: remove the alignment from cache when the other user severs the connection
+  useEffect(() => {
+    const onUnmatch = ({ alignmentId }) => {
+      queryClient.setQueryData(['matches'], (old) => ({
+        ...(old || {}),
+        matches: (old?.matches || []).filter((m) => m._id !== alignmentId),
+      }));
+    };
+    socket.on('unmatch-notification', onUnmatch);
+    return () => socket.off('unmatch-notification', onUnmatch);
+  }, [queryClient]);
+
+  const handleUnmatch = useCallback(async (alignmentId) => {
+    setOpenMenuId(null);
+    if (!window.confirm('Are you sure you want to unmatch? This cannot be undone.')) return;
+    try {
+      await api.delete(`/alignments/${alignmentId}`);
+      queryClient.setQueryData(['matches'], (old) => ({
+        ...(old || {}),
+        matches: (old?.matches || []).filter((m) => m._id !== alignmentId),
+      }));
+    } catch (err) {
+      if (!err?.toasted) toast.error('Could not unmatch. Try again.');
+    }
+  }, [queryClient]);
+
+  const fmtTime = useCallback((ts) => {
+    if (!ts) return '';
+    const d = new Date(ts);
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 60) return 'now';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+    if (diff < 172800) return 'Yesterday';
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }, []);
+
+  const timeAgo = useCallback((ts) => {
+    if (!ts) return '';
+    const d = new Date(ts);
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 3600) return `${Math.floor(Math.max(diff, 1) / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }, []);
+
+  // Memoized filter to avoid recalculating string matching during high-frequency socket events
+  const filtered = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return matches;
+    return matches.filter((m) => m.user?.name?.toLowerCase().includes(query));
+  }, [matches, search]);
+
+  if (isLoading) {
+    return (
+      <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: `calc(${DECK_CONTENT_TOP} + 8px) 14px 16px` }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {[0, 1, 2].map((i) => (
+            <div key={i} style={{
+              display: 'flex', alignItems: 'center', gap: 14,
+              backgroundColor: t.paper, border: `2px solid ${t.ink}`,
+              borderRadius: 16, boxShadow: `5px 5px 0 ${t.ink}`, padding: 16,
+            }}>
+              <SkeletonBox width={56} height={56} radius={12} />
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <SkeletonBox width={120} height={14} />
+                <SkeletonBox width={180} height={11} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (matches.length === 0) {
+    return (
+      <div style={{
+        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexDirection: 'column', gap: 16, padding: 32, backgroundColor: t.desk,
+      }}>
+        <div style={{
+          width: 56, height: 56, borderRadius: 16, backgroundColor: t.coral,
+          border: `2px solid ${t.ink}`, boxShadow: `4px 4px 0 ${t.ink}`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4,
+        }}>
+          <Heart size={24} strokeWidth={2.6} color={t.ink} />
+        </div>
+        <p style={{ fontFamily: t.fontHeavy, fontSize: 21, color: t.paper, textAlign: 'center', margin: 0, letterSpacing: '-.01em', textTransform: 'uppercase' }}>
+          No letters yet
+        </p>
+        <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 500, color: t.ink3, textAlign: 'center', maxWidth: 280, margin: 0, lineHeight: 1.6 }}>
+          Start exploring and leave a flower to begin your story.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: `calc(${DECK_CONTENT_TOP} + 8px) 14px 16px`, position: 'relative' }}>
+      <style>{MATCHES_CSS}</style>
+
+      <div style={{ position: 'relative' }}>
+        {/* Search — chunky box, ink border, shadow on focus. The tab heading now
+            comes from the floating Header row, so no in-page title here. */}
+        <div
+          className="match-search"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '0 14px',
+            marginBottom: 6,
+            backgroundColor: t.paper,
+            border: `2px solid ${t.ink}`,
+            borderRadius: 12,
+            boxShadow: isFocused ? `3px 3px 0 ${t.ink}` : 'none',
+            transition: 'box-shadow .08s steps(2)',
+          }}
+        >
+          <Search size={15} strokeWidth={2.6} color={isFocused ? t.ink : t.ink3} style={{ transition: 'color 0.15s ease', flexShrink: 0 }} />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
+            placeholder="Search letters..."
+            aria-label="Search letters"
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              padding: '12px 0',
+              backgroundColor: 'transparent',
+              border: 'none',
+              fontFamily: t.fontBody,
+              fontSize: 13.5,
+              fontWeight: 500,
+              color: t.ink,
+              outline: 'none',
+            }}
+          />
+          {search && (
+            <button
+              type="button"
+              className="match-clear"
+              onClick={() => { triggerHaptic('light'); setSearch(''); }}
+              aria-label="Clear search"
+              style={{ background: 'none', border: 'none', color: t.ink2, cursor: 'pointer', display: 'flex', padding: 6, margin: -6, borderRadius: 6, flexShrink: 0 }}
+            >
+              <X size={14} strokeWidth={2.6} />
+            </button>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {filtered.map((match) => {
+            const user = match.user;
+            if (!user) return null;
+
+            const lastMessage = match.lastMessage;
+            const unread =
+              match.yourTurn ||
+              (lastMessage && lastMessage.senderId && lastMessage.senderId !== myId && !lastMessage.readAt);
+            const isOpen = openMenuId === match._id;
+
+            const lastIsMedia = lastMessage && (lastMessage.type === 'image' || lastMessage.type === 'audio');
+
+            return (
+              <div
+                key={match._id}
+                className="match-card"
+                role="button"
+                tabIndex={0}
+                onClick={() => { triggerHaptic('light'); onOpenChat(match); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onOpenChat(match);
+                  }
+                }}
+                style={{
+                  position: 'relative',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 14,
+                  backgroundColor: unread ? t.card : t.paper,
+                  border: `2px solid ${t.ink}`,
+                  borderRadius: 16,
+                  boxShadow: unread ? `5px 5px 0 ${t.ink}` : `4px 4px 0 ${t.ink}`,
+                  padding: '14px 16px',
+                  cursor: 'pointer',
+                }}
+              >
+                {/* Avatar — square-ish tile, ink border; unread gets the yellow ring */}
+                <img
+                  src={user.photos?.[0] || 'https://placehold.co/80/fff3dc/191919?text=%C2%B7'}
+                  alt={user.name}
+                  loading="lazy"
+                  decoding="async"
+                  style={{
+                    width: 56, height: 56, borderRadius: 12, objectFit: 'cover',
+                    border: `2px solid ${t.ink}`, backgroundColor: t.hair, flexShrink: 0,
+                    outline: unread ? `3px solid ${t.yellow}` : 'none', outlineOffset: 1,
+                  }}
+                />
+
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <p style={{ fontFamily: t.fontBody, fontSize: 15, fontWeight: unread ? 800 : 600, color: t.ink, margin: 0 }}>
+                      {user.name}{user.age ? <span style={{ fontWeight: 500, color: t.ink3 }}>, {user.age}</span> : null}
+                    </p>
+                    {unread && (
+                      <span
+                        aria-label="Unread message"
+                        style={{
+                          width: 10, height: 10, borderRadius: '50%',
+                          backgroundColor: t.coral, border: `1.5px solid ${t.ink}`,
+                          flexShrink: 0,
+                        }}
+                      />
+                    )}
+                  </div>
+                  <p style={{ fontFamily: t.fontBody, fontSize: 12.5, color: unread ? t.ink : t.ink2, margin: '4px 0 0 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: unread ? 700 : 500 }}>
+                    {lastMessage
+                      ? lastIsMedia
+                        ? (lastMessage.type === 'image' ? '📷 Sent a photograph' : '🎙 Sent a voice note')
+                        : lastMessage.text
+                      : 'Open chat'}
+                  </p>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flexShrink: 0 }}>
+                  <span style={{
+                    fontFamily: t.fontMono, fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em',
+                    color: unread ? t.ink : t.ink3,
+                    background: unread ? t.yellow : 'transparent',
+                    border: unread ? `1.5px solid ${t.ink}` : 'none',
+                    borderRadius: 5, padding: unread ? '2px 6px' : 0,
+                    whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums',
+                  }}>
+                    {lastMessage ? fmtTime(lastMessage.createdAt) : `Aligned ${timeAgo(match.createdAt)}`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      triggerHaptic('light');
+                      setOpenMenuId(isOpen ? null : match._id);
+                    }}
+                    style={{
+                      background: isOpen ? t.ink : 'transparent',
+                      color: isOpen ? t.paper : t.ink3,
+                      border: `1.5px solid ${isOpen ? t.ink : t.hair}`,
+                      cursor: 'pointer', padding: 3, display: 'flex', alignItems: 'center',
+                      borderRadius: 7,
+                    }}
+                    aria-label="More options"
+                    aria-expanded={isOpen}
+                    title="More options"
+                  >
+                    <MoreVertical size={15} strokeWidth={2.4} />
+                  </button>
+                </div>
+
+                {/* Contextual menu — chunky card, slam language */}
+                <AnimatePresence>
+                  {isOpen && (
+                    <>
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenMenuId(null);
+                        }}
+                        style={{ position: 'fixed', inset: 0, zIndex: 90, cursor: 'default' }}
+                      />
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.94, y: -6 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.94, y: -6 }}
+                        transition={{ duration: 0.13, ease: 'easeOut' }}
+                        style={{
+                          position: 'absolute', top: 50, right: 16, zIndex: 100, overflow: 'hidden',
+                          minWidth: 150, padding: 5,
+                          backgroundColor: t.paper, border: `2px solid ${t.ink}`,
+                          borderRadius: 12, boxShadow: `5px 5px 0 ${t.ink}`,
+                        }}
+                      >
+                        <button
+                          type="button"
+                          className="match-menu-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleUnmatch(match._id);
+                          }}
+                        >
+                          Unmatch
+                        </button>
+                      </motion.div>
+                    </>
+                  )}
+                </AnimatePresence>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
 };
 
-export default Onboarding;
+export default Matches;
 ```
 
