@@ -1,7 +1,7 @@
 # Matchalize — Full Codebase Dump
 
 > Verbatim contents of all project source and configuration files.
-> Generated 2026-10-17 20:34.
+> Generated 2026-10-17 21:10.
 > Identical content to dumps/ -- kept as one file for grep and for tools without an attachment limit.
 > Matchalize is an INTRA + INTER college network for all the colleges of India: users connect within their own campus (intra) AND across campuses (inter). Every user signs in via their own college academic email system (`.ac.in`), making each campus a private, verified community.
 
@@ -593,6 +593,7 @@ legacy-peer-deps=true
     "start": "node index.js",
     "dev": "nodemon --watch index.js --watch config --watch middleware --watch models --watch routes --watch socket --watch utils index.js",
     "lint": "oxlint",
+    "test": "node --test",
     "seed": "node seedRealistic.js",
     "verify:location": "node scripts/verify-location-swap.mjs"
   },
@@ -27533,6 +27534,164 @@ const alignmentSchema = new mongoose.Schema(
       required: true,
       // Points back to the exact letter that sparked the alignment
     },
+
+    /* ═══════════════════════════════════════════════════════════════════════
+     * 🛡️ IDENTITY & PRIVACY  (Roulette, Stage 1)
+     *
+     * Three problems this solves, all found by inspection:
+     *
+     * 1. "Can this person see my profile?" was decided independently by each
+     *    screen — Chat.jsx showed the name, NotificationDrawer the name AND
+     *    photo, the push notification used the sender's name as the lock
+     *    screen TITLE, and Chats search filtered on the real name. 22 inline
+     *    render sites, no single rule. A promise of "your profile is hidden"
+     *    is unkeepable when there is nothing to break.
+     *
+     * 2. `showCollege` is the ONLY identity field with a server-side strip
+     *    (utils/publicCard.js:64-69). `name` and `photos` are on the
+     *    CARD_FIELDS allowlist and are always sent. There was no way to say
+     *    "you may not see this person's profile" — only "you may not see
+     *    their college".
+     *
+     * 3. Roulette connections are profile-hidden by default, and a Deck
+     *    connection and a Roulette connection land in the SAME document,
+     *    because `pairKey` is unique per unordered pair. Whatever grants
+     *    access therefore has to live on the document, not be inferred from
+     *    which flow produced it.
+     *
+     * ⚠️ SOURCE IS PROVENANCE ONLY. It records where a connection was born and
+     * NEVER authorises access. `source: 'roulette'` does not mean "hidden" and
+     * `source: 'deck'` does not mean "visible". Only `profileGrants` decides
+     * that. Keeping the two separate is what lets a hidden-Roulette pair that
+     * later meets again on the Deck keep its original permissions instead of
+     * being silently upgraded by the newer flow.
+     * ═══════════════════════════════════════════════════════════════════════ */
+    source: {
+      type: String,
+      enum: ['deck', 'roulette'],
+      default: 'deck',
+      /* Where the connection was born. Provenance, never authority.
+       * Defaults to 'deck' rather than null on purpose: a row that somehow
+       * arrives without this must not read as "unknown origin, treat
+       * differently". Backfill (scripts/migrate-roulette-source.mjs) sets it
+       * explicitly on existing rows; the default is only the safety net for
+       * a future write that forgets it. */
+    },
+
+    profileGrants: {
+      type: [
+        {
+          viewerId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true,
+            // The person who gained the right to look.
+          },
+          subjectId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true,
+            // Whose public profile they may now see.
+          },
+          source: {
+            type: String,
+            enum: ['legacy', 'deck', 'roulette_visible', 'roulette_reveal'],
+            required: true,
+            /* WHY the access exists. 'legacy' = backfilled from a pre-Roulette
+             * deck connection, which showed both profiles openly. 'deck' = a new
+             * deck align. 'roulette_visible' = the person entered Roulette with
+             * "show my profile" already on, so anyone they meet may see it.
+             * 'roulette_reveal' = both parties explicitly agreed to share.
+             *
+             * Recorded rather than inferred so that a future question — "why
+             * can this person see that profile?" — has an answer in the
+             * database instead of requiring us to reconstruct history from
+             * request timestamps. */
+          },
+          grantedAt: {
+            type: Date,
+            default: Date.now,
+          },
+        },
+      ],
+      default: [],
+      /* DELIBERATELY EMPTY BY DEFAULT. Absence of a grant means NO ACCESS.
+       *
+       * The alternative — treating "no grant yet" as "it's a deck connection,
+       * so allow it" — is a special case keyed on a field, and a special case
+       * is exactly what fails: the first hidden-Roulette row written before
+       * its grants are populated would silently show the real name. An empty
+       * array fails closed with no branch to get wrong. */
+    },
+
+    conversationAliases: {
+      type: [
+        {
+          userId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true,
+            // This person.
+          },
+          alias: {
+            type: String,
+            trim: true,
+            maxlength: 24,
+            default: null,
+            // The name the OTHER party sees for them in this conversation.
+            /* Copied ONCE when the connection is created and never written
+             * again. That is what makes it safe: a new Roulette session can
+             * never rename an existing conversation, because an
+             * already-connected pair never gets a new Align request at all
+             * (spec §9.1) — so there is no code path that could overwrite
+             * this. 24 chars is a display name, not a profile field. */
+          },
+        },
+      ],
+      default: [],
+      /* Absent for connections that predate Roulette: those show the real name
+       * via profileGrants, so no alias is needed and none is invented. */
+    },
+
+    revealRequest: {
+      state: {
+        type: String,
+        enum: ['none', 'pending', 'accepted', 'declined', 'expired'],
+        default: 'none',
+        /* none → pending → (accepted | declined | expired)
+         *
+         * Transitions are single-document atomic findOneAndUpdate calls whose
+         * filter includes the expected prior state, retried on a miss. NOT
+         * transactions: MongoDB M0 and the local standalone mongod do not
+         * support them, and none are used anywhere in this codebase. The
+         * established pattern to copy is discover.js:1488-1516
+         * (DECK_RACE_RETRIES + isConcurrentDeckRace). */
+      },
+      requestedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
+      requestedAt: {
+        type: Date,
+        default: null,
+      },
+      resolvedAt: {
+        type: Date,
+        default: null,
+      },
+      consents: [
+        {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          /* Accumulated atomically. Reaching two entries IS mutual acceptance —
+           * there is no separate "both clicked" flag that could disagree with
+           * the list. */
+        },
+      ],
+      /* A subdocument with defaults rather than an optional field, so the state
+       * machine always has a defined state and callers never need `?.`. */
+    },
   },
   {
     timestamps: true,
@@ -27540,6 +27699,12 @@ const alignmentSchema = new mongoose.Schema(
 );
 
 alignmentSchema.index({ users: 1, isActive: 1 });
+
+/* Serves the only query the resolver makes: "is there a grant from this viewer
+ * to this subject on this connection?" Without it that lookup is a collection
+ * scan on every render of a chat header. Compound on both ids so the index can
+ * be used as a prefix match in either direction. */
+alignmentSchema.index({ 'profileGrants.viewerId': 1, 'profileGrants.subjectId': 1 });
 
 /**
  * 🛡️ ALIGNMENT INTEGRITY
@@ -27567,6 +27732,32 @@ alignmentSchema.pre('validate', function (next) {
   if (this.pairKey !== expected) {
     return next(new Error(`pairKey does not match users: expected "${expected}", got "${this.pairKey}"`));
   }
+
+  /* 🛡️ GRANT INTEGRITY
+   *
+   * Same class of bug the two-user check above exists to prevent. Nothing
+   * stopped a `$push` onto `profileGrants` naming a THIRD person, at which
+   * point a two-person connection would hand out permission to see someone
+   * who is not in it — and the failure would be silent, because a grant is
+   * just two ids and nothing downstream ever checks who they belong to.
+   *
+   * Both ends of every grant must be one of this alignment's two users.
+   */
+  const memberIds = new Set(users.map(String));
+  for (const grant of this.profileGrants || []) {
+    const viewer = String(grant.viewerId);
+    const subject = String(grant.subjectId);
+    if (!memberIds.has(viewer)) {
+      return next(new Error(`profileGrants viewerId ${viewer} is not a member of this alignment`));
+    }
+    if (!memberIds.has(subject)) {
+      return next(new Error(`profileGrants subjectId ${subject} is not a member of this alignment`));
+    }
+    if (viewer === subject) {
+      return next(new Error('profileGrants cannot grant a user access to their own profile'));
+    }
+  }
+
   next();
 });
 
@@ -28131,6 +28322,28 @@ const interactionSchema = new mongoose.Schema(
       type: String,
       enum: ['block', 'unmatch', 'pass'],
       default: null,
+      /* ⚠️ THIS IS NOT THE CONNECTION SOURCE. `origin` here means "why did this
+       * action leave a permanent mark" — it is only ever written by the block,
+       * unmatch and pass routes.
+       *
+       * The connection/request source is the separate `source` field below.
+       * Do not unify them: `origin` answers a historical question about one
+       * action, `source` answers "which flow produced this", and reusing one
+       * name for both would make every read site ambiguous. */
+    },
+
+    source: {
+      type: String,
+      enum: ['deck', 'roulette'],
+      default: 'deck',
+      /* Which flow emitted this action. Set alongside an `align` so the
+       * accept path can tell a deck align from a Roulette one and branch
+       * before generating an opening letter — a deck align may copy the
+       * sender's photo and prompt into the chat, a hidden-profile Roulette
+       * align must not.
+       *
+       * Separate from `origin` above, and see the note there. Defaults to
+       * 'deck' so every historical row is correct without a backfill. */
     },
     targetArtifact: { 
       type: String, 
@@ -28333,6 +28546,54 @@ const notificationSchema = new mongoose.Schema(
       default: false,
       // Flips to true the moment they hit [Accept] or [Archive]
     },
+
+    /* ═══════════════════════════════════════════════════════════════════════
+     * 🎰 REQUEST PROVENANCE & DEADLINE  (Roulette, Stage 1)
+     *
+     * A pending request must know two things the deck never needed: which
+     * flow produced it, and when it stops being valid.
+     * ═══════════════════════════════════════════════════════════════════════ */
+    source: {
+      type: String,
+      enum: ['deck', 'roulette'],
+      default: 'deck',
+      /* Which flow created this request. Drives two things at accept time:
+       * the origin label shown in the Requests list, and whether an opening
+       * letter may be generated — routes/notifications.js:195-235 copies the
+       * sender's photo and prompt text into the chat, which is exactly what a
+       * hidden-profile connection must never do.
+       *
+       * Defaults to 'deck' so every pre-Roulette row is automatically correct
+       * rather than requiring a backfill to make it correct. */
+    },
+
+    callSessionId: {
+      type: String,
+      default: null,
+      /* The Roulette call this request belongs to, if any. Null for deck.
+       *
+       * Also the key to expiry: when a call ends, the server sweeps every
+       * request carrying this id and clears it. Without this column a pending
+       * live request would have no way to find its call, and the call's end
+       * would leave an orphaned request unlockable forever. */
+    },
+
+    expiresAt: {
+      type: Date,
+      default: null,
+      /* NULL = never expires. Deck requests outlive their call and stay valid
+       * until accepted or declined, which is their existing behaviour.
+       *
+       * Roulette requests MUST carry a deadline, because spec §7.3 says a
+       * still-pending request expires when the call closes. Accept checks this
+       * field and rejects a late accept as expired — see R2 in the Stage 1
+       * acceptance tests.
+       *
+       * ⚠️ This is deliberately NOT a Mongo TTL index. A TTL deletes the
+       * document; the spec requires the row to SURVIVE so the Requests list
+       * can show it as expired rather than silently vanishing. TTL belongs on
+       * `createdAt` (below), which already exists. */
+    },
   },
   {
     timestamps: true,
@@ -28341,6 +28602,15 @@ const notificationSchema = new mongoose.Schema(
 
 // Extremely fast lookup for the active Instagram-style tray
 notificationSchema.index({ recipientId: 1, isCleared: 1, createdAt: -1 });
+
+// Serves the call-end expiry sweep: "clear every pending request belonging to
+// call X". Sparse because only roulette rows carry a callSessionId — without
+// `sparse` every deck row would be indexed under null and the index would grow
+// to the size of the whole collection for no query benefit.
+notificationSchema.index(
+  { callSessionId: 1 },
+  { sparse: true, name: 'roulette_call_expiry_sweep' }
+);
 
 // Auto-delete cleared notifications after 30 days to prevent database bloat
 notificationSchema.index(
@@ -29879,6 +30149,271 @@ if (EXECUTE) {
 }
 
 await mongoose.disconnect();
+
+```
+
+### ./server/scripts/migrate-roulette-source.mjs
+
+```
+/**
+ * 🌱 MIGRATE — Roulette identity fields.
+ *
+ * ── WHAT IT DOES ─────────────────────────────────────────────────────────────
+ * Stage 1 added four fields to `Alignment` (source, profileGrants,
+ * conversationAliases, revealRequest) plus three to `Notification` and one to
+ * `Interaction`. Mongoose defaults cover new writes, but existing documents
+ * predate the fields entirely, and one of them cannot be defaulted safely.
+ *
+ * Every pre-Roulette connection was a DECK connection, and a deck connection
+ * showed both profiles openly. So each one needs:
+ *
+ *   source        = 'deck'
+ *   profileGrants = TWO grants, one per direction, source 'legacy'
+ *
+ * ── WHY BACKFILL RATHER THAN A SPECIAL CASE ───────────────────────────────────
+ * The obvious shortcut is to leave existing rows alone and write the resolver
+ * as "if no grants, treat it as a deck connection and allow". That is a branch
+ * keyed on a field being absent — and a branch is exactly what fails. The first
+ * hidden Roulette row written before its grants are populated would take that
+ * path and show a real name.
+ *
+ * Backfilling removes the branch entirely. After this runs, the resolver has
+ * ONE rule: is there a grant? Absence means no, for everybody, forever.
+ *
+ * ── SAFE BY DEFAULT ───────────────────────────────────────────────────────────
+ *   node scripts/migrate-roulette-source.mjs            # dry run, writes nothing
+ *   node scripts/migrate-roulette-source.mjs --execute  # actually writes
+ *
+ * Rollback is `unset` of the same four fields; no data is destroyed and the
+ * three Notification/Interaction fields are left untouched.
+ *
+ * Design source: ambitions/roulette.md §4.6
+ */
+
+import mongoose from 'mongoose';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+import '../models/index.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const EXECUTE = process.argv.includes('--execute');
+
+const loadEnv = () => {
+  const envPaths = [path.join(__dirname, '../.env'), path.join(process.cwd(), '.env')];
+  for (const p of envPaths) {
+    if (fs.existsSync(p)) {
+      for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+        const idx = line.indexOf('=');
+        if (idx === -1) continue;
+        const key = line.slice(0, idx).trim();
+        const val = line.slice(idx + 1).trim();
+        if (!process.env[key]) process.env[key] = val;
+      }
+      return p;
+    }
+  }
+  return null;
+};
+
+const run = async () => {
+  const envFile = loadEnv();
+  if (!process.env.MONGODB_URI) {
+    console.error('❌ MONGODB_URI not found.');
+    process.exit(1);
+  }
+
+  const dbName = mongoose.connection.name;
+  console.log(`${EXECUTE ? '🔧' : '🔍'} Roulette identity migration${EXECUTE ? '' : ' (DRY RUN)'}`);
+  console.log(`   env     : ${envFile || '(process)'}`);
+  console.log(`   database: ${dbName}`);
+
+  if (EXECUTE && dbName === 'matchalize_test') {
+    console.log('   ℹ️  Target is the test database — fine, but noting it.');
+  }
+
+  await mongoose.connect(process.env.MONGODB_URI);
+
+  const alignments = mongoose.connection.collection('alignments');
+  const total = await alignments.countDocuments({});
+
+  /* ── Scope ──────────────────────────────────────────────────────────────────
+   * Only rows that predate the fields. A document already carrying a non-empty
+   * profileGrants was either created after Stage 1 or already migrated, and
+   * rewriting it would DISCARD real grants — including a granted profile a
+   * user agreed to share. Skipping them is what makes re-running safe. */
+  const needsWork = await alignments.countDocuments({
+    $or: [
+      { source: { $exists: false } },
+      { source: null },
+      { profileGrants: { $exists: false } },
+      { profileGrants: { $size: 0 } },
+    ],
+  });
+
+  const skipped = total - needsWork;
+  const alreadyAliased = await alignments.countDocuments({
+    conversationAliases: { $exists: true, $size: { $gt: 0 } },
+  });
+
+  console.log(`\n1/4 Alignments`);
+  console.log(`   total            : ${total}`);
+  console.log(`   need backfill    : ${needsWork}`);
+  console.log(`   already migrated : ${skipped}`);
+  console.log(`   carry an alias   : ${alreadyAliased}  (left untouched)`);
+
+  if (needsWork === 0) {
+    console.log('\n   ✅ Nothing to do.');
+  } else if (!EXECUTE) {
+    console.log('\n2/4 Writing pairs\n   ℹ️  DRY RUN — no writes performed. Re-run with --execute.');
+  } else {
+    /* ── Do it one document at a time ────────────────────────────────────────
+     * Not `updateMany`. Each connection needs grants built from ITS OWN two
+     * user ids, in both directions, and a bulk update cannot express that
+     * without an aggregation pipeline — which would also bypass
+     * Alignment.js's pre('validate') integrity hook, the very thing that
+     * guarantees a grant only ever names a member of its own connection.
+     *
+     * Per-document writes run through validation. If a malformed row exists
+     * (three users, a pairKey that disagrees with its users), it fails loudly
+     * here and is reported, rather than being silently "fixed" into a document
+     * that hands access to a non-member. */
+    console.log('\n2/4 Writing profile grants per connection...');
+
+    const cursor = alignments.find(
+      {
+        $or: [
+          { source: { $exists: false } },
+          { source: null },
+          { profileGrants: { $exists: false } },
+          { profileGrants: { $size: 0 } },
+        ],
+      },
+      // ⚠️ isActive and unlockedByInteractionId MUST be projected. An alignment
+      // that was unmatched has isActive:false, and rebuilding it with a
+      // hardcoded `true` would SILENTLY REACTIVATE every severed connection —
+      // resurfacing old matches in the Chats list. Both fields are carried
+      // across verbatim, never reconstructed.
+      {
+        projection: {
+          users: 1,
+          pairKey: 1,
+          isActive: 1,
+          unlockedByInteractionId: 1,
+          profileGrants: 1,
+          conversationAliases: 1,
+        },
+      },
+    );
+
+    const grantedAt = new Date();
+    let written = 0;
+    let failed = 0;
+    let missingInteraction = 0;
+    const failures = [];
+
+    for await (const doc of cursor) {
+      const users = Array.isArray(doc.users) ? doc.users.map(String) : [];
+
+      if (users.length !== 2) {
+        failed += 1;
+        failures.push({ _id: String(doc._id), reason: `${users.length} users, expected 2` });
+        continue;
+      }
+
+      // The schema marks it required, so a row without it cannot be rebuilt.
+      // Skip rather than invent a value — a fabricated interactionRef would
+      // point the "unlocked by" provenance at an object that does not exist.
+      if (!doc.unlockedByInteractionId) {
+        missingInteraction += 1;
+        failures.push({ _id: String(doc._id), reason: 'missing unlockedByInteractionId — skipped' });
+        continue;
+      }
+
+      try {
+        // Constructed through the model so pre('validate') runs.
+        const Alignment = mongoose.model('Alignment');
+        const alignment = new Alignment({
+          _id: doc._id,
+          pairKey: doc.pairKey,
+          users: doc.users,
+          isActive: doc.isActive,
+          unlockedByInteractionId: doc.unlockedByInteractionId,
+          source: 'deck',
+          profileGrants: [
+            { viewerId: users[0], subjectId: users[1], source: 'legacy', grantedAt },
+            { viewerId: users[1], subjectId: users[0], source: 'legacy', grantedAt },
+          ],
+          conversationAliases: doc.conversationAliases ?? [],
+          revealRequest: { state: 'none' },
+        });
+
+        await alignment.save();
+        written += 1;
+      } catch (err) {
+        failed += 1;
+        failures.push({ _id: String(doc._id), reason: err.message });
+      }
+    }
+
+    console.log(`   written : ${written}`);
+    console.log(`   failed  : ${failed}`);
+    if (missingInteraction) {
+      console.log(`   ⚠️  skipped for missing unlockedByInteractionId: ${missingInteraction}`);
+    }
+    if (failures.length) {
+      console.log('\n   Malformed rows — NOT migrated, left as they were:');
+      for (const f of failures.slice(0, 20)) console.log(`     ${f._id}  ${f.reason}`);
+      if (failures.length > 20) console.log(`     …and ${failures.length - 20} more`);
+    }
+  }
+
+  /* ── Notifications and Interactions ────────────────────────────────────────
+   * These NEED no backfill. `source` defaults to 'deck' on both models, which
+   * is correct for every existing row — a request or action that predates
+   * Roulette came from the Deck. Counting them is confirmation, not a write. */
+  console.log('\n3/4 Notification / Interaction defaults');
+  const notifications = mongoose.connection.collection('notifications');
+  const interactions = mongoose.connection.collection('interactions');
+  console.log(`   notifications   : ${await notifications.countDocuments({})} (source defaults to 'deck')`);
+  console.log(`   interactions    : ${await interactions.countDocuments({})} (source defaults to 'deck')`);
+
+  console.log('\n4/4 Indexes');
+  try {
+    await alignments.createIndex(
+      { 'profileGrants.viewerId': 1, 'profileGrants.subjectId': 1 },
+      { name: 'profile_grants_lookup' },
+    );
+    console.log('   ✅ profile_grants_lookup');
+  } catch (err) {
+    console.error('   ❌', err.message);
+  }
+  try {
+    await notifications.createIndex(
+      { callSessionId: 1 },
+      { sparse: true, name: 'roulette_call_expiry_sweep' },
+    );
+    console.log('   ✅ roulette_call_expiry_sweep');
+  } catch (err) {
+    console.error('   ❌', err.message);
+  }
+
+  if (EXECUTE) {
+    console.log('\n✅ Done. To reverse: unset source, profileGrants, conversationAliases');
+    console.log('   and revealRequest on the alignments collection.');
+  } else {
+    console.log('\nℹ️  DRY RUN complete. Nothing was written.');
+    console.log('   Re-run with --execute to apply.');
+  }
+
+  await mongoose.connection.close();
+};
+
+run().catch((err) => {
+  console.error('💥 Migration failed:', err.message);
+  process.exit(1);
+});
 
 ```
 
@@ -32112,6 +32647,267 @@ export const verifyOtp = (email, otp, storedHash) => {
 };
 
 export { normalizeEmail };
+
+```
+
+### ./server/utils/partnerView.js
+
+```
+/**
+ * 🛡️ PARTNER VIEW — the single answer to "what may this connection show?"
+ *
+ * ── WHY THIS FILE EXISTS ─────────────────────────────────────────────────────
+ * Before this, "can person A see person B's profile?" was decided
+ * independently by every screen that displayed a name. Twenty-two inline sites
+ * read `user.name` or `user.photos[0]` directly, and four server paths embedded
+ * real names in payloads and push titles. There was no rule to break and no
+ * single place to change — which is why a promise of "your profile is hidden"
+ * could not be kept, and why it could not be tested.
+ *
+ * This module is that rule. It is deliberately boring: one lookup, one
+ * fallback chain, no clever branching. Every surface that shows a partner
+ * eventually calls `displayNameFor` instead of reading a field itself, which
+ * is what makes the promise auditable.
+ *
+ * ── THE INVARIANT ────────────────────────────────────────────────────────────
+ *   NO GRANT MEANS NO ACCESS. Not "unless it is a deck connection", not "unless
+ *   the field is missing". Absence is denial.
+ *
+ * That is the whole design. It fails closed because there is no branch that
+ * could decide otherwise — the only way to grant access is to write a grant.
+ *
+ * ── NOT CALLED ANYTHING YET ──────────────────────────────────────────────────
+ * Stage 1 defines and tests the contract. Wiring it into Chat, the Requests
+ * list, search, typing events and push notifications is Stage 8, and the
+ * acceptance gate for that stage is that all thirteen of those surfaces call
+ * these functions. Until then no screen changes behaviour, which is precisely
+ * why this can be merged without regression risk.
+ *
+ * Design source: ambitions/roulette.md §4
+ */
+
+import Alignment from '../models/Alignment.js';
+
+/**
+ * Placeholder shown when nothing authorises a real identity.
+ *
+ * ⚠️ Never derive this from the user's name, college, ObjectId or an avatar.
+ * The whole point is that a partner learns nothing. This string is the same
+ * for everyone so it also leaks nothing by comparison — two strangers looking
+ * at each other see identical text.
+ */
+export const ANONYMOUS_LABEL = 'Stranger';
+
+/**
+ * Resolve the OTHER user in a connection.
+ *
+ * @param {{ users?: Array }} connection  an Alignment document or plain object
+ * @param {string|import('mongoose').Types.ObjectId} viewerId
+ * @returns {string|null} the partner's id, or null if viewerId is not a member
+ */
+export const partnerIdFor = (connection, viewerId) => {
+  const users = Array.isArray(connection?.users) ? connection.users : [];
+  if (users.length !== 2) return null;
+  const viewer = String(viewerId);
+  const partner = users.find((u) => String(u) !== viewer);
+  return partner ? String(partner) : null;
+};
+
+/**
+ * The authorisation question, answered directly from the document.
+ *
+ * Pure: takes an already-loaded connection, hits no database. `canViewProfile`
+ * below is the loading variant.
+ *
+ * @param {{ profileGrants?: Array }} connection
+ * @param {string} viewerId
+ * @param {string} subjectId
+ * @returns {boolean} true ONLY if an explicit grant exists
+ */
+export const hasGrant = (connection, viewerId, subjectId) => {
+  const grants = Array.isArray(connection?.profileGrants) ? connection.profileGrants : [];
+  const viewer = String(viewerId);
+  const subject = String(subjectId);
+  // An empty list is the common case for a hidden connection, so bail before
+  // doing any string comparison work.
+  if (grants.length === 0) return false;
+  return grants.some((g) => String(g?.viewerId) === viewer && String(g?.subjectId) === subject);
+};
+
+/**
+ * May `viewerId` see `subjectId`'s public profile through this connection?
+ *
+ * @param {object} connection  a loaded Alignment
+ * @param {string} viewerId
+ * @param {string} [subjectId]  defaults to "whoever else is in it"
+ * @returns {boolean}
+ */
+export const canViewProfileIn = (connection, viewerId, subjectId) => {
+  // A connection is two people by definition, and Alignment.js:53-63 enforces
+  // that on save. Refusing anything else here is defence in depth for a
+  // function whose entire job is to be un-grantable: a malformed document
+  // naming extra members must not become a way to hand out access, even if
+  // it happens to contain a matching grant.
+  const users = Array.isArray(connection?.users) ? connection.users : [];
+  if (users.length !== 2) return false;
+
+  const subject = subjectId ? String(subjectId) : partnerIdFor(connection, viewerId);
+  if (!subject || !viewerId) return false;
+  if (String(viewerId) === subject) return false;
+  return hasGrant(connection, viewerId, subject);
+};
+
+/**
+ * The nickname this connection records for the partner, if any.
+ *
+ * @param {object} connection
+ * @param {string} partnerId
+ * @returns {string|null}
+ */
+export const aliasFor = (connection, partnerId) => {
+  const aliases = Array.isArray(connection?.conversationAliases)
+    ? connection.conversationAliases
+    : [];
+  const partner = String(partnerId);
+  const found = aliases.find((a) => String(a?.userId) === partner);
+  const alias = found?.alias;
+  return typeof alias === 'string' && alias.trim() ? alias.trim() : null;
+};
+
+/**
+ * The display name for a partner, in a fixed order of preference.
+ *
+ * 1. A nickname recorded for this connection  → use it
+ * 2. A grant authorises their real name       → use their real name
+ * 3. Otherwise                                → ANONYMOUS_LABEL
+ *
+ * Order matters and is not interchangeable. The alias wins even after a
+ * mutual reveal, which is deliberate (spec §8.2): the conversation keeps the
+ * name people chose for each other, and the real name is still available
+ * through `canViewProfile` for the profile sheet. A user who has seen
+ * "Moonwalker" for a week should not have that silently replaced mid-chat
+ * because they later agreed to share profiles.
+ *
+ * ⚠️ Callers that want to display a real name must ALSO check
+ * `canViewProfileIn` — this function is for labels, not for authorisation.
+ * They coincide today by construction, and will drift the moment anyone adds
+ * a UI that renders one without the other.
+ *
+ * @param {object} connection
+ * @param {string} viewerId
+ * @param {{ name?: string }} [partnerUser]  the partner's user doc, for the real name
+ * @returns {string}
+ */
+export const displayNameIn = (connection, viewerId, partnerUser) => {
+  const partnerId = partnerIdFor(connection, viewerId);
+  if (!partnerId) return ANONYMOUS_LABEL;
+
+  const alias = aliasFor(connection, partnerId);
+  if (alias) return alias;
+
+  if (canViewProfileIn(connection, viewerId, partnerId)) {
+    const real = partnerUser?.name;
+    if (typeof real === 'string' && real.trim()) return real.trim();
+  }
+
+  return ANONYMOUS_LABEL;
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * DATABASE-BACKED VARIANTS
+ *
+ * The pure functions above are what the tests exercise and what every call
+ * site should prefer. These exist so a route does not have to hand-roll the
+ * same two queries.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Load a connection and answer the authorisation question.
+ *
+ * @param {string} alignmentId
+ * @param {string} viewerId
+ * @returns {Promise<{ connection: object|null, partnerId: string|null, canView: boolean }>}
+ */
+export const canViewProfile = async (alignmentId, viewerId) => {
+  const connection = await Alignment.findById(alignmentId).lean();
+  if (!connection) return { connection: null, partnerId: null, canView: false };
+
+  const partnerId = partnerIdFor(connection, viewerId);
+  // A non-member gets the same answer as a stranger: false. Never throw and
+  // never distinguish "not a member" from "not allowed" — that difference is
+  // an oracle for probing whether a connection exists.
+  const canView = partnerId ? canViewProfileIn(connection, viewerId, partnerId) : false;
+  return { connection, partnerId, canView };
+};
+
+/**
+ * Load a connection and resolve a partner's display name.
+ *
+ * @param {string} alignmentId
+ * @param {string} viewerId
+ * @param {string} [partnerId]  avoids a lookup when the caller already has it
+ * @param {{ name?: string }} [partnerUser]  avoids a lookup when already loaded
+ * @returns {Promise<string>}
+ */
+export const displayNameFor = async (alignmentId, viewerId, partnerId, partnerUser) => {
+  const connection = await Alignment.findById(alignmentId).lean();
+  if (!connection) return ANONYMOUS_LABEL;
+
+  const partner = partnerId ? String(partnerId) : partnerIdFor(connection, viewerId);
+  if (!partner) return ANONYMOUS_LABEL;
+
+  const alias = aliasFor(connection, partner);
+  if (alias) return alias;
+
+  if (canViewProfileIn(connection, viewerId, partner)) {
+    const name = partnerUser?.name;
+    if (typeof name === 'string' && name.trim()) return name.trim();
+  }
+
+  return ANONYMOUS_LABEL;
+};
+
+/**
+ * Build the grant rows a brand-new connection starts with.
+ *
+ * The asymmetry is the feature. Entering Roulette with "show my profile" ON
+ * grants your partner access to YOUR profile and grants nobody access to
+ * theirs — visibility is something you give, not something you receive.
+ *
+ * @param {{ _id: string }} viewer   the person creating the connection
+ * @param {string} partnerId
+ * @param {boolean} viewerShowsProfile
+ * @returns {Array<object>} zero or one grant
+ */
+export const grantsForNewConnection = (viewer, partnerId, viewerShowsProfile) => {
+  if (!viewerShowsProfile) return [];
+  return [
+    {
+      viewerId: String(partnerId),
+      subjectId: String(viewer._id),
+      source: 'roulette_visible',
+      grantedAt: new Date(),
+    },
+  ];
+};
+
+/**
+ * The grants to write when both parties consent to share profiles.
+ *
+ * Always exactly two, in both directions — a mutual reveal that only
+ * unhid one person would be a bug, not a partial success.
+ *
+ * @param {string} a
+ * @param {string} b
+ * @returns {Array<object>}
+ */
+export const grantsForMutualReveal = (a, b) => {
+  const now = new Date();
+  return [
+    { viewerId: String(a), subjectId: String(b), source: 'roulette_reveal', grantedAt: now },
+    { viewerId: String(b), subjectId: String(a), source: 'roulette_reveal', grantedAt: now },
+  ];
+};
 
 ```
 
@@ -39887,6 +40683,282 @@ export async function seedSociety() {
   await disconnectMongo();
   return world;
 }
+```
+
+### ./server/tests/unit/partnerView.test.js
+
+```
+/**
+ * 🧪 PARTNER VIEW — the privacy contract, proven.
+ *
+ * These cover the pure functions, so the whole file runs with NO database and
+ * NO server. That is deliberate: the rule is "no grant means no access", and a
+ * rule that can only be tested against a live database is a rule that will not
+ * get tested.
+ *
+ *   node --test server/tests/unit/
+ *
+ * Design source: ambitions/roulette.md §4, §16.3
+ */
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  ANONYMOUS_LABEL,
+  partnerIdFor,
+  hasGrant,
+  canViewProfileIn,
+  aliasFor,
+  displayNameIn,
+  grantsForNewConnection,
+  grantsForMutualReveal,
+} from '../../utils/partnerView.js';
+
+/* Fixtures use ids that read like real ObjectIds but are plain strings — the
+ * functions compare with String(), so shape is all that matters here. */
+const A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+const B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+
+const grant = (viewerId, subjectId, source = 'roulette_reveal') => ({
+  viewerId,
+  subjectId,
+  source,
+  grantedAt: new Date(0),
+});
+
+/** A legacy connection as the backfill migration would leave it. */
+const legacyConnection = () => ({
+  users: [A, B],
+  source: 'deck',
+  profileGrants: [grant(B, A, 'legacy'), grant(A, B, 'legacy')],
+});
+
+/** A hidden Roulette connection: names recorded, no access granted. */
+const hiddenConnection = () => ({
+  users: [A, B],
+  source: 'roulette',
+  profileGrants: [],
+  conversationAliases: [{ userId: A, alias: 'Moonwalker' }, { userId: B, alias: 'Kite' }],
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * THE INVARIANT
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+test('no grants means no access, in both directions', () => {
+  const c = hiddenConnection();
+  assert.equal(canViewProfileIn(c, A, B), false);
+  assert.equal(canViewProfileIn(c, B, A), false);
+});
+
+test('an empty profileGrants array grants nothing', () => {
+  assert.equal(canViewProfileIn({ users: [A, B], profileGrants: [] }, A, B), false);
+});
+
+test('a missing profileGrants field grants nothing', () => {
+  assert.equal(canViewProfileIn({ users: [A, B] }, A, B), false);
+});
+
+test('a malformed profileGrants value grants nothing rather than throwing', () => {
+  for (const bad of [null, undefined, 'nope', 42, {}, [null], [undefined], [{}]]) {
+    const c = { users: [A, B], profileGrants: bad };
+    assert.equal(
+      canViewProfileIn(c, A, B),
+      false,
+      `profileGrants=${JSON.stringify(bad)} must not grant access`,
+    );
+  }
+});
+
+test('a grant naming only half the pair does not grant the other direction', () => {
+  const c = { users: [A, B], profileGrants: [grant(B, A, 'roulette_visible')] };
+  assert.equal(canViewProfileIn(c, B, A), true, 'B may see A');
+  assert.equal(canViewProfileIn(c, A, B), false, 'A may NOT see B');
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * EXISTING DECK CONNECTIONS MUST NOT REGRESS
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+test('backfilled deck connection still shows real names both ways', () => {
+  const c = legacyConnection();
+  assert.equal(canViewProfileIn(c, A, B), true);
+  assert.equal(canViewProfileIn(c, B, A), true);
+  assert.equal(displayNameIn(c, A, { name: 'Priya' }), 'Priya');
+  assert.equal(displayNameIn(c, B, { name: 'Arjun' }), 'Arjun');
+});
+
+test('a deck connection with no aliases falls through to the real name', () => {
+  const c = legacyConnection();
+  assert.equal(aliasFor(c, B), null);
+  assert.equal(displayNameIn(c, A, { name: 'Priya' }), 'Priya');
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * THE ASYMMETRIC MATRIX
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+test('visible + hidden grants exactly one direction', () => {
+  // A entered Roulette with "show my profile" ON; B did not.
+  const c = {
+    users: [A, B],
+    source: 'roulette',
+    profileGrants: [grant(B, A, 'roulette_visible')],
+    conversationAliases: [{ userId: A, alias: 'Open Book' }, { userId: B, alias: 'Quiet' }],
+  };
+  assert.equal(canViewProfileIn(c, B, A), true, 'hidden B may view visible A');
+  assert.equal(canViewProfileIn(c, A, B), false, 'visible A may NOT view hidden B');
+  assert.equal(displayNameIn(c, B, { name: 'Priya' }), 'Open Book');
+});
+
+test('mutual reveal opens both directions and writes exactly two grants', () => {
+  const grants = grantsForMutualReveal(A, B);
+  assert.equal(grants.length, 2, 'exactly two — one per direction');
+  assert.equal(canViewProfileIn({ users: [A, B], profileGrants: grants }, A, B), true);
+  assert.equal(canViewProfileIn({ users: [A, B], profileGrants: grants }, B, A), true);
+
+  const toA = grants.filter((g) => g.subjectId === A);
+  const toB = grants.filter((g) => g.subjectId === B);
+  assert.equal(toA.length, 1);
+  assert.equal(toB.length, 1);
+  for (const g of grants) assert.equal(g.source, 'roulette_reveal');
+});
+
+test('grantsForNewConnection returns nothing when the user hides their profile', () => {
+  assert.deepEqual(grantsForNewConnection({ _id: A }, B, false), []);
+});
+
+test('grantsForNewConnection gives the partner access, never the creator', () => {
+  const grants = grantsForNewConnection({ _id: A }, B, true);
+  assert.equal(grants.length, 1);
+  assert.equal(grants[0].subjectId, A, 'the creator is the one exposed');
+  assert.equal(grants[0].viewerId, B);
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * DISPLAY NAMES
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+test('hidden connection shows the alias, never the real name', () => {
+  const c = hiddenConnection();
+  // conversationAliases records "this user is called this BY THE OTHER PARTY",
+  // so A's alias is what B sees, and B's alias is what A sees.
+  assert.equal(displayNameIn(c, A, { name: 'Priya' }), 'Kite', 'A sees B as Kite');
+  assert.equal(displayNameIn(c, B, { name: 'Arjun' }), 'Moonwalker', 'B sees A as Moonwalker');
+});
+
+test('the real name is never returned when access is not granted', () => {
+  const c = hiddenConnection();
+  for (const [viewer, partner, realName] of [
+    [A, B, 'Priya'],
+    [B, A, 'Arjun'],
+  ]) {
+    const shown = displayNameIn(c, viewer, { name: realName });
+    assert.notEqual(shown, realName, `${realName} must not appear for an unauthorised viewer`);
+  }
+});
+
+test('alias wins over the real name even after a mutual reveal', () => {
+  const c = { ...hiddenConnection(), profileGrants: grantsForMutualReveal(A, B) };
+  assert.equal(displayNameIn(c, A, { name: 'Priya' }), 'Kite', 'list keeps the chosen name');
+  assert.equal(canViewProfileIn(c, A, B), true, 'but the real profile is now reachable');
+});
+
+test('no alias and no grant yields the anonymous label', () => {
+  const c = { users: [A, B], source: 'roulette', profileGrants: [] };
+  assert.equal(displayNameIn(c, A, { name: 'Priya' }), ANONYMOUS_LABEL);
+});
+
+test('a granted user with no loaded user doc still does not leak', () => {
+  const c = legacyConnection();
+  assert.equal(displayNameIn(c, A, undefined), ANONYMOUS_LABEL);
+  assert.equal(displayNameIn(c, A, null), ANONYMOUS_LABEL);
+  assert.equal(displayNameIn(c, A, {}), ANONYMOUS_LABEL);
+});
+
+test('a blank or whitespace name is treated as absent', () => {
+  const c = legacyConnection();
+  for (const blank of ['', '   ', '\t\n']) {
+    assert.equal(displayNameIn(c, A, { name: blank }), ANONYMOUS_LABEL);
+  }
+});
+
+test('a blank alias is ignored and the chain continues', () => {
+  const c = {
+    users: [A, B],
+    profileGrants: grantsForMutualReveal(A, B),
+    conversationAliases: [{ userId: B, alias: '   ' }],
+  };
+  assert.equal(aliasFor(c, B), null);
+  assert.equal(displayNameIn(c, A, { name: 'Priya' }), 'Priya');
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * DEGENERATE AND HOSTILE INPUT
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+test('a non-member viewer is denied rather than told they are not a member', () => {
+  const c = legacyConnection();
+  const outsider = 'zzzzzzzzzzzzzzzzzzzzzzzz';
+  assert.equal(canViewProfileIn(c, outsider, A), false);
+  assert.equal(displayNameIn(c, outsider, { name: 'Priya' }), ANONYMOUS_LABEL);
+});
+
+test('a one-sided or three-sided connection is denied, not guessed', () => {
+  const outsider = 'zzzzzzzzzzzzzzzzzzzzzzzz';
+  for (const users of [[A], [A, B, outsider], []]) {
+    const c = { users, profileGrants: grantsForMutualReveal(A, B) };
+    assert.equal(canViewProfileIn(c, A, B), false);
+    assert.equal(displayNameIn(c, A, { name: 'Priya' }), ANONYMOUS_LABEL);
+  }
+});
+
+test('a user cannot be granted their own profile', () => {
+  const c = { users: [A, B], profileGrants: [grant(A, A)] };
+  assert.equal(canViewProfileIn(c, A, B), false, 'self-subject resolves to the partner');
+  assert.equal(hasGrant(c, A, A), true, 'the raw grant does exist — the guard is at the pair level');
+});
+
+test('object-id instances and strings compare equal', () => {
+  const objectIdLike = { toString: () => A, toHexString: () => A };
+  const c = legacyConnection();
+  assert.equal(canViewProfileIn(c, objectIdLike, B), true);
+});
+
+test('grant entries missing viewer or subject do not throw or match', () => {
+  const c = { users: [A, B], profileGrants: [{}, { source: 'legacy' }, grant(undefined, A)] };
+  assert.equal(canViewProfileIn(c, B, A), false);
+  assert.doesNotThrow(() => displayNameIn(c, A, { name: 'Priya' }));
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * SCOPE — the resolver is about CONNECTIONS, not global reach
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+test('a deck grant does not imply roulette access', () => {
+  // Same two people, connected via the Deck, now meet in Roulette. The grant
+  // from the deck connection stands on THAT connection only — a new hidden
+  // roulette connection starts with nothing.
+  const deck = legacyConnection();
+  const roulette = { users: [A, B], source: 'roulette', profileGrants: [] };
+
+  assert.equal(canViewProfileIn(deck, A, B), true, 'deck connection unchanged');
+  assert.equal(canViewProfileIn(roulette, A, B), false, 'roulette connection still hidden');
+  assert.equal(roulette.source, 'roulette', 'the newer flow does not rewrite provenance');
+});
+
+test('source alone never authorises anything', () => {
+  for (const source of ['deck', 'roulette']) {
+    const c = { users: [A, B], source, profileGrants: [] };
+    assert.equal(
+      canViewProfileIn(c, A, B),
+      false,
+      `source:'${source}' with no grants must not grant access`,
+    );
+  }
+});
+
 ```
 
 ## Section — Docs & Meta

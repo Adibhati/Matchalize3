@@ -1,7 +1,7 @@
 # Chunk 06 — Client Assets
 
 > Matchalize · `client-assets` · files 6 of 27 chunks · 2 file(s) · 13 KB · ~3,667 tokens
-> Generated 2026-10-17 20:34.
+> Generated 2026-10-17 21:10.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:

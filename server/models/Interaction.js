@@ -28,6 +28,28 @@ const interactionSchema = new mongoose.Schema(
       type: String,
       enum: ['block', 'unmatch', 'pass'],
       default: null,
+      /* ⚠️ THIS IS NOT THE CONNECTION SOURCE. `origin` here means "why did this
+       * action leave a permanent mark" — it is only ever written by the block,
+       * unmatch and pass routes.
+       *
+       * The connection/request source is the separate `source` field below.
+       * Do not unify them: `origin` answers a historical question about one
+       * action, `source` answers "which flow produced this", and reusing one
+       * name for both would make every read site ambiguous. */
+    },
+
+    source: {
+      type: String,
+      enum: ['deck', 'roulette'],
+      default: 'deck',
+      /* Which flow emitted this action. Set alongside an `align` so the
+       * accept path can tell a deck align from a Roulette one and branch
+       * before generating an opening letter — a deck align may copy the
+       * sender's photo and prompt into the chat, a hidden-profile Roulette
+       * align must not.
+       *
+       * Separate from `origin` above, and see the note there. Defaults to
+       * 'deck' so every historical row is correct without a backfill. */
     },
     targetArtifact: { 
       type: String, 

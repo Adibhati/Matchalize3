@@ -1,10 +1,14 @@
 # Chunk 19 — Server Core
 
-> Matchalize · `server-core` · files 19 of 27 chunks · 14 file(s) · 88 KB · ~25,829 tokens
-> Generated 2026-10-17 20:34.
+> Matchalize · `server-core` · files 19 of 27 chunks · 18 file(s) · 93 KB · ~27,348 tokens
+> Generated 2026-10-17 21:10.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
+> - `./server/models/Notification.js`
+> - `./server/models/OTP.js`
+> - `./server/models/Report.js`
+> - `./server/models/Setting.js`
 > - `./server/models/User.js`
 > - `./server/models/index.js`
 > - `./server/scripts/audit-cloudinary-orphans.mjs`
@@ -14,13 +18,245 @@
 > - `./server/scripts/migrate-alignment.mjs`
 > - `./server/scripts/migrate-intent-rename.mjs`
 > - `./server/scripts/migrate-remove-isghost.mjs`
+> - `./server/scripts/migrate-roulette-source.mjs`
 > - `./server/scripts/reset-colleges.mjs`
 > - `./server/scripts/reverify-sweep.mjs`
 > - `./server/scripts/seed-iitb.mjs`
 > - `./server/scripts/verify-deck-metrics.mjs`
-> - `./server/scripts/verify-location-swap.mjs`
 
 ---
+### ./server/models/Notification.js
+
+```
+import mongoose from 'mongoose';
+
+const notificationSchema = new mongoose.Schema(
+  {
+    recipientId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    senderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    type: {
+      type: String,
+      /* 'new_letter' and 'priority_telegram' are RETIRED as writers — the deck
+         now emits 'new_align' for every expression of interest. They stay in the
+         enum because unread rows carrying them remain in users' drawers and must
+         still validate. Anything missing from this list is REJECTED by Mongoose,
+         which is a 500 on the Align route — the single most important entry
+         here is 'new_align'. */
+      enum: ['new_letter', 'priority_telegram', 'new_align'],
+      required: true,
+    },
+    interactionRef: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Interaction',
+      required: true,
+      // Links to the exact letter and photo they liked
+    },
+    isCleared: {
+      type: Boolean,
+      default: false,
+      // Flips to true the moment they hit [Accept] or [Archive]
+    },
+
+    /* ═══════════════════════════════════════════════════════════════════════
+     * 🎰 REQUEST PROVENANCE & DEADLINE  (Roulette, Stage 1)
+     *
+     * A pending request must know two things the deck never needed: which
+     * flow produced it, and when it stops being valid.
+     * ═══════════════════════════════════════════════════════════════════════ */
+    source: {
+      type: String,
+      enum: ['deck', 'roulette'],
+      default: 'deck',
+      /* Which flow created this request. Drives two things at accept time:
+       * the origin label shown in the Requests list, and whether an opening
+       * letter may be generated — routes/notifications.js:195-235 copies the
+       * sender's photo and prompt text into the chat, which is exactly what a
+       * hidden-profile connection must never do.
+       *
+       * Defaults to 'deck' so every pre-Roulette row is automatically correct
+       * rather than requiring a backfill to make it correct. */
+    },
+
+    callSessionId: {
+      type: String,
+      default: null,
+      /* The Roulette call this request belongs to, if any. Null for deck.
+       *
+       * Also the key to expiry: when a call ends, the server sweeps every
+       * request carrying this id and clears it. Without this column a pending
+       * live request would have no way to find its call, and the call's end
+       * would leave an orphaned request unlockable forever. */
+    },
+
+    expiresAt: {
+      type: Date,
+      default: null,
+      /* NULL = never expires. Deck requests outlive their call and stay valid
+       * until accepted or declined, which is their existing behaviour.
+       *
+       * Roulette requests MUST carry a deadline, because spec §7.3 says a
+       * still-pending request expires when the call closes. Accept checks this
+       * field and rejects a late accept as expired — see R2 in the Stage 1
+       * acceptance tests.
+       *
+       * ⚠️ This is deliberately NOT a Mongo TTL index. A TTL deletes the
+       * document; the spec requires the row to SURVIVE so the Requests list
+       * can show it as expired rather than silently vanishing. TTL belongs on
+       * `createdAt` (below), which already exists. */
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+// Extremely fast lookup for the active Instagram-style tray
+notificationSchema.index({ recipientId: 1, isCleared: 1, createdAt: -1 });
+
+// Serves the call-end expiry sweep: "clear every pending request belonging to
+// call X". Sparse because only roulette rows carry a callSessionId — without
+// `sparse` every deck row would be indexed under null and the index would grow
+// to the size of the whole collection for no query benefit.
+notificationSchema.index(
+  { callSessionId: 1 },
+  { sparse: true, name: 'roulette_call_expiry_sweep' }
+);
+
+// Auto-delete cleared notifications after 30 days to prevent database bloat
+notificationSchema.index(
+  { createdAt: 1 }, 
+  { 
+    expireAfterSeconds: 30 * 24 * 60 * 60,
+    partialFilterExpression: { isCleared: true } 
+  }
+);
+
+const Notification = mongoose.model('Notification', notificationSchema);
+export default Notification;
+
+```
+
+### ./server/models/OTP.js
+
+```
+import mongoose from 'mongoose';
+
+const otpSchema = new mongoose.Schema(
+  {
+    email: {
+      type: String,
+      required: true,
+      trim: true,
+      lowercase: true,
+    },
+    // HMAC-SHA256 fingerprint of the code — NOT the code itself.
+    // See utils/otpHash.js. The plaintext code only ever exists in memory
+    // long enough to be emailed.
+    otpHash: {
+      type: String,
+      required: true,
+    },
+    // The college the user PICKED before requesting the code.
+    //
+    // ⚠️ This is the binding between step 1 (pick your college) and step 3
+    // (enter the code). It lives server-side so the client cannot re-assert a
+    // different college at verification time — otherwise the picker would be
+    // advisory only, since anyone could send a code request for IIT Bombay and
+    // verify against whichever college they actually wanted.
+    collegeCode: {
+      type: String,
+      default: '',
+      trim: true,
+      lowercase: true,
+    },
+    expiresAt: {
+      type: Date,
+      required: true,
+      index: { expires: 0 }, // Document will expire at the specified date
+    },
+    attempts: {
+      type: Number,
+      default: 0,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+// Index for rate limiting queries (find by email within last hour)
+otpSchema.index({ email: 1, createdAt: 1 });
+
+const OTP = mongoose.model('OTP', otpSchema);
+export default OTP;
+
+```
+
+### ./server/models/Report.js
+
+```
+import mongoose from 'mongoose';
+
+export const REPORT_REASONS = [
+  'Inappropriate photos',
+  'Harassment or bullying',
+  'Fake profile or spam',
+  'Underage user',
+  'Other',
+];
+
+const reportSchema = new mongoose.Schema({
+  reporter: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  reported: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  reason: { type: String, enum: REPORT_REASONS, required: true },
+  details: { type: String, default: '' },
+  status: {
+    type: String,
+    enum: ['pending', 'reviewed', 'dismissed', 'actioned'],
+    default: 'pending',
+  },
+  createdAt: { type: Date, default: Date.now },
+});
+
+reportSchema.index({ reporter: 1, reported: 1 }, { unique: true });
+
+const Report = mongoose.model('Report', reportSchema);
+export default Report;
+
+```
+
+### ./server/models/Setting.js
+
+```
+import mongoose from 'mongoose';
+
+const settingSchema = new mongoose.Schema(
+  {
+    key: {
+      type: String,
+      unique: true,
+      required: true,
+      trim: true,
+    },
+    value: {
+      type: mongoose.Schema.Types.Mixed,
+      required: true,
+    },
+  },
+  { timestamps: true }
+);
+
+export default mongoose.model('Setting', settingSchema);
+```
+
 ### ./server/models/User.js
 
 ```
@@ -1434,6 +1670,271 @@ await mongoose.disconnect();
 
 ```
 
+### ./server/scripts/migrate-roulette-source.mjs
+
+```
+/**
+ * 🌱 MIGRATE — Roulette identity fields.
+ *
+ * ── WHAT IT DOES ─────────────────────────────────────────────────────────────
+ * Stage 1 added four fields to `Alignment` (source, profileGrants,
+ * conversationAliases, revealRequest) plus three to `Notification` and one to
+ * `Interaction`. Mongoose defaults cover new writes, but existing documents
+ * predate the fields entirely, and one of them cannot be defaulted safely.
+ *
+ * Every pre-Roulette connection was a DECK connection, and a deck connection
+ * showed both profiles openly. So each one needs:
+ *
+ *   source        = 'deck'
+ *   profileGrants = TWO grants, one per direction, source 'legacy'
+ *
+ * ── WHY BACKFILL RATHER THAN A SPECIAL CASE ───────────────────────────────────
+ * The obvious shortcut is to leave existing rows alone and write the resolver
+ * as "if no grants, treat it as a deck connection and allow". That is a branch
+ * keyed on a field being absent — and a branch is exactly what fails. The first
+ * hidden Roulette row written before its grants are populated would take that
+ * path and show a real name.
+ *
+ * Backfilling removes the branch entirely. After this runs, the resolver has
+ * ONE rule: is there a grant? Absence means no, for everybody, forever.
+ *
+ * ── SAFE BY DEFAULT ───────────────────────────────────────────────────────────
+ *   node scripts/migrate-roulette-source.mjs            # dry run, writes nothing
+ *   node scripts/migrate-roulette-source.mjs --execute  # actually writes
+ *
+ * Rollback is `unset` of the same four fields; no data is destroyed and the
+ * three Notification/Interaction fields are left untouched.
+ *
+ * Design source: ambitions/roulette.md §4.6
+ */
+
+import mongoose from 'mongoose';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+import '../models/index.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const EXECUTE = process.argv.includes('--execute');
+
+const loadEnv = () => {
+  const envPaths = [path.join(__dirname, '../.env'), path.join(process.cwd(), '.env')];
+  for (const p of envPaths) {
+    if (fs.existsSync(p)) {
+      for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+        const idx = line.indexOf('=');
+        if (idx === -1) continue;
+        const key = line.slice(0, idx).trim();
+        const val = line.slice(idx + 1).trim();
+        if (!process.env[key]) process.env[key] = val;
+      }
+      return p;
+    }
+  }
+  return null;
+};
+
+const run = async () => {
+  const envFile = loadEnv();
+  if (!process.env.MONGODB_URI) {
+    console.error('❌ MONGODB_URI not found.');
+    process.exit(1);
+  }
+
+  const dbName = mongoose.connection.name;
+  console.log(`${EXECUTE ? '🔧' : '🔍'} Roulette identity migration${EXECUTE ? '' : ' (DRY RUN)'}`);
+  console.log(`   env     : ${envFile || '(process)'}`);
+  console.log(`   database: ${dbName}`);
+
+  if (EXECUTE && dbName === 'matchalize_test') {
+    console.log('   ℹ️  Target is the test database — fine, but noting it.');
+  }
+
+  await mongoose.connect(process.env.MONGODB_URI);
+
+  const alignments = mongoose.connection.collection('alignments');
+  const total = await alignments.countDocuments({});
+
+  /* ── Scope ──────────────────────────────────────────────────────────────────
+   * Only rows that predate the fields. A document already carrying a non-empty
+   * profileGrants was either created after Stage 1 or already migrated, and
+   * rewriting it would DISCARD real grants — including a granted profile a
+   * user agreed to share. Skipping them is what makes re-running safe. */
+  const needsWork = await alignments.countDocuments({
+    $or: [
+      { source: { $exists: false } },
+      { source: null },
+      { profileGrants: { $exists: false } },
+      { profileGrants: { $size: 0 } },
+    ],
+  });
+
+  const skipped = total - needsWork;
+  const alreadyAliased = await alignments.countDocuments({
+    conversationAliases: { $exists: true, $size: { $gt: 0 } },
+  });
+
+  console.log(`\n1/4 Alignments`);
+  console.log(`   total            : ${total}`);
+  console.log(`   need backfill    : ${needsWork}`);
+  console.log(`   already migrated : ${skipped}`);
+  console.log(`   carry an alias   : ${alreadyAliased}  (left untouched)`);
+
+  if (needsWork === 0) {
+    console.log('\n   ✅ Nothing to do.');
+  } else if (!EXECUTE) {
+    console.log('\n2/4 Writing pairs\n   ℹ️  DRY RUN — no writes performed. Re-run with --execute.');
+  } else {
+    /* ── Do it one document at a time ────────────────────────────────────────
+     * Not `updateMany`. Each connection needs grants built from ITS OWN two
+     * user ids, in both directions, and a bulk update cannot express that
+     * without an aggregation pipeline — which would also bypass
+     * Alignment.js's pre('validate') integrity hook, the very thing that
+     * guarantees a grant only ever names a member of its own connection.
+     *
+     * Per-document writes run through validation. If a malformed row exists
+     * (three users, a pairKey that disagrees with its users), it fails loudly
+     * here and is reported, rather than being silently "fixed" into a document
+     * that hands access to a non-member. */
+    console.log('\n2/4 Writing profile grants per connection...');
+
+    const cursor = alignments.find(
+      {
+        $or: [
+          { source: { $exists: false } },
+          { source: null },
+          { profileGrants: { $exists: false } },
+          { profileGrants: { $size: 0 } },
+        ],
+      },
+      // ⚠️ isActive and unlockedByInteractionId MUST be projected. An alignment
+      // that was unmatched has isActive:false, and rebuilding it with a
+      // hardcoded `true` would SILENTLY REACTIVATE every severed connection —
+      // resurfacing old matches in the Chats list. Both fields are carried
+      // across verbatim, never reconstructed.
+      {
+        projection: {
+          users: 1,
+          pairKey: 1,
+          isActive: 1,
+          unlockedByInteractionId: 1,
+          profileGrants: 1,
+          conversationAliases: 1,
+        },
+      },
+    );
+
+    const grantedAt = new Date();
+    let written = 0;
+    let failed = 0;
+    let missingInteraction = 0;
+    const failures = [];
+
+    for await (const doc of cursor) {
+      const users = Array.isArray(doc.users) ? doc.users.map(String) : [];
+
+      if (users.length !== 2) {
+        failed += 1;
+        failures.push({ _id: String(doc._id), reason: `${users.length} users, expected 2` });
+        continue;
+      }
+
+      // The schema marks it required, so a row without it cannot be rebuilt.
+      // Skip rather than invent a value — a fabricated interactionRef would
+      // point the "unlocked by" provenance at an object that does not exist.
+      if (!doc.unlockedByInteractionId) {
+        missingInteraction += 1;
+        failures.push({ _id: String(doc._id), reason: 'missing unlockedByInteractionId — skipped' });
+        continue;
+      }
+
+      try {
+        // Constructed through the model so pre('validate') runs.
+        const Alignment = mongoose.model('Alignment');
+        const alignment = new Alignment({
+          _id: doc._id,
+          pairKey: doc.pairKey,
+          users: doc.users,
+          isActive: doc.isActive,
+          unlockedByInteractionId: doc.unlockedByInteractionId,
+          source: 'deck',
+          profileGrants: [
+            { viewerId: users[0], subjectId: users[1], source: 'legacy', grantedAt },
+            { viewerId: users[1], subjectId: users[0], source: 'legacy', grantedAt },
+          ],
+          conversationAliases: doc.conversationAliases ?? [],
+          revealRequest: { state: 'none' },
+        });
+
+        await alignment.save();
+        written += 1;
+      } catch (err) {
+        failed += 1;
+        failures.push({ _id: String(doc._id), reason: err.message });
+      }
+    }
+
+    console.log(`   written : ${written}`);
+    console.log(`   failed  : ${failed}`);
+    if (missingInteraction) {
+      console.log(`   ⚠️  skipped for missing unlockedByInteractionId: ${missingInteraction}`);
+    }
+    if (failures.length) {
+      console.log('\n   Malformed rows — NOT migrated, left as they were:');
+      for (const f of failures.slice(0, 20)) console.log(`     ${f._id}  ${f.reason}`);
+      if (failures.length > 20) console.log(`     …and ${failures.length - 20} more`);
+    }
+  }
+
+  /* ── Notifications and Interactions ────────────────────────────────────────
+   * These NEED no backfill. `source` defaults to 'deck' on both models, which
+   * is correct for every existing row — a request or action that predates
+   * Roulette came from the Deck. Counting them is confirmation, not a write. */
+  console.log('\n3/4 Notification / Interaction defaults');
+  const notifications = mongoose.connection.collection('notifications');
+  const interactions = mongoose.connection.collection('interactions');
+  console.log(`   notifications   : ${await notifications.countDocuments({})} (source defaults to 'deck')`);
+  console.log(`   interactions    : ${await interactions.countDocuments({})} (source defaults to 'deck')`);
+
+  console.log('\n4/4 Indexes');
+  try {
+    await alignments.createIndex(
+      { 'profileGrants.viewerId': 1, 'profileGrants.subjectId': 1 },
+      { name: 'profile_grants_lookup' },
+    );
+    console.log('   ✅ profile_grants_lookup');
+  } catch (err) {
+    console.error('   ❌', err.message);
+  }
+  try {
+    await notifications.createIndex(
+      { callSessionId: 1 },
+      { sparse: true, name: 'roulette_call_expiry_sweep' },
+    );
+    console.log('   ✅ roulette_call_expiry_sweep');
+  } catch (err) {
+    console.error('   ❌', err.message);
+  }
+
+  if (EXECUTE) {
+    console.log('\n✅ Done. To reverse: unset source, profileGrants, conversationAliases');
+    console.log('   and revealRequest on the alignments collection.');
+  } else {
+    console.log('\nℹ️  DRY RUN complete. Nothing was written.');
+    console.log('   Re-run with --execute to apply.');
+  }
+
+  await mongoose.connection.close();
+};
+
+run().catch((err) => {
+  console.error('💥 Migration failed:', err.message);
+  process.exit(1);
+});
+
+```
+
 ### ./server/scripts/reset-colleges.mjs
 
 ```
@@ -2103,258 +2604,5 @@ try {
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
 
-```
-
-### ./server/scripts/verify-location-swap.mjs
-
-```
-/**
- * Proves the location swap end to end against the real /api/discover route.
- *
- * The scenario: one viewer, registered at a Delhi college, who turns location
- * on while physically in Mumbai. Nothing about the viewer changes except their
- * coordinates, so the deck must flip from entirely-Delhi to entirely-Mumbai.
- *
- * The two clusters are ~1,400km apart, so this is not a re-ordering. If any
- * Delhi profile survives the second fetch, the session was not invalidated and
- * the feed is still serving the frozen first page.
- *
- * The test owns its viewer: it clears any stored position directly in the
- * database before it starts, and restores it with `$unset` (not
- * `$set: {field: undefined}`, which the driver writes as null) when it finishes.
- * Without that, a leftover reading from an earlier run silently invalidates the
- * scenario — the viewer is already in Mumbai, so there is nothing left to move.
- */
-import mongoose from 'mongoose';
-import dotenv from 'dotenv';
-import jwt from 'jsonwebtoken';
-
-dotenv.config({ path: './.env' });
-
-const PORT = process.env.PORT || 5005;
-const BASE = `http://127.0.0.1:${PORT}/api`;
-const MUMBAI = [19.1334, 72.9133];
-
-const DELHI_MARK = ['Delhi', 'Jamia', 'IIT Delhi', 'Netaji', 'Indraprastha'];
-const MUMBAI_MARK = ['Mumbai', 'Bombay', 'Veermata', 'Chemical Technology', 'Narsee',
-  'Xavier', 'Sardar Patel', 'Bharatiya'];
-
-async function fetchDeck(token) {
-  const r = await fetch(`${BASE}/discover`, { headers: { Cookie: `matchalize_jwt=${token}` } });
-  if (!r.ok) throw new Error(`GET /discover -> ${r.status} ${await r.text()}`);
-  return r.json();
-}
-
-async function putLocation(token, body) {
-  const r = await fetch(`${BASE}/users/location`, {
-    method: 'PUT',
-    headers: { Cookie: `matchalize_jwt=${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return { status: r.status, body: await r.json().catch(() => ({})) };
-}
-
-/** The state `GET /users/location` reports — the same signal the notice mounts on. */
-async function readLocation(token) {
-  const r = await fetch(`${BASE}/users/location`, { headers: { Cookie: `matchalize_jwt=${token}` } });
-  if (!r.ok) throw new Error(`GET /users/location -> ${r.status}`);
-  return r.json();
-}
-
-function classify(users) {
-  const byCity = { delhi: 0, mumbai: 0, other: 0 };
-  const colleges = new Map();
-  const bands = new Map();
-  for (const u of users) {
-    const c = u.college || '(hidden)';
-    colleges.set(c, (colleges.get(c) || 0) + 1);
-    bands.set(u.distanceBand ?? 'unbanded', (bands.get(u.distanceBand ?? 'unbanded') || 0) + 1);
-    if (DELHI_MARK.some((m) => c.includes(m))) byCity.delhi += 1;
-    else if (MUMBAI_MARK.some((m) => c.includes(m))) byCity.mumbai += 1;
-    else byCity.other += 1;
-  }
-  return { byCity, colleges, bands };
-}
-
-const fmt = (b) => [...b].map(([k, n]) => `${k}:${n}`).join('  ');
-const top = (c, n = 4) => [...c].slice(0, n).map(([k, v]) => `${k} (${v})`).join(', ');
-
-async function main() {
-  await mongoose.connect(process.env.MONGODB_URI);
-  const db = mongoose.connection.db;
-
-  const viewerCode = process.env.VIEWER_COLLEGE || 'iitd';
-  const viewer = await db.collection('users').findOne({ collegeCode: viewerCode, isOnboarded: true });
-  if (!viewer) throw new Error(`no ${viewerCode} user seeded`);
-
-  /* Own the starting state: no personal reading, campus basis, no saved deck. */
-  await db.collection('users').updateOne(
-    { _id: viewer._id },
-    { $set: { locationSource: 'campus', locationUpdatedAt: new Date() }, $unset: { currentLatLng: 1 } },
-  );
-  await db.collection('discoversessions').deleteMany({ viewerId: viewer._id });
-
-  const token = jwt.sign({ id: viewer._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-  const fresh = await db.collection('users').findOne(
-    { _id: viewer._id },
-    { projection: { locationSource: 1, currentLatLng: 1 } },
-  );
-
-  console.log(`viewer   : ${viewer.name}  <${viewer.email}>`);
-  console.log(`college  : ${viewer.college}`);
-  console.log(`start    : source=${fresh.locationSource}  latLng=${JSON.stringify(fresh.currentLatLng ?? null)}`);
-
-  // ── 1. campus fallback ──
-  console.log('\n=== 1. LOCATION OFF — campus fallback to IIT Delhi ===');
-  const first = await fetchDeck(token);
-  const a = classify(first.users);
-  console.log(`   deck size    : ${first.users.length}`);
-  console.log(`   city split   : Delhi ${a.byCity.delhi}   Mumbai ${a.byCity.mumbai}   other ${a.byCity.other}`);
-  console.log(`   top colleges : ${top(a.colleges)}`);
-  console.log(`   bands        : ${fmt(a.bands)}`);
-
-  // ── 2. same viewer, now standing in Mumbai ──
-  console.log('\n=== 2. LOCATION ON — same viewer, standing in Mumbai ===');
-  const put = await fetch(`${BASE}/users/location`, {
-    method: 'PUT',
-    headers: { Cookie: `matchalize_jwt=${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ latLng: MUMBAI, source: 'gps' }),
-  });
-  const putBody = await put.json().catch(() => ({}));
-  console.log(`   PUT /users/location -> ${put.status}  ${JSON.stringify(putBody)}`);
-
-  const after = await db.collection('users').findOne(
-    { _id: viewer._id },
-    { projection: { locationSource: 1, currentLatLng: 1 } },
-  );
-  console.log(`   anchor in DB  : source=${after.locationSource} latLng=${JSON.stringify(after.currentLatLng)}`);
-
-  const second = await fetchDeck(token);
-  const b = classify(second.users);
-  console.log(`   deck size    : ${second.users.length}`);
-  console.log(`   city split   : Delhi ${b.byCity.delhi}   Mumbai ${b.byCity.mumbai}   other ${b.byCity.other}`);
-  console.log(`   top colleges : ${top(b.colleges)}`);
-  console.log(`   bands        : ${fmt(b.bands)}`);
-
-  // ── 3. the anti-churn case ──
-  console.log('\n=== 3. LOCATION ON but standing ON campus — deck must survive ===');
-  await db.collection('users').updateOne(
-    { _id: viewer._id },
-    { $set: { locationSource: 'campus', locationUpdatedAt: new Date() }, $unset: { currentLatLng: 1 } },
-  );
-  await db.collection('discoversessions').deleteMany({ viewerId: viewer._id });
-  const onCampusDeck = await fetchDeck(token);
-  const c = classify(onCampusDeck.users);
-  console.log(`   deck 3 city split : Delhi ${c.byCity.delhi}   Mumbai ${c.byCity.mumbai}   other ${c.byCity.other}`);
-
-  const stayPut = await fetch(`${BASE}/users/location`, {
-    method: 'PUT',
-    headers: { Cookie: `matchalize_jwt=${token}`, 'Content-Type': 'application/json' },
-    /* IIT Delhi's own campus position — a few km from where the viewer already
-       is, well inside the 25km drift threshold. */
-    body: JSON.stringify({ latLng: [28.5450, 77.1926], source: 'gps' }),
-  });
-  const stayBody = await stayPut.json().catch(() => ({}));
-  const sessions = await db.collection('discoversessions').countDocuments({ viewerId: viewer._id });
-  console.log(`   PUT same-campus coords -> ${stayPut.status}  ${JSON.stringify(stayBody)}`);
-  console.log(`   saved sessions after   : ${sessions}  ${sessions === 1 ? '(kept)' : '(lost)'}`);
-
-  // ── 4. one-time grant lapse ──
-  console.log('\n=== 4. LAPSED ONE-TIME GRANT — released on the next launch ===');
-  /* Reproduce the whole sequence the client performs on a launch:
-     a position stored under a temporary grant, then that grant lapsing so the
-     browser no longer has it. The expiry is a browser fact we cannot trigger
-     from here, so the equivalent server-visible state is written directly — a
-     stored `gps` reading that no longer has a live grant behind it. */
-  await db.collection('users').updateOne(
-    { _id: viewer._id },
-    { $set: { locationSource: 'gps', currentLatLng: MUMBAI, locationUpdatedAt: new Date() } },
-  );
-  const held = await readLocation(token);
-  console.log(`   before lapse : source=${held.locationSource} active=${held.active}`);
-
-  /* What `releaseEphemeralLocation()` sends when the browser reports `prompt`. */
-  const released = await putLocation(token, { latLng: null, source: null, ephemeral: true });
-  const afterLapse = await readLocation(token);
-  console.log(`   release call -> ${released.status} ${JSON.stringify(released.body)}`);
-  console.log(`   after lapse  : source=${afterLapse.locationSource} active=${afterLapse.active}`);
-  /* Read the coordinates straight from the database: the endpoint reports state,
-     not storage, so it cannot prove the value is gone from the row. */
-  const stored = await db.collection('users').findOne(
-    { _id: viewer._id },
-    { projection: { currentLatLng: 1 } },
-  );
-  const coordsGone = !Array.isArray(stored?.currentLatLng);
-  console.log(`   coordinates removed from the row : ${coordsGone}`);
-
-  const refusalDeck = await fetchDeck(token);
-  const d = classify(refusalDeck.users);
-  console.log(`   deck city split : Delhi ${d.byCity.delhi}   Mumbai ${d.byCity.mumbai}   other ${d.byCity.other}`);
-
-  // ── assertions ──
-  console.log('\n=== ASSERTIONS ===');
-  const firstIds = new Set(first.users.map((u) => u._id || u.id));
-  const overlap = second.users.filter((u) => firstIds.has(u._id || u.id)).length;
-  const anchorIsMumbai = after.locationSource === 'gps'
-    && Math.abs(after.currentLatLng[0] - MUMBAI[0]) <= 0.01
-    && Math.abs(after.currentLatLng[1] - MUMBAI[1]) <= 0.01;
-
-  const checks = [
-    ['deck is populated both times', first.users.length > 0 && second.users.length > 0],
-    ['deck 1 is Delhi-dominated', a.byCity.delhi > a.byCity.mumbai],
-    ['deck 1 has zero Mumbai profiles', a.byCity.mumbai === 0],
-    ['stored anchor is Mumbai GPS', anchorIsMumbai],
-    ['route reports the deck was rebuilt', putBody.moved === true],
-    ['deck 2 is Mumbai-dominated', b.byCity.mumbai >= 7],
-    /* ⚠️ NOT "zero Delhi profiles" — that assertion was wrong and flaked.
-     *
-     * The cold-start reserve tops each page up from OUTSIDE the distance-ranked
-     * batch, and that query filters only on `seenInBatch`, `skipSet`,
-     * `excludedIds` and `isCold` — distance is deliberately not one of them.
-     * Giving newcomers exposure regardless of where they are is the entire point
-     * of the reserve, so a Delhi newcomer landing in a Mumbai page is correct
-     * behaviour, roughly one card in ten by COLD_START_SHARE.
-     *
-     * The seed makes it easy to hit: a male viewer's eligible pool is 200, of
-     * which only 62 are in Mumbai, so the reserve's over-fetch reaches Delhi
-     * profiles readily. The contract worth asserting is that the DECK moved —
-     * Mumbai-dominant, not Mumbai-exclusive. */
-    ['deck 2 has at most reserved newcomers from Delhi', b.byCity.delhi <= 2],
-    ['deck 2 is all in the near band', (b.bands.get('Near you') ?? 0) === second.users.length],
-    ['deck 1 is all in the near band', (a.bands.get('Near you') ?? 0) === first.users.length],
-    ['deck overlap is negligible', overlap <= 2],
-    ['same-campus enable keeps the deck', stayBody.moved === false && sessions === 1],
-    ['campus-only viewer stays Delhi-only', c.byCity.mumbai === 0],
-    /* The lapse case. `active` is what decides which of the two notices renders,
-       so it has to go false the moment the position is gone — otherwise the deck
-       is campus-ordered while the UI still claims live location. */
-    ['stored position was live before the lapse', held.active === true],
-    /* The endpoint deliberately does NOT expose hasCoords — confirming a
-       position exists is not something the client needs to be told, and the
-       absence of one is already fully described by `active: false`. */
-    ['lapse removes the coordinates from the row', coordsGone],
-    ['lapse leaves the basis as campus, not null', afterLapse.locationSource === 'campus'],
-    ['lapse reports NOT active (warning variant)', afterLapse.active === false],
-    ['lapse does not report as a refusal', afterLapse.locationSource !== null],
-    ['deck falls back to the campus ordering', d.byCity.delhi > 0 && d.byCity.mumbai === 0],
-  ];
-  let fail = 0;
-  for (const [label, ok] of checks) {
-    console.log(`   ${ok ? 'PASS' : 'FAIL'}  ${label}`);
-    if (!ok) fail += 1;
-  }
-  console.log(`\n   ${checks.length - fail}/${checks.length} passed`);
-
-  // restore: `$unset`, because `$set: {currentLatLng: undefined}` writes null.
-  await db.collection('users').updateOne(
-    { _id: viewer._id },
-    { $set: { locationSource: 'campus' }, $unset: { currentLatLng: 1 } },
-  );
-  await db.collection('discoversessions').deleteMany({ viewerId: viewer._id });
-  await mongoose.disconnect();
-  process.exit(fail ? 1 : 0);
-}
-
-main().catch((e) => { console.error(e); process.exit(1); });
 ```
 

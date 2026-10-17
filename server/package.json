@@ -11,6 +11,7 @@
     "start": "node index.js",
     "dev": "nodemon --watch index.js --watch config --watch middleware --watch models --watch routes --watch socket --watch utils index.js",
     "lint": "oxlint",
+    "test": "node --test",
     "seed": "node seedRealistic.js",
     "verify:location": "node scripts/verify-location-swap.mjs"
   },

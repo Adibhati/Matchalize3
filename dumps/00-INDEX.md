@@ -1,6 +1,6 @@
 # Matchalize — Codebase Map
 
-> Generated 2026-10-17 20:34. **This file is the one to paste first.**
+> Generated 2026-10-17 21:10. **This file is the one to paste first.**
 
 The codebase is ~1 MB of source, which no chat UI will accept in a single
 paste -- it gets truncated silently, and the model cannot tell you what it
@@ -21,7 +21,7 @@ the 100 KB / ~29,257 token paste target.
 | `01-design-system.md` | design-system | 46 | ~13,328 | 2 | Visual design language: tokens, theme components, fonts, borders/shadows. Read this before writing any UI. |
 | `02-design-system.md` | design-system | 67 | ~19,521 | 3 | Visual design language: tokens, theme components, fonts, borders/shadows. Read this before writing any UI. |
 | `03-shared.md` | shared | 29 | ~8,463 | 6 | Shared contracts: ladder thresholds, age/distance computation, college domain matching. Server owns logic; client mirrors constants for fallbacks. |
-| `04-config.md` | config | 31 | ~9,131 | 15 | Root and build configuration, CI, manifests. |
+| `04-config.md` | config | 31 | ~9,138 | 15 | Root and build configuration, CI, manifests. |
 | `05-client-app.md` | client-app | 15 | ~4,439 | 3 | Client entry point, root router, global stylesheet. |
 | `06-client-assets.md` | client-assets | 13 | ~3,778 | 2 | Bundled images and SVG assets. |
 | `07-client-utils.md` | client-utils | 41 | ~11,955 | 15 | Shared client helpers: API layer, haptics, hooks, deck chrome. |
@@ -35,13 +35,13 @@ the 100 KB / ~29,257 token paste target.
 | `15-client-pages.md` | client-pages | 58 | ~17,018 | 1 | Screens / routes. |
 | `16-client-pages.md` | client-pages | 96 | ~28,036 | 1 | Screens / routes. |
 | `17-client-pages.md` | client-pages | 45 | ~13,230 | 2 | Screens / routes. |
-| `18-server-core.md` | server-core | 93 | ~27,201 | 23 | Server entry point, config, middleware, models, socket, utils. |
-| `19-server-core.md` | server-core | 90 | ~26,272 | 14 | Server entry point, config, middleware, models, socket, utils. |
-| `20-server-core.md` | server-core | 65 | ~18,979 | 11 | Server entry point, config, middleware, models, socket, utils. |
+| `18-server-core.md` | server-core | 98 | ~28,637 | 19 | Server entry point, config, middleware, models, socket, utils. |
+| `19-server-core.md` | server-core | 95 | ~27,878 | 18 | Server entry point, config, middleware, models, socket, utils. |
+| `20-server-core.md` | server-core | 88 | ~25,732 | 13 | Server entry point, config, middleware, models, socket, utils. |
 | `21-server-routes.md` | server-routes | 70 | ~20,546 | 4 | Express route handlers (API surface). |
 | `22-server-routes.md` | server-routes | 86 | ~25,017 | 1 | Express route handlers (API surface). |
 | `23-server-routes.md` | server-routes | 84 | ~24,542 | 5 | Express route handlers (API surface). |
-| `24-server-tests.md` | server-tests | 62 | ~18,256 | 9 | Server test suites. |
+| `24-server-tests.md` | server-tests | 75 | ~21,868 | 10 | Server test suites. |
 | `25-docs.md` | docs | 66 | ~19,434 | 2 | Project documentation and handoffs. |
 | `26-docs.md` | docs | 40 | ~11,817 | 2 | Project documentation and handoffs. |
 | `27-tools.md` | tools | 43 | ~12,585 | 4 | Build and automation scripts, including this generator. |
@@ -62,7 +62,7 @@ task is purely backend.
 
 ## Verification
 
-- Files covered: 157 (each in exactly one chunk)
+- Files covered: 160 (each in exactly one chunk)
 - Chunks: 27, largest 99 KB
 - Round-trip re-parse: PASSED
 - Budget: 100 KB

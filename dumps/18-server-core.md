@@ -1,7 +1,7 @@
 # Chunk 18 — Server Core
 
-> Matchalize · `server-core` · files 18 of 27 chunks · 23 file(s) · 91 KB · ~26,618 tokens
-> Generated 2026-10-17 20:34.
+> Matchalize · `server-core` · files 18 of 27 chunks · 19 file(s) · 96 KB · ~28,140 tokens
+> Generated 2026-10-17 21:10.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -24,10 +24,6 @@
 > - `./server/models/DiscoverSession.js`
 > - `./server/models/Interaction.js`
 > - `./server/models/Message.js`
-> - `./server/models/Notification.js`
-> - `./server/models/OTP.js`
-> - `./server/models/Report.js`
-> - `./server/models/Setting.js`
 
 ---
 ### ./server/config/appData.js
@@ -1629,6 +1625,164 @@ const alignmentSchema = new mongoose.Schema(
       required: true,
       // Points back to the exact letter that sparked the alignment
     },
+
+    /* ═══════════════════════════════════════════════════════════════════════
+     * 🛡️ IDENTITY & PRIVACY  (Roulette, Stage 1)
+     *
+     * Three problems this solves, all found by inspection:
+     *
+     * 1. "Can this person see my profile?" was decided independently by each
+     *    screen — Chat.jsx showed the name, NotificationDrawer the name AND
+     *    photo, the push notification used the sender's name as the lock
+     *    screen TITLE, and Chats search filtered on the real name. 22 inline
+     *    render sites, no single rule. A promise of "your profile is hidden"
+     *    is unkeepable when there is nothing to break.
+     *
+     * 2. `showCollege` is the ONLY identity field with a server-side strip
+     *    (utils/publicCard.js:64-69). `name` and `photos` are on the
+     *    CARD_FIELDS allowlist and are always sent. There was no way to say
+     *    "you may not see this person's profile" — only "you may not see
+     *    their college".
+     *
+     * 3. Roulette connections are profile-hidden by default, and a Deck
+     *    connection and a Roulette connection land in the SAME document,
+     *    because `pairKey` is unique per unordered pair. Whatever grants
+     *    access therefore has to live on the document, not be inferred from
+     *    which flow produced it.
+     *
+     * ⚠️ SOURCE IS PROVENANCE ONLY. It records where a connection was born and
+     * NEVER authorises access. `source: 'roulette'` does not mean "hidden" and
+     * `source: 'deck'` does not mean "visible". Only `profileGrants` decides
+     * that. Keeping the two separate is what lets a hidden-Roulette pair that
+     * later meets again on the Deck keep its original permissions instead of
+     * being silently upgraded by the newer flow.
+     * ═══════════════════════════════════════════════════════════════════════ */
+    source: {
+      type: String,
+      enum: ['deck', 'roulette'],
+      default: 'deck',
+      /* Where the connection was born. Provenance, never authority.
+       * Defaults to 'deck' rather than null on purpose: a row that somehow
+       * arrives without this must not read as "unknown origin, treat
+       * differently". Backfill (scripts/migrate-roulette-source.mjs) sets it
+       * explicitly on existing rows; the default is only the safety net for
+       * a future write that forgets it. */
+    },
+
+    profileGrants: {
+      type: [
+        {
+          viewerId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true,
+            // The person who gained the right to look.
+          },
+          subjectId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true,
+            // Whose public profile they may now see.
+          },
+          source: {
+            type: String,
+            enum: ['legacy', 'deck', 'roulette_visible', 'roulette_reveal'],
+            required: true,
+            /* WHY the access exists. 'legacy' = backfilled from a pre-Roulette
+             * deck connection, which showed both profiles openly. 'deck' = a new
+             * deck align. 'roulette_visible' = the person entered Roulette with
+             * "show my profile" already on, so anyone they meet may see it.
+             * 'roulette_reveal' = both parties explicitly agreed to share.
+             *
+             * Recorded rather than inferred so that a future question — "why
+             * can this person see that profile?" — has an answer in the
+             * database instead of requiring us to reconstruct history from
+             * request timestamps. */
+          },
+          grantedAt: {
+            type: Date,
+            default: Date.now,
+          },
+        },
+      ],
+      default: [],
+      /* DELIBERATELY EMPTY BY DEFAULT. Absence of a grant means NO ACCESS.
+       *
+       * The alternative — treating "no grant yet" as "it's a deck connection,
+       * so allow it" — is a special case keyed on a field, and a special case
+       * is exactly what fails: the first hidden-Roulette row written before
+       * its grants are populated would silently show the real name. An empty
+       * array fails closed with no branch to get wrong. */
+    },
+
+    conversationAliases: {
+      type: [
+        {
+          userId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true,
+            // This person.
+          },
+          alias: {
+            type: String,
+            trim: true,
+            maxlength: 24,
+            default: null,
+            // The name the OTHER party sees for them in this conversation.
+            /* Copied ONCE when the connection is created and never written
+             * again. That is what makes it safe: a new Roulette session can
+             * never rename an existing conversation, because an
+             * already-connected pair never gets a new Align request at all
+             * (spec §9.1) — so there is no code path that could overwrite
+             * this. 24 chars is a display name, not a profile field. */
+          },
+        },
+      ],
+      default: [],
+      /* Absent for connections that predate Roulette: those show the real name
+       * via profileGrants, so no alias is needed and none is invented. */
+    },
+
+    revealRequest: {
+      state: {
+        type: String,
+        enum: ['none', 'pending', 'accepted', 'declined', 'expired'],
+        default: 'none',
+        /* none → pending → (accepted | declined | expired)
+         *
+         * Transitions are single-document atomic findOneAndUpdate calls whose
+         * filter includes the expected prior state, retried on a miss. NOT
+         * transactions: MongoDB M0 and the local standalone mongod do not
+         * support them, and none are used anywhere in this codebase. The
+         * established pattern to copy is discover.js:1488-1516
+         * (DECK_RACE_RETRIES + isConcurrentDeckRace). */
+      },
+      requestedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
+      requestedAt: {
+        type: Date,
+        default: null,
+      },
+      resolvedAt: {
+        type: Date,
+        default: null,
+      },
+      consents: [
+        {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          /* Accumulated atomically. Reaching two entries IS mutual acceptance —
+           * there is no separate "both clicked" flag that could disagree with
+           * the list. */
+        },
+      ],
+      /* A subdocument with defaults rather than an optional field, so the state
+       * machine always has a defined state and callers never need `?.`. */
+    },
   },
   {
     timestamps: true,
@@ -1636,6 +1790,12 @@ const alignmentSchema = new mongoose.Schema(
 );
 
 alignmentSchema.index({ users: 1, isActive: 1 });
+
+/* Serves the only query the resolver makes: "is there a grant from this viewer
+ * to this subject on this connection?" Without it that lookup is a collection
+ * scan on every render of a chat header. Compound on both ids so the index can
+ * be used as a prefix match in either direction. */
+alignmentSchema.index({ 'profileGrants.viewerId': 1, 'profileGrants.subjectId': 1 });
 
 /**
  * 🛡️ ALIGNMENT INTEGRITY
@@ -1663,6 +1823,32 @@ alignmentSchema.pre('validate', function (next) {
   if (this.pairKey !== expected) {
     return next(new Error(`pairKey does not match users: expected "${expected}", got "${this.pairKey}"`));
   }
+
+  /* 🛡️ GRANT INTEGRITY
+   *
+   * Same class of bug the two-user check above exists to prevent. Nothing
+   * stopped a `$push` onto `profileGrants` naming a THIRD person, at which
+   * point a two-person connection would hand out permission to see someone
+   * who is not in it — and the failure would be silent, because a grant is
+   * just two ids and nothing downstream ever checks who they belong to.
+   *
+   * Both ends of every grant must be one of this alignment's two users.
+   */
+  const memberIds = new Set(users.map(String));
+  for (const grant of this.profileGrants || []) {
+    const viewer = String(grant.viewerId);
+    const subject = String(grant.subjectId);
+    if (!memberIds.has(viewer)) {
+      return next(new Error(`profileGrants viewerId ${viewer} is not a member of this alignment`));
+    }
+    if (!memberIds.has(subject)) {
+      return next(new Error(`profileGrants subjectId ${subject} is not a member of this alignment`));
+    }
+    if (viewer === subject) {
+      return next(new Error('profileGrants cannot grant a user access to their own profile'));
+    }
+  }
+
   next();
 });
 
@@ -2227,6 +2413,28 @@ const interactionSchema = new mongoose.Schema(
       type: String,
       enum: ['block', 'unmatch', 'pass'],
       default: null,
+      /* ⚠️ THIS IS NOT THE CONNECTION SOURCE. `origin` here means "why did this
+       * action leave a permanent mark" — it is only ever written by the block,
+       * unmatch and pass routes.
+       *
+       * The connection/request source is the separate `source` field below.
+       * Do not unify them: `origin` answers a historical question about one
+       * action, `source` answers "which flow produced this", and reusing one
+       * name for both would make every read site ambiguous. */
+    },
+
+    source: {
+      type: String,
+      enum: ['deck', 'roulette'],
+      default: 'deck',
+      /* Which flow emitted this action. Set alongside an `align` so the
+       * accept path can tell a deck align from a Roulette one and branch
+       * before generating an opening letter — a deck align may copy the
+       * sender's photo and prompt into the chat, a hidden-profile Roulette
+       * align must not.
+       *
+       * Separate from `origin` above, and see the note there. Defaults to
+       * 'deck' so every historical row is correct without a backfill. */
     },
     targetArtifact: { 
       type: String, 
@@ -2388,180 +2596,5 @@ messageSchema.index(
 const Message = mongoose.model('Message', messageSchema);
 export default Message;
 
-```
-
-### ./server/models/Notification.js
-
-```
-import mongoose from 'mongoose';
-
-const notificationSchema = new mongoose.Schema(
-  {
-    recipientId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-    },
-    senderId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-    },
-    type: {
-      type: String,
-      /* 'new_letter' and 'priority_telegram' are RETIRED as writers — the deck
-         now emits 'new_align' for every expression of interest. They stay in the
-         enum because unread rows carrying them remain in users' drawers and must
-         still validate. Anything missing from this list is REJECTED by Mongoose,
-         which is a 500 on the Align route — the single most important entry
-         here is 'new_align'. */
-      enum: ['new_letter', 'priority_telegram', 'new_align'],
-      required: true,
-    },
-    interactionRef: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Interaction',
-      required: true,
-      // Links to the exact letter and photo they liked
-    },
-    isCleared: {
-      type: Boolean,
-      default: false,
-      // Flips to true the moment they hit [Accept] or [Archive]
-    },
-  },
-  {
-    timestamps: true,
-  }
-);
-
-// Extremely fast lookup for the active Instagram-style tray
-notificationSchema.index({ recipientId: 1, isCleared: 1, createdAt: -1 });
-
-// Auto-delete cleared notifications after 30 days to prevent database bloat
-notificationSchema.index(
-  { createdAt: 1 }, 
-  { 
-    expireAfterSeconds: 30 * 24 * 60 * 60,
-    partialFilterExpression: { isCleared: true } 
-  }
-);
-
-const Notification = mongoose.model('Notification', notificationSchema);
-export default Notification;
-
-```
-
-### ./server/models/OTP.js
-
-```
-import mongoose from 'mongoose';
-
-const otpSchema = new mongoose.Schema(
-  {
-    email: {
-      type: String,
-      required: true,
-      trim: true,
-      lowercase: true,
-    },
-    // HMAC-SHA256 fingerprint of the code — NOT the code itself.
-    // See utils/otpHash.js. The plaintext code only ever exists in memory
-    // long enough to be emailed.
-    otpHash: {
-      type: String,
-      required: true,
-    },
-    // The college the user PICKED before requesting the code.
-    //
-    // ⚠️ This is the binding between step 1 (pick your college) and step 3
-    // (enter the code). It lives server-side so the client cannot re-assert a
-    // different college at verification time — otherwise the picker would be
-    // advisory only, since anyone could send a code request for IIT Bombay and
-    // verify against whichever college they actually wanted.
-    collegeCode: {
-      type: String,
-      default: '',
-      trim: true,
-      lowercase: true,
-    },
-    expiresAt: {
-      type: Date,
-      required: true,
-      index: { expires: 0 }, // Document will expire at the specified date
-    },
-    attempts: {
-      type: Number,
-      default: 0,
-    },
-  },
-  {
-    timestamps: true,
-  }
-);
-
-// Index for rate limiting queries (find by email within last hour)
-otpSchema.index({ email: 1, createdAt: 1 });
-
-const OTP = mongoose.model('OTP', otpSchema);
-export default OTP;
-
-```
-
-### ./server/models/Report.js
-
-```
-import mongoose from 'mongoose';
-
-export const REPORT_REASONS = [
-  'Inappropriate photos',
-  'Harassment or bullying',
-  'Fake profile or spam',
-  'Underage user',
-  'Other',
-];
-
-const reportSchema = new mongoose.Schema({
-  reporter: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  reported: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  reason: { type: String, enum: REPORT_REASONS, required: true },
-  details: { type: String, default: '' },
-  status: {
-    type: String,
-    enum: ['pending', 'reviewed', 'dismissed', 'actioned'],
-    default: 'pending',
-  },
-  createdAt: { type: Date, default: Date.now },
-});
-
-reportSchema.index({ reporter: 1, reported: 1 }, { unique: true });
-
-const Report = mongoose.model('Report', reportSchema);
-export default Report;
-
-```
-
-### ./server/models/Setting.js
-
-```
-import mongoose from 'mongoose';
-
-const settingSchema = new mongoose.Schema(
-  {
-    key: {
-      type: String,
-      unique: true,
-      required: true,
-      trim: true,
-    },
-    value: {
-      type: mongoose.Schema.Types.Mixed,
-      required: true,
-    },
-  },
-  { timestamps: true }
-);
-
-export default mongoose.model('Setting', settingSchema);
 ```
 

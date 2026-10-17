@@ -1,10 +1,11 @@
 # Chunk 20 — Server Core
 
-> Matchalize · `server-core` · files 20 of 27 chunks · 11 file(s) · 64 KB · ~18,684 tokens
-> Generated 2026-10-17 20:34.
+> Matchalize · `server-core` · files 20 of 27 chunks · 13 file(s) · 87 KB · ~25,385 tokens
+> Generated 2026-10-17 21:10.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
+> - `./server/scripts/verify-location-swap.mjs`
 > - `./server/seedRealistic.js`
 > - `./server/socket/chat.js`
 > - `./server/utils/AppError.js`
@@ -13,11 +14,265 @@
 > - `./server/utils/email.js`
 > - `./server/utils/media.js`
 > - `./server/utils/otpHash.js`
+> - `./server/utils/partnerView.js`
 > - `./server/utils/publicCard.js`
 > - `./server/utils/push.js`
 > - `./server/utils/queue.js`
 
 ---
+### ./server/scripts/verify-location-swap.mjs
+
+```
+/**
+ * Proves the location swap end to end against the real /api/discover route.
+ *
+ * The scenario: one viewer, registered at a Delhi college, who turns location
+ * on while physically in Mumbai. Nothing about the viewer changes except their
+ * coordinates, so the deck must flip from entirely-Delhi to entirely-Mumbai.
+ *
+ * The two clusters are ~1,400km apart, so this is not a re-ordering. If any
+ * Delhi profile survives the second fetch, the session was not invalidated and
+ * the feed is still serving the frozen first page.
+ *
+ * The test owns its viewer: it clears any stored position directly in the
+ * database before it starts, and restores it with `$unset` (not
+ * `$set: {field: undefined}`, which the driver writes as null) when it finishes.
+ * Without that, a leftover reading from an earlier run silently invalidates the
+ * scenario — the viewer is already in Mumbai, so there is nothing left to move.
+ */
+import mongoose from 'mongoose';
+import dotenv from 'dotenv';
+import jwt from 'jsonwebtoken';
+
+dotenv.config({ path: './.env' });
+
+const PORT = process.env.PORT || 5005;
+const BASE = `http://127.0.0.1:${PORT}/api`;
+const MUMBAI = [19.1334, 72.9133];
+
+const DELHI_MARK = ['Delhi', 'Jamia', 'IIT Delhi', 'Netaji', 'Indraprastha'];
+const MUMBAI_MARK = ['Mumbai', 'Bombay', 'Veermata', 'Chemical Technology', 'Narsee',
+  'Xavier', 'Sardar Patel', 'Bharatiya'];
+
+async function fetchDeck(token) {
+  const r = await fetch(`${BASE}/discover`, { headers: { Cookie: `matchalize_jwt=${token}` } });
+  if (!r.ok) throw new Error(`GET /discover -> ${r.status} ${await r.text()}`);
+  return r.json();
+}
+
+async function putLocation(token, body) {
+  const r = await fetch(`${BASE}/users/location`, {
+    method: 'PUT',
+    headers: { Cookie: `matchalize_jwt=${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: r.status, body: await r.json().catch(() => ({})) };
+}
+
+/** The state `GET /users/location` reports — the same signal the notice mounts on. */
+async function readLocation(token) {
+  const r = await fetch(`${BASE}/users/location`, { headers: { Cookie: `matchalize_jwt=${token}` } });
+  if (!r.ok) throw new Error(`GET /users/location -> ${r.status}`);
+  return r.json();
+}
+
+function classify(users) {
+  const byCity = { delhi: 0, mumbai: 0, other: 0 };
+  const colleges = new Map();
+  const bands = new Map();
+  for (const u of users) {
+    const c = u.college || '(hidden)';
+    colleges.set(c, (colleges.get(c) || 0) + 1);
+    bands.set(u.distanceBand ?? 'unbanded', (bands.get(u.distanceBand ?? 'unbanded') || 0) + 1);
+    if (DELHI_MARK.some((m) => c.includes(m))) byCity.delhi += 1;
+    else if (MUMBAI_MARK.some((m) => c.includes(m))) byCity.mumbai += 1;
+    else byCity.other += 1;
+  }
+  return { byCity, colleges, bands };
+}
+
+const fmt = (b) => [...b].map(([k, n]) => `${k}:${n}`).join('  ');
+const top = (c, n = 4) => [...c].slice(0, n).map(([k, v]) => `${k} (${v})`).join(', ');
+
+async function main() {
+  await mongoose.connect(process.env.MONGODB_URI);
+  const db = mongoose.connection.db;
+
+  const viewerCode = process.env.VIEWER_COLLEGE || 'iitd';
+  const viewer = await db.collection('users').findOne({ collegeCode: viewerCode, isOnboarded: true });
+  if (!viewer) throw new Error(`no ${viewerCode} user seeded`);
+
+  /* Own the starting state: no personal reading, campus basis, no saved deck. */
+  await db.collection('users').updateOne(
+    { _id: viewer._id },
+    { $set: { locationSource: 'campus', locationUpdatedAt: new Date() }, $unset: { currentLatLng: 1 } },
+  );
+  await db.collection('discoversessions').deleteMany({ viewerId: viewer._id });
+
+  const token = jwt.sign({ id: viewer._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+  const fresh = await db.collection('users').findOne(
+    { _id: viewer._id },
+    { projection: { locationSource: 1, currentLatLng: 1 } },
+  );
+
+  console.log(`viewer   : ${viewer.name}  <${viewer.email}>`);
+  console.log(`college  : ${viewer.college}`);
+  console.log(`start    : source=${fresh.locationSource}  latLng=${JSON.stringify(fresh.currentLatLng ?? null)}`);
+
+  // ── 1. campus fallback ──
+  console.log('\n=== 1. LOCATION OFF — campus fallback to IIT Delhi ===');
+  const first = await fetchDeck(token);
+  const a = classify(first.users);
+  console.log(`   deck size    : ${first.users.length}`);
+  console.log(`   city split   : Delhi ${a.byCity.delhi}   Mumbai ${a.byCity.mumbai}   other ${a.byCity.other}`);
+  console.log(`   top colleges : ${top(a.colleges)}`);
+  console.log(`   bands        : ${fmt(a.bands)}`);
+
+  // ── 2. same viewer, now standing in Mumbai ──
+  console.log('\n=== 2. LOCATION ON — same viewer, standing in Mumbai ===');
+  const put = await fetch(`${BASE}/users/location`, {
+    method: 'PUT',
+    headers: { Cookie: `matchalize_jwt=${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ latLng: MUMBAI, source: 'gps' }),
+  });
+  const putBody = await put.json().catch(() => ({}));
+  console.log(`   PUT /users/location -> ${put.status}  ${JSON.stringify(putBody)}`);
+
+  const after = await db.collection('users').findOne(
+    { _id: viewer._id },
+    { projection: { locationSource: 1, currentLatLng: 1 } },
+  );
+  console.log(`   anchor in DB  : source=${after.locationSource} latLng=${JSON.stringify(after.currentLatLng)}`);
+
+  const second = await fetchDeck(token);
+  const b = classify(second.users);
+  console.log(`   deck size    : ${second.users.length}`);
+  console.log(`   city split   : Delhi ${b.byCity.delhi}   Mumbai ${b.byCity.mumbai}   other ${b.byCity.other}`);
+  console.log(`   top colleges : ${top(b.colleges)}`);
+  console.log(`   bands        : ${fmt(b.bands)}`);
+
+  // ── 3. the anti-churn case ──
+  console.log('\n=== 3. LOCATION ON but standing ON campus — deck must survive ===');
+  await db.collection('users').updateOne(
+    { _id: viewer._id },
+    { $set: { locationSource: 'campus', locationUpdatedAt: new Date() }, $unset: { currentLatLng: 1 } },
+  );
+  await db.collection('discoversessions').deleteMany({ viewerId: viewer._id });
+  const onCampusDeck = await fetchDeck(token);
+  const c = classify(onCampusDeck.users);
+  console.log(`   deck 3 city split : Delhi ${c.byCity.delhi}   Mumbai ${c.byCity.mumbai}   other ${c.byCity.other}`);
+
+  const stayPut = await fetch(`${BASE}/users/location`, {
+    method: 'PUT',
+    headers: { Cookie: `matchalize_jwt=${token}`, 'Content-Type': 'application/json' },
+    /* IIT Delhi's own campus position — a few km from where the viewer already
+       is, well inside the 25km drift threshold. */
+    body: JSON.stringify({ latLng: [28.5450, 77.1926], source: 'gps' }),
+  });
+  const stayBody = await stayPut.json().catch(() => ({}));
+  const sessions = await db.collection('discoversessions').countDocuments({ viewerId: viewer._id });
+  console.log(`   PUT same-campus coords -> ${stayPut.status}  ${JSON.stringify(stayBody)}`);
+  console.log(`   saved sessions after   : ${sessions}  ${sessions === 1 ? '(kept)' : '(lost)'}`);
+
+  // ── 4. one-time grant lapse ──
+  console.log('\n=== 4. LAPSED ONE-TIME GRANT — released on the next launch ===');
+  /* Reproduce the whole sequence the client performs on a launch:
+     a position stored under a temporary grant, then that grant lapsing so the
+     browser no longer has it. The expiry is a browser fact we cannot trigger
+     from here, so the equivalent server-visible state is written directly — a
+     stored `gps` reading that no longer has a live grant behind it. */
+  await db.collection('users').updateOne(
+    { _id: viewer._id },
+    { $set: { locationSource: 'gps', currentLatLng: MUMBAI, locationUpdatedAt: new Date() } },
+  );
+  const held = await readLocation(token);
+  console.log(`   before lapse : source=${held.locationSource} active=${held.active}`);
+
+  /* What `releaseEphemeralLocation()` sends when the browser reports `prompt`. */
+  const released = await putLocation(token, { latLng: null, source: null, ephemeral: true });
+  const afterLapse = await readLocation(token);
+  console.log(`   release call -> ${released.status} ${JSON.stringify(released.body)}`);
+  console.log(`   after lapse  : source=${afterLapse.locationSource} active=${afterLapse.active}`);
+  /* Read the coordinates straight from the database: the endpoint reports state,
+     not storage, so it cannot prove the value is gone from the row. */
+  const stored = await db.collection('users').findOne(
+    { _id: viewer._id },
+    { projection: { currentLatLng: 1 } },
+  );
+  const coordsGone = !Array.isArray(stored?.currentLatLng);
+  console.log(`   coordinates removed from the row : ${coordsGone}`);
+
+  const refusalDeck = await fetchDeck(token);
+  const d = classify(refusalDeck.users);
+  console.log(`   deck city split : Delhi ${d.byCity.delhi}   Mumbai ${d.byCity.mumbai}   other ${d.byCity.other}`);
+
+  // ── assertions ──
+  console.log('\n=== ASSERTIONS ===');
+  const firstIds = new Set(first.users.map((u) => u._id || u.id));
+  const overlap = second.users.filter((u) => firstIds.has(u._id || u.id)).length;
+  const anchorIsMumbai = after.locationSource === 'gps'
+    && Math.abs(after.currentLatLng[0] - MUMBAI[0]) <= 0.01
+    && Math.abs(after.currentLatLng[1] - MUMBAI[1]) <= 0.01;
+
+  const checks = [
+    ['deck is populated both times', first.users.length > 0 && second.users.length > 0],
+    ['deck 1 is Delhi-dominated', a.byCity.delhi > a.byCity.mumbai],
+    ['deck 1 has zero Mumbai profiles', a.byCity.mumbai === 0],
+    ['stored anchor is Mumbai GPS', anchorIsMumbai],
+    ['route reports the deck was rebuilt', putBody.moved === true],
+    ['deck 2 is Mumbai-dominated', b.byCity.mumbai >= 7],
+    /* ⚠️ NOT "zero Delhi profiles" — that assertion was wrong and flaked.
+     *
+     * The cold-start reserve tops each page up from OUTSIDE the distance-ranked
+     * batch, and that query filters only on `seenInBatch`, `skipSet`,
+     * `excludedIds` and `isCold` — distance is deliberately not one of them.
+     * Giving newcomers exposure regardless of where they are is the entire point
+     * of the reserve, so a Delhi newcomer landing in a Mumbai page is correct
+     * behaviour, roughly one card in ten by COLD_START_SHARE.
+     *
+     * The seed makes it easy to hit: a male viewer's eligible pool is 200, of
+     * which only 62 are in Mumbai, so the reserve's over-fetch reaches Delhi
+     * profiles readily. The contract worth asserting is that the DECK moved —
+     * Mumbai-dominant, not Mumbai-exclusive. */
+    ['deck 2 has at most reserved newcomers from Delhi', b.byCity.delhi <= 2],
+    ['deck 2 is all in the near band', (b.bands.get('Near you') ?? 0) === second.users.length],
+    ['deck 1 is all in the near band', (a.bands.get('Near you') ?? 0) === first.users.length],
+    ['deck overlap is negligible', overlap <= 2],
+    ['same-campus enable keeps the deck', stayBody.moved === false && sessions === 1],
+    ['campus-only viewer stays Delhi-only', c.byCity.mumbai === 0],
+    /* The lapse case. `active` is what decides which of the two notices renders,
+       so it has to go false the moment the position is gone — otherwise the deck
+       is campus-ordered while the UI still claims live location. */
+    ['stored position was live before the lapse', held.active === true],
+    /* The endpoint deliberately does NOT expose hasCoords — confirming a
+       position exists is not something the client needs to be told, and the
+       absence of one is already fully described by `active: false`. */
+    ['lapse removes the coordinates from the row', coordsGone],
+    ['lapse leaves the basis as campus, not null', afterLapse.locationSource === 'campus'],
+    ['lapse reports NOT active (warning variant)', afterLapse.active === false],
+    ['lapse does not report as a refusal', afterLapse.locationSource !== null],
+    ['deck falls back to the campus ordering', d.byCity.delhi > 0 && d.byCity.mumbai === 0],
+  ];
+  let fail = 0;
+  for (const [label, ok] of checks) {
+    console.log(`   ${ok ? 'PASS' : 'FAIL'}  ${label}`);
+    if (!ok) fail += 1;
+  }
+  console.log(`\n   ${checks.length - fail}/${checks.length} passed`);
+
+  // restore: `$unset`, because `$set: {currentLatLng: undefined}` writes null.
+  await db.collection('users').updateOne(
+    { _id: viewer._id },
+    { $set: { locationSource: 'campus' }, $unset: { currentLatLng: 1 } },
+  );
+  await db.collection('discoversessions').deleteMany({ viewerId: viewer._id });
+  await mongoose.disconnect();
+  process.exit(fail ? 1 : 0);
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });
+```
+
 ### ./server/seedRealistic.js
 
 ```
@@ -1324,6 +1579,267 @@ export const verifyOtp = (email, otp, storedHash) => {
 };
 
 export { normalizeEmail };
+
+```
+
+### ./server/utils/partnerView.js
+
+```
+/**
+ * 🛡️ PARTNER VIEW — the single answer to "what may this connection show?"
+ *
+ * ── WHY THIS FILE EXISTS ─────────────────────────────────────────────────────
+ * Before this, "can person A see person B's profile?" was decided
+ * independently by every screen that displayed a name. Twenty-two inline sites
+ * read `user.name` or `user.photos[0]` directly, and four server paths embedded
+ * real names in payloads and push titles. There was no rule to break and no
+ * single place to change — which is why a promise of "your profile is hidden"
+ * could not be kept, and why it could not be tested.
+ *
+ * This module is that rule. It is deliberately boring: one lookup, one
+ * fallback chain, no clever branching. Every surface that shows a partner
+ * eventually calls `displayNameFor` instead of reading a field itself, which
+ * is what makes the promise auditable.
+ *
+ * ── THE INVARIANT ────────────────────────────────────────────────────────────
+ *   NO GRANT MEANS NO ACCESS. Not "unless it is a deck connection", not "unless
+ *   the field is missing". Absence is denial.
+ *
+ * That is the whole design. It fails closed because there is no branch that
+ * could decide otherwise — the only way to grant access is to write a grant.
+ *
+ * ── NOT CALLED ANYTHING YET ──────────────────────────────────────────────────
+ * Stage 1 defines and tests the contract. Wiring it into Chat, the Requests
+ * list, search, typing events and push notifications is Stage 8, and the
+ * acceptance gate for that stage is that all thirteen of those surfaces call
+ * these functions. Until then no screen changes behaviour, which is precisely
+ * why this can be merged without regression risk.
+ *
+ * Design source: ambitions/roulette.md §4
+ */
+
+import Alignment from '../models/Alignment.js';
+
+/**
+ * Placeholder shown when nothing authorises a real identity.
+ *
+ * ⚠️ Never derive this from the user's name, college, ObjectId or an avatar.
+ * The whole point is that a partner learns nothing. This string is the same
+ * for everyone so it also leaks nothing by comparison — two strangers looking
+ * at each other see identical text.
+ */
+export const ANONYMOUS_LABEL = 'Stranger';
+
+/**
+ * Resolve the OTHER user in a connection.
+ *
+ * @param {{ users?: Array }} connection  an Alignment document or plain object
+ * @param {string|import('mongoose').Types.ObjectId} viewerId
+ * @returns {string|null} the partner's id, or null if viewerId is not a member
+ */
+export const partnerIdFor = (connection, viewerId) => {
+  const users = Array.isArray(connection?.users) ? connection.users : [];
+  if (users.length !== 2) return null;
+  const viewer = String(viewerId);
+  const partner = users.find((u) => String(u) !== viewer);
+  return partner ? String(partner) : null;
+};
+
+/**
+ * The authorisation question, answered directly from the document.
+ *
+ * Pure: takes an already-loaded connection, hits no database. `canViewProfile`
+ * below is the loading variant.
+ *
+ * @param {{ profileGrants?: Array }} connection
+ * @param {string} viewerId
+ * @param {string} subjectId
+ * @returns {boolean} true ONLY if an explicit grant exists
+ */
+export const hasGrant = (connection, viewerId, subjectId) => {
+  const grants = Array.isArray(connection?.profileGrants) ? connection.profileGrants : [];
+  const viewer = String(viewerId);
+  const subject = String(subjectId);
+  // An empty list is the common case for a hidden connection, so bail before
+  // doing any string comparison work.
+  if (grants.length === 0) return false;
+  return grants.some((g) => String(g?.viewerId) === viewer && String(g?.subjectId) === subject);
+};
+
+/**
+ * May `viewerId` see `subjectId`'s public profile through this connection?
+ *
+ * @param {object} connection  a loaded Alignment
+ * @param {string} viewerId
+ * @param {string} [subjectId]  defaults to "whoever else is in it"
+ * @returns {boolean}
+ */
+export const canViewProfileIn = (connection, viewerId, subjectId) => {
+  // A connection is two people by definition, and Alignment.js:53-63 enforces
+  // that on save. Refusing anything else here is defence in depth for a
+  // function whose entire job is to be un-grantable: a malformed document
+  // naming extra members must not become a way to hand out access, even if
+  // it happens to contain a matching grant.
+  const users = Array.isArray(connection?.users) ? connection.users : [];
+  if (users.length !== 2) return false;
+
+  const subject = subjectId ? String(subjectId) : partnerIdFor(connection, viewerId);
+  if (!subject || !viewerId) return false;
+  if (String(viewerId) === subject) return false;
+  return hasGrant(connection, viewerId, subject);
+};
+
+/**
+ * The nickname this connection records for the partner, if any.
+ *
+ * @param {object} connection
+ * @param {string} partnerId
+ * @returns {string|null}
+ */
+export const aliasFor = (connection, partnerId) => {
+  const aliases = Array.isArray(connection?.conversationAliases)
+    ? connection.conversationAliases
+    : [];
+  const partner = String(partnerId);
+  const found = aliases.find((a) => String(a?.userId) === partner);
+  const alias = found?.alias;
+  return typeof alias === 'string' && alias.trim() ? alias.trim() : null;
+};
+
+/**
+ * The display name for a partner, in a fixed order of preference.
+ *
+ * 1. A nickname recorded for this connection  → use it
+ * 2. A grant authorises their real name       → use their real name
+ * 3. Otherwise                                → ANONYMOUS_LABEL
+ *
+ * Order matters and is not interchangeable. The alias wins even after a
+ * mutual reveal, which is deliberate (spec §8.2): the conversation keeps the
+ * name people chose for each other, and the real name is still available
+ * through `canViewProfile` for the profile sheet. A user who has seen
+ * "Moonwalker" for a week should not have that silently replaced mid-chat
+ * because they later agreed to share profiles.
+ *
+ * ⚠️ Callers that want to display a real name must ALSO check
+ * `canViewProfileIn` — this function is for labels, not for authorisation.
+ * They coincide today by construction, and will drift the moment anyone adds
+ * a UI that renders one without the other.
+ *
+ * @param {object} connection
+ * @param {string} viewerId
+ * @param {{ name?: string }} [partnerUser]  the partner's user doc, for the real name
+ * @returns {string}
+ */
+export const displayNameIn = (connection, viewerId, partnerUser) => {
+  const partnerId = partnerIdFor(connection, viewerId);
+  if (!partnerId) return ANONYMOUS_LABEL;
+
+  const alias = aliasFor(connection, partnerId);
+  if (alias) return alias;
+
+  if (canViewProfileIn(connection, viewerId, partnerId)) {
+    const real = partnerUser?.name;
+    if (typeof real === 'string' && real.trim()) return real.trim();
+  }
+
+  return ANONYMOUS_LABEL;
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * DATABASE-BACKED VARIANTS
+ *
+ * The pure functions above are what the tests exercise and what every call
+ * site should prefer. These exist so a route does not have to hand-roll the
+ * same two queries.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Load a connection and answer the authorisation question.
+ *
+ * @param {string} alignmentId
+ * @param {string} viewerId
+ * @returns {Promise<{ connection: object|null, partnerId: string|null, canView: boolean }>}
+ */
+export const canViewProfile = async (alignmentId, viewerId) => {
+  const connection = await Alignment.findById(alignmentId).lean();
+  if (!connection) return { connection: null, partnerId: null, canView: false };
+
+  const partnerId = partnerIdFor(connection, viewerId);
+  // A non-member gets the same answer as a stranger: false. Never throw and
+  // never distinguish "not a member" from "not allowed" — that difference is
+  // an oracle for probing whether a connection exists.
+  const canView = partnerId ? canViewProfileIn(connection, viewerId, partnerId) : false;
+  return { connection, partnerId, canView };
+};
+
+/**
+ * Load a connection and resolve a partner's display name.
+ *
+ * @param {string} alignmentId
+ * @param {string} viewerId
+ * @param {string} [partnerId]  avoids a lookup when the caller already has it
+ * @param {{ name?: string }} [partnerUser]  avoids a lookup when already loaded
+ * @returns {Promise<string>}
+ */
+export const displayNameFor = async (alignmentId, viewerId, partnerId, partnerUser) => {
+  const connection = await Alignment.findById(alignmentId).lean();
+  if (!connection) return ANONYMOUS_LABEL;
+
+  const partner = partnerId ? String(partnerId) : partnerIdFor(connection, viewerId);
+  if (!partner) return ANONYMOUS_LABEL;
+
+  const alias = aliasFor(connection, partner);
+  if (alias) return alias;
+
+  if (canViewProfileIn(connection, viewerId, partner)) {
+    const name = partnerUser?.name;
+    if (typeof name === 'string' && name.trim()) return name.trim();
+  }
+
+  return ANONYMOUS_LABEL;
+};
+
+/**
+ * Build the grant rows a brand-new connection starts with.
+ *
+ * The asymmetry is the feature. Entering Roulette with "show my profile" ON
+ * grants your partner access to YOUR profile and grants nobody access to
+ * theirs — visibility is something you give, not something you receive.
+ *
+ * @param {{ _id: string }} viewer   the person creating the connection
+ * @param {string} partnerId
+ * @param {boolean} viewerShowsProfile
+ * @returns {Array<object>} zero or one grant
+ */
+export const grantsForNewConnection = (viewer, partnerId, viewerShowsProfile) => {
+  if (!viewerShowsProfile) return [];
+  return [
+    {
+      viewerId: String(partnerId),
+      subjectId: String(viewer._id),
+      source: 'roulette_visible',
+      grantedAt: new Date(),
+    },
+  ];
+};
+
+/**
+ * The grants to write when both parties consent to share profiles.
+ *
+ * Always exactly two, in both directions — a mutual reveal that only
+ * unhid one person would be a bug, not a partial success.
+ *
+ * @param {string} a
+ * @param {string} b
+ * @returns {Array<object>}
+ */
+export const grantsForMutualReveal = (a, b) => {
+  const now = new Date();
+  return [
+    { viewerId: String(a), subjectId: String(b), source: 'roulette_reveal', grantedAt: now },
+    { viewerId: String(b), subjectId: String(a), source: 'roulette_reveal', grantedAt: now },
+  ];
+};
 
 ```
 

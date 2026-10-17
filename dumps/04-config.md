@@ -1,7 +1,7 @@
 # Chunk 04 — Config
 
-> Matchalize · `config` · files 4 of 27 chunks · 15 file(s) · 30 KB · ~8,791 tokens
-> Generated 2026-10-17 20:34.
+> Matchalize · `config` · files 4 of 27 chunks · 15 file(s) · 30 KB · ~8,798 tokens
+> Generated 2026-10-17 21:10.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -604,6 +604,7 @@ legacy-peer-deps=true
     "start": "node index.js",
     "dev": "nodemon --watch index.js --watch config --watch middleware --watch models --watch routes --watch socket --watch utils index.js",
     "lint": "oxlint",
+    "test": "node --test",
     "seed": "node seedRealistic.js",
     "verify:location": "node scripts/verify-location-swap.mjs"
   },
