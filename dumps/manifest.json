@@ -1,10 +1,10 @@
 {
-  "generated": "2026-10-17 20:14",
+  "generated": "2026-10-17 20:34",
   "budget": 102400,
   "chars_per_token": 3.5,
-  "file_count": 156,
+  "file_count": 157,
   "chunk_count": 27,
-  "total_bytes": 1666559,
+  "total_bytes": 1676254,
   "max_chunk_bytes": 101822,
   "verified": true,
   "errors": [],
@@ -78,8 +78,8 @@
         "server/.npmrc",
         "server/package.json"
       ],
-      "bytes": 31919,
-      "tokens": 9119,
+      "bytes": 31959,
+      "tokens": 9131,
       "oversize": [],
       "budget": 102400
     },
@@ -304,6 +304,7 @@
         "server/config/appData.js",
         "server/config/cloudinary.js",
         "server/config/db.js",
+        "server/config/roulette.js",
         "server/index.js",
         "server/middleware/admin.js",
         "server/middleware/auth.js",
@@ -322,11 +323,10 @@
         "server/models/Notification.js",
         "server/models/OTP.js",
         "server/models/Report.js",
-        "server/models/Setting.js",
-        "server/models/User.js"
+        "server/models/Setting.js"
       ],
-      "bytes": 100411,
-      "tokens": 28688,
+      "bytes": 95204,
+      "tokens": 27201,
       "oversize": [],
       "budget": 102400
     },
@@ -336,6 +336,7 @@
       "group": "server-core",
       "title": "Server Core",
       "files": [
+        "server/models/User.js",
         "server/models/index.js",
         "server/scripts/audit-cloudinary-orphans.mjs",
         "server/scripts/backfill-age.mjs",
@@ -348,11 +349,10 @@
         "server/scripts/reverify-sweep.mjs",
         "server/scripts/seed-iitb.mjs",
         "server/scripts/verify-deck-metrics.mjs",
-        "server/scripts/verify-location-swap.mjs",
-        "server/seedRealistic.js"
+        "server/scripts/verify-location-swap.mjs"
       ],
-      "bytes": 95761,
-      "tokens": 27360,
+      "bytes": 91952,
+      "tokens": 26272,
       "oversize": [],
       "budget": 102400
     },
@@ -362,6 +362,7 @@
       "group": "server-core",
       "title": "Server Core",
       "files": [
+        "server/seedRealistic.js",
         "server/socket/chat.js",
         "server/utils/AppError.js",
         "server/utils/campusGate.js",
@@ -373,8 +374,8 @@
         "server/utils/push.js",
         "server/utils/queue.js"
       ],
-      "bytes": 47756,
-      "tokens": 13644,
+      "bytes": 66427,
+      "tokens": 18979,
       "oversize": [],
       "budget": 102400
     },
@@ -580,6 +581,7 @@
         "server/config/appData.js",
         "server/config/cloudinary.js",
         "server/config/db.js",
+        "server/config/roulette.js",
         "server/index.js",
         "server/middleware/admin.js",
         "server/middleware/auth.js",
@@ -652,8 +654,8 @@
         "scripts/generate-icons.mjs",
         "scripts/generate-server-dump.sh"
       ],
-      "bytes": 1655881,
-      "tokens": 473108
+      "bytes": 1665542,
+      "tokens": 475869
     },
     {
       "file": "server_dump.md",
@@ -662,6 +664,7 @@
         "server/config/appData.js",
         "server/config/cloudinary.js",
         "server/config/db.js",
+        "server/config/roulette.js",
         "server/index.js",
         "server/middleware/admin.js",
         "server/middleware/auth.js",
@@ -726,8 +729,8 @@
         "server/tests/society/personas.mjs",
         "server/tests/society/seedSociety.mjs"
       ],
-      "bytes": 549965,
-      "tokens": 157132
+      "bytes": 559586,
+      "tokens": 159881
     }
   ]
 }

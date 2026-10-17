@@ -1,7 +1,7 @@
 # Chunk 27 — Tools
 
 > Matchalize · `tools` · files 27 of 27 chunks · 4 file(s) · 43 KB · ~12,436 tokens
-> Generated 2026-10-17 20:14.
+> Generated 2026-10-17 20:34.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:

@@ -1,13 +1,14 @@
 # Chunk 18 — Server Core
 
-> Matchalize · `server-core` · files 18 of 27 chunks · 23 file(s) · 96 KB · ~28,108 tokens
-> Generated 2026-10-17 20:14.
+> Matchalize · `server-core` · files 18 of 27 chunks · 23 file(s) · 91 KB · ~26,618 tokens
+> Generated 2026-10-17 20:34.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
 > - `./server/config/appData.js`
 > - `./server/config/cloudinary.js`
 > - `./server/config/db.js`
+> - `./server/config/roulette.js`
 > - `./server/index.js`
 > - `./server/middleware/admin.js`
 > - `./server/middleware/auth.js`
@@ -27,7 +28,6 @@
 > - `./server/models/OTP.js`
 > - `./server/models/Report.js`
 > - `./server/models/Setting.js`
-> - `./server/models/User.js`
 
 ---
 ### ./server/config/appData.js
@@ -475,6 +475,184 @@ const connectDB = async () => {
 export default connectDB;
 ```
 
+### ./server/config/roulette.js
+
+```
+/**
+ * 🎰 ROULETTE — TEST SETTINGS.
+ *
+ * ── WHY THIS FILE EXISTS ─────────────────────────────────────────────────────
+ * Roulette is the first feature that can put a live camera in front of a
+ * stranger. Every other feature fails closed: a bad deck query returns no
+ * cards, a bad chat write returns no message. A bad Roulette setting does not
+ * fail — it pairs a real person with a real stranger on camera.
+ *
+ * So the brakes are declared, named and parked BEFORE the engine exists, and
+ * the defaults are the closed position. Turning Roulette on is a deliberate
+ * edit, never an accident of deployment.
+ *
+ * ── WHAT THIS IS NOT ──────────────────────────────────────────────────────────
+ * These are TEST settings. None is a commercial allowance and none is a
+ * capacity claim. `MAX_CONCURRENT_CALLS: 5` is not "the product will support 5"
+ * — it is "nobody may accidentally open 500 calls while we are still learning
+ * what one costs". A separate decision, informed by measurement, replaces these
+ * before any real launch.
+ *
+ * ── NOTHING READS THIS YET ────────────────────────────────────────────────────
+ * Stage 0 records the settings and surfaces the feature's status at boot. No
+ * queue, no call, no matching behaviour exists. This file is a declaration with
+ * a resolver, not a control panel.
+ *
+ * Design source: ambitions/roulette.md §13
+ */
+
+/** Read an integer from the environment, falling back safely. */
+const num = (key, fallback) => {
+  const raw = process.env[key];
+  if (raw === undefined || raw === '') return fallback;
+  const parsed = Number(raw);
+  // A typo like ROULETTE_MAX_QUEUE=five must not silently become NaN and
+  // poison every comparison downstream. Fall back instead.
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+/** Read a boolean from the environment. Only the exact string 'true' enables. */
+const bool = (key, fallback) => {
+  const raw = process.env[key];
+  if (raw === undefined || raw === '') return fallback;
+  return raw === 'true';
+};
+
+/**
+ * Parse the test-account allow-list.
+ *
+ * Empty is the safe position and means NOBODY may join the queue. This is the
+ * opposite of the usual "empty means no restriction" convention, and that is
+ * deliberate: the failure mode we are protecting against is a real account
+ * reaching a live camera queue before anyone has looked at the queue code.
+ */
+const accounts = () => {
+  const raw = process.env.ROULETTE_TEST_ACCOUNTS;
+  if (!raw) return [];
+  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+};
+
+const TEST_ACCOUNTS = accounts();
+
+export const ROULETTE_SETTINGS = {
+  /* ── THE MASTER SWITCH ────────────────────────────────────────────────────
+   * Default false. Roulette must be explicitly enabled, in exactly one place,
+   * with the word 'true'. Anything else — unset, '1', 'yes', 'TRUE' — is off.
+   * There is no code path that turns Roulette on by default, ever. */
+  ENABLED: bool('ROULETTE_ENABLED', false),
+
+  /* ── WHO MAY JOIN A QUEUE ──────────────────────────────────────────────────
+   * The allow-list is read fresh on every call rather than cached at module
+   * load, the same way campusGate.js reads ALLOWED_COLLEGES per request: a test
+   * that mutates process.env must not be defeated by a stale snapshot.
+   *
+   * Empty list = nobody. See the note on `accounts()` above. */
+  TEST_ACCOUNTS,
+  IS_TEST_MODE: TEST_ACCOUNTS.length > 0,
+
+  /* ── CAPACITY ──────────────────────────────────────────────────────────────
+   * Five, not fifty. The number is arbitrary on purpose: it is small enough
+   * that two laptops testing together can saturate it deliberately, which is
+   * how the admission-control path gets exercised before it is needed for real.
+   *
+   * NOTE: reaching this cap must refuse NEW sessions with a clear message. It
+   * must never queue people who cannot be served — a queue that cannot drain is
+   * indistinguishable from a hang. */
+  MAX_CONCURRENT_CALLS: num('ROULETTE_MAX_CONCURRENT', 5),
+
+  /* Bounds memory. Beyond this, joining users get "busy" rather than joining a
+   * list that will not be served in any reasonable time. */
+  MAX_QUEUE_SIZE: num('ROULETTE_MAX_QUEUE', 25),
+
+  /* How long a user may wait before we stop pretending it is worth it. At this
+   * point offer Leave — never silently expand the search radius (spec §10.4). */
+  MAX_WAIT_SECONDS: num('ROULETTE_MAX_WAIT_SEC', 300),
+
+  /* ── TIMEOUTS ──────────────────────────────────────────────────────────────
+   * Twenty seconds is generous for STUN on a campus network and short enough
+   * that a user on a captive portal fails with words rather than a spinner. */
+  CONNECT_TIMEOUT_MS: num('ROULETTE_CONNECT_TIMEOUT_MS', 20_000),
+
+  /* How long a pairing offer stays valid. Must comfortably exceed the connect
+   * timeout, or a slow peer pairs and immediately loses the offer. */
+  PAIR_TIMEOUT_MS: num('ROULETTE_PAIR_TIMEOUT_MS', 45_000),
+
+  /* ── LONG-CALL POLICY ──────────────────────────────────────────────────────
+   * Two hours. This is a RUNAWAY GUARD, not a product cap, and it is set two
+   * orders of magnitude above any plausible commercial limit on purpose: it
+   * exists to stop a stuck session billing TURN forever, and must never be
+   * mistaken for the duration a paying user is entitled to.
+   *
+   * The real long-call question is answered by measurement, not by this number
+   * — a 30-minute soak test in Stage 6 checks for stalls, memory growth and
+   * credential expiry mid-call. The commercial duration limit is deliberately
+   * UNDECIDED (spec §17). */
+  TEST_CALL_CEILING_MS: num('ROULETTE_TEST_CALL_CEILING_MS', 7_200_000),
+
+  /* ── TURN CREDENTIALS ──────────────────────────────────────────────────────
+   * One hour. Cloudflare's maximum is 48h; on expiry it stops billing
+   * immediately and then disconnects, so a credential must comfortably outlive
+   * a single call but never linger. Refresh mid-call via
+   * RTCPeerConnection.setConfiguration() when a session outlives this.
+   *
+   * ISSUANCE_PER_HOUR is credential-farm defence. The Cloudflare API token
+   * mints unlimited short-lived credentials; without a per-user cap one
+   * authenticated client can generate them in a loop. */
+  TURN_CREDENTIAL_TTL_SECONDS: num('ROULETTE_TURN_TTL_SEC', 3600),
+  ISSUANCE_PER_HOUR: num('ROULETTE_ICE_PER_HOUR', 10),
+};
+
+/**
+ * May this user join the Roulette queue at all?
+ *
+ * Three gates, all of which must pass:
+ *   1. The feature is on          — otherwise Roulette does not exist.
+ *   2. A test allow-list is set   — an EMPTY list admits nobody.
+ *   3. This user is on it         — compared as strings, because the values
+ *                                   arrive from a comma-separated env var
+ *                                   while callers hold an ObjectId.
+ *
+ * The empty-list rule is the important one. It means that turning
+ * ROULETTE_ENABLED on without also configuring ROULETTE_TEST_ACCOUNTS produces
+ * a feature that is on, documented, and unable to pair anybody — a loud no-op
+ * rather than a live camera pointed at a stranger.
+ */
+export const canJoinRouletteQueue = (userId) => {
+  const s = ROULETTE_SETTINGS;
+  if (!s.ENABLED) return false;
+  if (!s.IS_TEST_MODE) return false;
+  if (!userId) return false;
+  return s.TEST_ACCOUNTS.includes(String(userId));
+};
+
+/**
+ * One-line summary for the boot log, so the feature's status is verifiable
+ * without reading code. Mirrors the existing config warnings in index.js, which
+ * is why it reads the way it does.
+ */
+export const describeRouletteStatus = () => {
+  const s = ROULETTE_SETTINGS;
+  if (!s.ENABLED) return 'disabled (ROULETTE_ENABLED is not "true")';
+
+  if (!s.IS_TEST_MODE) {
+    return 'ENABLED but unreachable — ROULETTE_TEST_ACCOUNTS is empty, so nobody may queue';
+  }
+
+  const names = ['Deck', 'Chats', 'Roulette', 'Profile'];
+  return `ENABLED — ${names[2]} is reachable in test mode, `
+    + `${s.TEST_ACCOUNTS.length} allow-listed account(s), `
+    + `max ${s.MAX_CONCURRENT_CALLS} concurrent call(s), queue cap ${s.MAX_QUEUE_SIZE}`;
+};
+
+export default ROULETTE_SETTINGS;
+
+```
+
 ### ./server/index.js
 
 ```
@@ -507,6 +685,7 @@ import rateLimit from 'express-rate-limit';
 // landmines for whoever runs `npm i express@5`.
 import mongoSanitize from 'express-mongo-sanitize';
 import { APP_CONSTANTS } from './config/appData.js';
+import { describeRouletteStatus } from './config/roulette.js';
 import * as Sentry from '@sentry/node';
 import { nodeProfilingIntegration } from '@sentry/profiling-node';
 
@@ -624,6 +803,11 @@ if (!process.env.CLOUDINARY_CLOUD_NAME) {
 if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
   console.warn('⚠️  VAPID keys not configured — web push notifications will be disabled');
 }
+// Roulette status. Always printed, unlike the warnings above, because "is it on?"
+// must be answerable from the boot log without reading code — and because the
+// dangerous state is not "off" but "on with an empty allow-list", which looks
+// identical to "off" until you read the flag. config/roulette.js explains it.
+console.log(`🎰 Roulette: ${describeRouletteStatus()}`);
 // ⚠️ ALLOW_ALL_EMAILS no longer gates anything. The old global `.ac.in` rule was
 // removed when the college picker landed — verification is now per-college,
 // matched against the domains stored on each College record. This flag is left
@@ -2379,415 +2563,5 @@ const settingSchema = new mongoose.Schema(
 );
 
 export default mongoose.model('Setting', settingSchema);
-```
-
-### ./server/models/User.js
-
-```
-import mongoose from 'mongoose';
-import { randomInt } from 'node:crypto';
-
-const userSchema = new mongoose.Schema(
-  {
-    email: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-      lowercase: true,
-    },
-    college: {
-      type: String,
-      default: '',
-    },
-    collegeCode: {
-      type: String,
-      default: '',
-    },
-    isVerified: {
-      type: Boolean,
-      default: false,
-    },
-    isOnboarded: {
-      type: Boolean,
-      default: false,
-    },
-    name: {
-      type: String,
-      trim: true,
-      default: '',
-      maxlength: 60,
-    },
-    age: {
-      type: Number,
-      default: null,
-    },
-    dob: {
-      type: Date,
-      default: null,
-    },
-    gender: {
-      type: String,
-      default: '',
-    },
-    pronouns: {
-      type: String,
-      trim: true,
-      default: '',
-      maxlength: 30,
-    },
-    // `branch` and `hostel` were removed here. Neither moved the ladder (only
-    // card content scores), `hostel` was the only location signal and the
-    // discover deck is no longer campus-scoped, and branch forced a whole
-    // modal + BRANCHES list in onboarding for zero matching value —
-    // discover.js never filtered on it.
-    //
-    // ⚠️ No migration issued: existing documents keep the two orphan fields and
-    // nothing reads them. Unset them via scripts/backfill-ladder.mjs if you
-    // want the documents clean.
-    year: {
-      type: String,
-      default: '',
-      maxlength: 40,
-    },
-    // Expected year of graduation, user-asserted at signup.
-    //
-    // ⚠️ NOT PROOF of enrolment — anyone can type a future year. It exists to
-    // (a) drive the annual re-verification date and (b) show "Graduating 2027"
-    // on the card, which is a real dating signal. Enrolment is actually proven
-    // by the yearly email re-check (see reverifyDue), not by this number.
-    graduatingYear: {
-      type: Number,
-      default: null,
-      min: 2000,
-      max: 2100,
-    },
-    // ─── ANNUAL RE-VERIFICATION ────────────────────────────────────────
-    // The product claims "Students only." An alumni mailbox never stops
-    // working, so the claim is only true if we re-check. Once per year each
-    // account must confirm it still controls a college inbox; when it can't,
-    // the account stops being a student (see status).
-    //
-    // ⚠️ Set to one year after verification, never backdated, so deploying this
-    // can't immediately lock out an existing user on a date they never saw.
-    reverifyDue: {
-      type: Date,
-      default: null,
-      index: true,
-    },
-    lastVerifiedAt: {
-      type: Date,
-      default: null,
-    },
-    // active        — verified, in good standing
-    // reverify_due  — the re-check date has passed; must re-verify to continue
-    // suspended     — separate moderation state, handled elsewhere
-    //
-    // A failed re-check NEVER deletes the account. Losing access to a college
-    // inbox is not proof of anything, and quietly destroying someone's account
-    // because a mail server had a bad afternoon is not acceptable.
-    status: {
-      type: String,
-      enum: ['active', 'reverify_due'],
-      default: 'active',
-    },
-    // Owned by utils/ladder.js — never written by hand. Recomputed on every
-    // profile write (/users/setup, PUT /users/profile) and backfilled by
-    // scripts/backfill-ladder.mjs. The client renders this value and never
-    // derives it, because it gates the discover deck (see LADDER.interact).
-    profileScore: {
-      type: Number,
-      default: 0,
-      min: 0,
-      max: 100,
-    },
-    bio: {
-      type: String,
-      trim: true,
-      default: '',
-      maxlength: 160,
-    },
-    bioPhoto: {
-      type: String,
-      default: '',
-    },
-    prompts: [
-      {
-        // `question` is client-supplied straight from the request body and was
-        // never checked against PROMPT_BANK, so it needs a bound of its own.
-        question: { type: String, maxlength: 200 },
-        // 300 is ~3x the longest answer ever written in practice (97 chars) and
-        // renders as ~3 lines on a profile card. Both client textareas and both
-        // write routes enforce this; the schema cap is the backstop.
-        answer: { type: String, maxlength: 300, default: '' },
-        photoUrl: String,
-      },
-    ],
-    photos: {
-      type: [String],
-      default: [],
-    },
-    intent: {
-      type: [String],
-      default: [],
-    },
-    // Optional self-described gap year. Still discoverable — no ranking penalty —
-    // surfaced as a badge on the card so people know.
-    gapYear: {
-      type: Boolean,
-      default: false,
-    },
-    interestedIn: {
-      type: [String],
-      default: [],
-    },
-    // ageRange was removed here: it was written by PUT /profile but read by
-    // nothing — no query, no UI, not even the client (the settings editor was
-    // deleted in 1e83660). Its schema default silently added {min:18,max:30}
-    // to every new user document, so it looked configured while doing nothing.
-    // No migration: existing documents keep the orphan subdocument and no code
-    // path reads it.
-    interests: {
-      type: [String],
-      default: [],
-    },
-    onboardingStep: {
-      type: Number,
-      default: 1,
-    },
-    onboardingData: {
-      type: mongoose.Schema.Types.Mixed,
-      default: {},
-    },
-    lastActive: {
-      type: Date,
-      default: Date.now,
-    },
-    // Whether this user's college is shown to OTHERS on their deck card.
-    //
-    // Once the deck is platform-wide rather than campus-only, the college is
-    // the only location signal a card carries — so this defaults to TRUE and
-    // the badge is useful from day one. People opt out.
-    //
-    // Enforced in routes/discover.js by STRIPPING the field from the response
-    // when false, not by hiding it in CSS. Hiding it client-side would still
-    // ship the data to anyone with devtools, which would make this a
-    // decoration rather than a privacy control.
-    showCollege: {
-      type: Boolean,
-      default: true,
-    },
-
-    lastLogoutAt: {
-      type: Date,
-      default: null,
-      // Internal bookkeeping — never serialise to the client. Queries that
-      // need it name it explicitly (middleware/auth.js) or use '+lastLogoutAt'.
-      select: false,
-    },
-
-    /* ─── 📍 COARSE LOCATION ───────────────────────────────────────────────
-     *
-     * ⚠️ THIS IS THE MOST SENSITIVE FIELD IN THE SCHEMA. Read the three rules
-     * below before changing anything that touches it.
-     *
-     * 1. ROUNDED ON WRITE, SERVER-SIDE. Values are stored at 2 decimal places
-     *    (~1.1km) by `sanitizeLatLng()` in routes/users.js. Exact coordinates
-     *    must never be persisted — a precise home location sitting in the
-     *    database is a safety liability, and 1km is ample for a 30km band. The
-     *    rounding happens on the server deliberately: rounding client-side
-     *    would leave the precise value in the request body and every log that
-     *    captures it.
-     *
-     * 2. NEVER SHOWN TO OTHER USERS. `currentLatLng` is NOT in CARD_FIELDS in
-     *    utils/publicCard.js, so it cannot reach any client through the deck,
-     *    the profile-updated broadcast, or any card projection. What other
-     *    people receive is a derived `distanceBand` string on their own card —
-     *    a label, never a coordinate. Do not add this field to CARD_FIELDS.
-     *
-     * 3. EXPIRES. After LOCATION_TTL_DAYS (utils/geo.js) without a refresh it
-     *    stops affecting ranking entirely and reads as unknown, rather than
-     *    being trusted indefinitely and quietly wrong — a student who set this
-     *    in May should not be ranked as "near" in September.
-     *
-     * Written only from an explicit opt-in step in onboarding and from
-     * `PUT /api/users/location`. There is no background tracking: the client
-     * takes ONE reading on app open and the server stores it. `watchPosition`
-     * must never be used here. */
-    currentLatLng: {
-      type: [Number],
-      default: undefined,
-      // Belt-and-braces with sanitizeLatLng(): even a write that bypasses the
-      // route cannot store an out-of-range or non-finite pair.
-      validate: {
-        validator: (v) => v === undefined || v === null
-          || (Array.isArray(v)
-            && v.length === 2
-            && v.every((n) => Number.isFinite(n))
-            && v[0] >= -90 && v[0] <= 90
-            && v[1] >= -180 && v[1] <= 180),
-        message: 'currentLatLng must be [latitude, longitude]',
-      },
-      select: false,
-    },
-
-    /* How this location came to be: 'gps' from the permission prompt, or
-       'campus' when the user declined and we fall back to their college's
-       position. Null means no location was ever set. Recorded rather than
-       inferred so the distinction between "declined" and "never asked" stays
-       visible. */
-    locationSource: {
-      type: String,
-      enum: ['gps', 'campus', null],
-      default: null,
-    },
-    locationNudgeDismissed: {
-      type: Boolean,
-      default: false,
-    },
-
-    /* When the last reading was taken. Drives the TTL above. Null alongside a
-       null currentLatLng, and treated as unknown if currentLatLng is somehow
-       populated without it. */
-    locationUpdatedAt: {
-      type: Date,
-      default: null,
-      select: false,
-    },
-    pushSubscription: {
-      type: mongoose.Schema.Types.Mixed,
-      default: null,
-    },
-    suspended: {
-      type: Boolean,
-      default: false,
-    },
-    suspendedAt: {
-      type: Date,
-      default: null,
-    },
-    suspendedReason: {
-      type: String,
-      default: '',
-      // Admin-only (the suspended screen shows a generic message from
-      // api.js, not this). Admin queries must use '+suspendedReason'.
-      // report.js:71 also needs it so escalation does not clobber the
-      // admin's reason with the generic fallback.
-      select: false,
-    },
-    isDeleted: {
-      type: Boolean,
-      default: false,
-    },
-    deletedAt: {
-      type: Date,
-      default: null,
-    },
-    // Report system — shadowban fields
-    shadowbanScore: {
-      type: Number,
-      default: 0,
-    },
-    shadowbannedAt: {
-      type: Date,
-      default: null,
-    },
-    contentFrozen: {
-      type: Boolean,
-      default: false,
-    },
-    // Admin-only. NOT selected by default: /me and the login response would
-    // otherwise hand staff commentary about the user back to the user.
-    // Admin queries must ask for it with '+adminNotes'.
-    adminNotes: {
-      type: String,
-      default: '',
-      select: false,
-    },
-    // 🚀 DETERMINISTIC SEED: Allows instant indexed random sampling without $sample
-    // CSPRNG float in [0,1) — preserves the $gte/$lt range sampling in discover.js
-    randomSeed: {
-      type: Number,
-      default: () => randomInt(0, 0x7fffffff) / 0x7fffffff,
-      index: true,
-    },
-  },
-  {
-    timestamps: true,
-  }
-);
-
-// Legacy columns that predate the current schema and are no longer read or
-// written anywhere in the app, but still sit in the database. Mongoose passes
-// through any DB field it does not know about, so they were being serialised
-// to clients on /me and the login response — including a password hash and
-// salt. Strip them at serialisation time rather than deleting user data.
-const LEGACY_PRIVATE_FIELDS = ['passwordHash', 'passwordSalt', 'emailVerified', 'otp', 'otpExpiry'];
-
-userSchema.set('toJSON', {
-  transform: (doc, ret) => {
-    for (const field of LEGACY_PRIVATE_FIELDS) {
-      delete ret[field];
-    }
-    return ret;
-  },
-});
-
-userSchema.index({ name: 'text', email: 'text' });
-// Deck query index.
-//
-// `collegeCode` USED to lead this index, because the deck was campus-only
-// (discover.js filtered on `collegeCode: currentUser.collegeCode`). The deck is
-// platform-wide, so that leading field now only serves the card's own college
-// badge — `?campusOnly=true` narrowing has been removed entirely, so nothing in
-// the feed query filters on it any more. Leaving it first would mean the common
-// case couldn't use this index at all, leaving the whole deck scan unindexed.
-//
-// Reordered so the always-present equality fields come first, `collegeCode`
-// sits mid-compound, and `randomSeed`
-// stays LAST because the deck samples a range on it (`$gte`/`$lt` on a
-// [0,1) float) rather than matching it exactly — a range scan wants the field
-// at the end of the compound so the preceding equalities collapse to one
-// contiguous key range.
-userSchema.index(
-  { isOnboarded: 1, isVerified: 1, isDeleted: 1, suspended: 1, shadowbannedAt: 1, collegeCode: 1, randomSeed: 1 },
-  { name: 'discover_deck_filter_index' }
-);
-
-// ⚠️ THERE IS DELIBERATELY NO INDEX FOR THE DECK'S SCORE SORT, and adding one
-// today would be dead weight that misleads the next reader.
-//
-// The deck's ranking key is COMPUTED inside the aggregation in
-// routes/discover.js (`$addFields`), not read off this document:
-//
-//   hybridScore = recency(lastActive) * 0.6 + completeness(photos, prompts, bio) * 0.4
-//
-// where recency is `exp(-ln2 * hoursSince / 72)`. MongoDB cannot serve an index
-// over a computed expression, so a `{ profileScore: -1, lastActive: -1 }` index
-// would sit here unused while appearing to be the thing making the deck fast. It
-// would also add real write cost to every profile update for no read benefit.
-//
-// VERIFIED with .explain(): the $match stage uses `discover_deck_filter_index`
-// above (keys examined == docs examined, no over-fetch), and the `$sort` that
-// follows is an in-memory sort, which is why the aggregation passes
-// `allowDiskUse: true`.
-//
-// WHAT THAT COSTS, AND WHEN TO CHANGE IT: an in-memory sort of the entire
-// eligible pool is O(n log n) on memory. At current scale that is nothing. At
-// ~10^6 users it will spill to disk and become the deck's slowest step.
-//
-// The fix at that point is DENORMALIZATION, not another index: persist the
-// computed value as `deckScore` on this document, recompute it in the two places
-// that can change it (`lastActive` writes and ladder `profileScore` writes), and
-// index `{ deckScore: -1 }`. Then the sort becomes index-served and the
-// aggregation drops `$addFields` entirely.
-//
-// Do not do that speculatively. It introduces a second source of truth that must
-// be kept in sync or the deck silently ranks on stale data — a worse failure
-// than a slow sort. Wait until the sort is measurably the bottleneck.
-
-const User = mongoose.model('User', userSchema);
-export default User;
-
 ```
 

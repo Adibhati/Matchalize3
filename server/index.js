@@ -27,6 +27,7 @@ import rateLimit from 'express-rate-limit';
 // landmines for whoever runs `npm i express@5`.
 import mongoSanitize from 'express-mongo-sanitize';
 import { APP_CONSTANTS } from './config/appData.js';
+import { describeRouletteStatus } from './config/roulette.js';
 import * as Sentry from '@sentry/node';
 import { nodeProfilingIntegration } from '@sentry/profiling-node';
 
@@ -144,6 +145,11 @@ if (!process.env.CLOUDINARY_CLOUD_NAME) {
 if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
   console.warn('⚠️  VAPID keys not configured — web push notifications will be disabled');
 }
+// Roulette status. Always printed, unlike the warnings above, because "is it on?"
+// must be answerable from the boot log without reading code — and because the
+// dangerous state is not "off" but "on with an empty allow-list", which looks
+// identical to "off" until you read the flag. config/roulette.js explains it.
+console.log(`🎰 Roulette: ${describeRouletteStatus()}`);
 // ⚠️ ALLOW_ALL_EMAILS no longer gates anything. The old global `.ac.in` rule was
 // removed when the college picker landed — verification is now per-college,
 // matched against the domains stored on each College record. This flag is left

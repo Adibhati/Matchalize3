@@ -1,7 +1,7 @@
 # Chunk 04 — Config
 
-> Matchalize · `config` · files 4 of 27 chunks · 15 file(s) · 30 KB · ~8,779 tokens
-> Generated 2026-10-17 20:14.
+> Matchalize · `config` · files 4 of 27 chunks · 15 file(s) · 30 KB · ~8,791 tokens
+> Generated 2026-10-17 20:34.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -88,9 +88,10 @@ jobs:
         # happens in the QA job below rather than here.
         run: |
           cd server
-          for f in index.js config/db.js models/index.js utils/age.js \
-                   routes/messages.js routes/users.js routes/discover.js \
-                   routes/alignments.js routes/notifications.js; do
+          for f in index.js config/db.js config/roulette.js models/index.js \
+                   utils/age.js routes/messages.js routes/users.js \
+                   routes/discover.js routes/alignments.js \
+                   routes/notifications.js; do
             node --check "$f"
           done
 

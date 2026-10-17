@@ -1,7 +1,7 @@
 # Chunk 17 — Client Pages
 
 > Matchalize · `client-pages` · files 17 of 27 chunks · 2 file(s) · 45 KB · ~13,116 tokens
-> Generated 2026-10-17 20:14.
+> Generated 2026-10-17 20:34.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
