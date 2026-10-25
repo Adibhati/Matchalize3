@@ -4,7 +4,7 @@ import {
   PROMPT_BANK, BRANCHES, YEARS, GENDERS, INTENTS, INTEREST_TAGS,
   PRONOUNS_OPTIONS, INTEREST_ICONS, INTEREST_ICON_FALLBACKS, APP_CONSTANTS,
 } from '../config/appData.js';
-import { LADDER } from '../utils/ladder.js';
+import { LADDER, MAX_PHOTOS, MAX_PROMPTS, SCORE_WEIGHTS } from '../utils/ladder.js';
 import { collegeGateFilter } from '../utils/campusGate.js';
 import College from '../models/College.js';
 
@@ -85,11 +85,16 @@ router.get('/', async (req, res) => {
     // static fallback only, the thresholds would silently vanish from the
     // client the moment anyone saved that setting — and the gate would then
     // hardcode its own numbers instead of reading LADDER.interact.
-    payload = { ...payload, ladder: LADDER };
+    const ladder = {
+      ...LADDER,
+      weights: SCORE_WEIGHTS,
+      maxPhotos: MAX_PHOTOS,
+      maxPrompts: MAX_PROMPTS,
+    };
 
     // Colleges were already fetched above, outside the cache. Attached here so
     // both the cached and uncached response paths carry the same fresh list.
-    payload = { ...payload, ladder: LADDER, colleges: collegeList };
+    payload = { ...payload, ladder, colleges: collegeList };
 
     configCache = payload;
     cacheExpiresAt = Date.now() + CACHE_TTL_MS;

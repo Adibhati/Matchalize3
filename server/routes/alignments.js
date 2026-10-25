@@ -4,8 +4,6 @@ import Alignment from '../models/Alignment.js';
 import User from '../models/User.js';
 import Interaction from '../models/Interaction.js';
 import Block from '../models/Block.js';
-import { sendPushNotification } from '../utils/push.js';
-import { addToQueue } from '../utils/queue.js';
 import { withFreshAge } from '../utils/age.js';
 import { protect } from '../middleware/auth.js';
 
@@ -243,16 +241,14 @@ router.delete('/:id', protect, async (req, res) => {
 
     // Notify the other user
     const io = req.app.get('io');
+    if (io) {
+      const alignmentId = alignment._id.toString();
+      io.in(alignmentId).socketsLeave(alignmentId);
+    }
     if (otherUserId && io) {
       io.to(otherUserId.toString()).emit('unmatch-notification', { alignmentId: alignment._id });
+      io.to(req.user._id.toString()).emit('unmatch-notification', { alignmentId: alignment._id });
     }
-    if (otherUserId) {
-      addToQueue(() => sendPushNotification(otherUserId, {
-        title: 'Unmatched',
-        body: `You were unmatched by ${req.user.name}`,
-      }));
-    }
-
     res.status(200).json({ success: true, message: 'Unmatched successfully' });
   } catch (error) {
     console.error(error);

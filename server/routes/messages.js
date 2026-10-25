@@ -6,9 +6,10 @@ import User from '../models/User.js';
 import { protect } from '../middleware/auth.js';
 import { sendPushNotification } from '../utils/push.js';
 import { addToQueue } from '../utils/queue.js';
-import { messageLimiter } from '../middleware/rateLimiters.js';
+import { messageLimiter, destructiveActionLimiter } from '../middleware/rateLimiters.js';
 import { getBlockDirection } from '../middleware/blockFilter.js';
 import { deleteCloudinaryFile } from '../config/cloudinary.js';
+import { isOwnedMediaUrl } from '../utils/media.js';
 
 const router = express.Router();
 
@@ -31,10 +32,7 @@ const isValidMediaUrl = (url, userId) => {
     const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
     if (!cloudName || host !== 'res.cloudinary.com') return false;
     if (!parsed.pathname.startsWith(`/${cloudName}/`)) return false;
-    if (!parsed.pathname.includes('/matchalize/photos/') ||
-        !parsed.pathname.includes('/matchalize/audio/')) {
-      return isOwnedMediaUrl(url, userId);
-    }
+    if (!parsed.pathname.includes('/matchalize/photos/')) return false;
     return isOwnedMediaUrl(url, userId);
   } catch {
     return false;
@@ -77,6 +75,7 @@ router.get('/:alignmentId', protect, async (req, res) => {
   const { alignmentId } = req.params;
   const limit = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 100);
   const cursor = req.query.cursor;
+  const around = req.query.around;
 
   try {
     const match = await Alignment.findOne({
@@ -89,30 +88,65 @@ router.get('/:alignmentId', protect, async (req, res) => {
       return res.status(403).json({ message: 'This conversation is no longer available.', code: 'CONVERSATION_GONE' });
     }
 
-    const query = { alignmentId };
-    
-    // 🚀 COLLISION-PROOF CURSOR: Use ObjectId sequencing instead of timestamps
-    if (cursor && mongoose.Types.ObjectId.isValid(cursor)) {
-      query._id = { $lt: new mongoose.Types.ObjectId(cursor) };
-    } else if (cursor) {
-      // Graceful fallback just in case an older timestamp cursor was passed
-      query.createdAt = { $lt: new Date(cursor) };
+    if (around !== undefined && (typeof around !== 'string' || !mongoose.Types.ObjectId.isValid(around))) {
+      return res.status(400).json({ message: 'Invalid message id' });
     }
 
-    const messages = await Message.find(query)
-      .sort({ _id: -1 })
-      .limit(limit)
-      .populate('replyTo', 'text senderId type mediaUrl deleted');
+    let messages;
+    let nextCursor;
+    if (around) {
+      const targetId = new mongoose.Types.ObjectId(around);
+      const target = await Message.findOne({ _id: targetId, alignmentId })
+        .populate('replyTo', 'text senderId type mediaUrl deleted');
+      if (!target) return res.status(404).json({ message: 'Message not found' });
+
+      const olderLimit = Math.floor((limit - 1) / 2);
+      const newerLimit = limit - olderLimit - 1;
+      const [older, newer] = await Promise.all([
+        olderLimit
+          ? Message.find({ alignmentId, _id: { $lt: targetId } })
+            .sort({ _id: -1 })
+            .limit(olderLimit + 1)
+            .populate('replyTo', 'text senderId type mediaUrl deleted')
+          : [],
+        newerLimit
+          ? Message.find({ alignmentId, _id: { $gt: targetId } })
+            .sort({ _id: 1 })
+            .limit(newerLimit)
+            .populate('replyTo', 'text senderId type mediaUrl deleted')
+          : [],
+      ]);
+
+      const hasOlder = older.length > olderLimit;
+      const olderMessages = older.slice(0, olderLimit).reverse();
+      messages = [...olderMessages, target, ...newer];
+      nextCursor = hasOlder ? olderMessages[0]?._id || null : null;
+    } else {
+      const query = { alignmentId };
+
+      // 🚀 COLLISION-PROOF CURSOR: Use ObjectId sequencing instead of timestamps
+      if (cursor && mongoose.Types.ObjectId.isValid(cursor)) {
+        query._id = { $lt: new mongoose.Types.ObjectId(cursor) };
+      } else if (cursor) {
+        // Graceful fallback just in case an older timestamp cursor was passed
+        query.createdAt = { $lt: new Date(cursor) };
+      }
+
+      const page = await Message.find(query)
+        .sort({ _id: -1 })
+        .limit(limit)
+        .populate('replyTo', 'text senderId type mediaUrl deleted');
+      nextCursor = page.length === limit ? page[page.length - 1]._id : null;
+      messages = page.reverse();
+    }
 
     await Message.updateMany(
       { alignmentId, senderId: { $ne: req.user._id }, readAt: null },
       { $set: { readAt: new Date(), deliveryStatus: 'read' } }
     ).exec();
 
-    const nextCursor = messages.length === limit ? messages[messages.length - 1]._id : null;
-
     res.status(200).json({
-      messages: messages.reverse(), 
+      messages,
       nextCursor,
       hasMore: !!nextCursor,
     });
@@ -127,12 +161,16 @@ router.post('/:alignmentId', protect, messageLimiter, async (req, res) => {
   const { alignmentId } = req.params;
   const { text, type, image, replyTo, mediaUrl, caption, clientMsgId } = req.body;
 
-  const hasMedia = (type === 'image' || type === 'audio') && mediaUrl;
+  if (type === 'audio') {
+    return res.status(400).json({ message: 'Voice messages are no longer supported' });
+  }
+
+  const hasMedia = type === 'image' && mediaUrl;
   if (!hasMedia && (!text || text.trim() === '')) {
     return res.status(400).json({ message: 'Message cannot be empty' });
   }
 
-  if (mediaUrl && !isValidMediaUrl(mediaUrl)) {
+  if (mediaUrl && (type !== 'image' || !isValidMediaUrl(mediaUrl, req.user._id))) {
     return res.status(400).json({ message: 'Invalid media URL' });
   }
 
@@ -172,7 +210,11 @@ router.post('/:alignmentId', protect, messageLimiter, async (req, res) => {
 
     // IDEMPOTENCY CHECK: Prevent duplicate messages from network retries
     if (clientMsgId) {
-      const existingMsg = await Message.findOne({ clientMsgId });
+      const existingMsg = await Message.findOne({
+        clientMsgId,
+        alignmentId,
+        senderId: req.user._id,
+      });
       if (existingMsg) {
         return res.status(200).json(existingMsg);
       }
@@ -183,7 +225,7 @@ router.post('/:alignmentId', protect, messageLimiter, async (req, res) => {
       if (!replyMsg) return res.status(400).json({ message: 'Reply target not found' });
     }
 
-    const ALLOWED_TYPES = ['text', 'image', 'audio'];
+    const ALLOWED_TYPES = ['text', 'image'];
     const safeType = ALLOWED_TYPES.includes(type) ? type : 'text';
 
     const messageData = {
@@ -209,7 +251,11 @@ router.post('/:alignmentId', protect, messageLimiter, async (req, res) => {
       message = await Message.create(messageData);
     } catch (err) {
       if (err.code === 11000 && clientMsgId) {
-        const existing = await Message.findOne({ clientMsgId });
+        const existing = await Message.findOne({
+          clientMsgId,
+          alignmentId,
+          senderId: req.user._id,
+        });
         if (existing) return res.status(200).json(existing);
       }
       throw err;
@@ -236,7 +282,7 @@ router.post('/:alignmentId', protect, messageLimiter, async (req, res) => {
       const sender = await User.findById(req.user._id).select('name');
       addToQueue(() => sendPushNotification(otherUserId, {
         title: sender?.name || 'New Message',
-        body: type === 'audio' ? '🎙️ Sent a voice memo' : type === 'image' ? '📷 Sent a photograph' : (text || '').slice(0, 100),
+        body: safeType === 'image' ? '📷 Sent a photograph' : (text || '').slice(0, 100),
         data: { type: 'message', alignmentId: alignmentId.toString() },
       }));
     }
@@ -265,29 +311,41 @@ router.post('/:alignmentId/reaction', protect, messageLimiter, async (req, res) 
     const match = await Alignment.findOne({ _id: alignmentId, users: req.user._id, isActive: true });
     if (!match) return res.status(403).json({ message: 'Unauthorized' });
 
-    const message = await Message.findOne({ _id: msgId, alignmentId });
-    if (!message) return res.status(404).json({ message: 'Message not found' });
-
-    // A deleted message is a tombstone: body, media and reactions are all
-    // scrubbed, so there is nothing left to react to. This route used to accept
-    // reactions here, which meant anyone could re-populate a removed message's
-    // reactions after the fact — and they'd render under "This artifact was
-    // removed." Reported as 404 to match the not-found case above rather than
-    // leaking that the tombstone exists.
-    if (message.deleted) return res.status(404).json({ message: 'Message not found' });
-
-    const existingIdx = message.reactions.findIndex(
-      (r) => r.user.toString() === req.user._id.toString() && r.emoji === emoji
+    const otherUsersReactions = {
+      $filter: {
+        input: { $ifNull: ['$reactions', []] },
+        as: 'reaction',
+        cond: { $ne: ['$$reaction.user', req.user._id] },
+      },
+    };
+    const sameReaction = {
+      $filter: {
+        input: { $ifNull: ['$reactions', []] },
+        as: 'reaction',
+        cond: {
+          $and: [
+            { $eq: ['$$reaction.user', req.user._id] },
+            { $eq: ['$$reaction.emoji', emoji] },
+          ],
+        },
+      },
+    };
+    const message = await Message.findOneAndUpdate(
+      { _id: msgId, alignmentId, deleted: false },
+      [{
+        $set: {
+          reactions: {
+            $cond: [
+              { $gt: [{ $size: sameReaction }, 0] },
+              otherUsersReactions,
+              { $concatArrays: [otherUsersReactions, [{ emoji, user: req.user._id }]] },
+            ],
+          },
+        },
+      }],
+      { new: true },
     );
-
-    if (existingIdx > -1) {
-      message.reactions.splice(existingIdx, 1);
-    } else {
-      message.reactions = message.reactions.filter((r) => r.user.toString() !== req.user._id.toString());
-      message.reactions.push({ emoji, user: req.user._id });
-    }
-
-    await message.save();
+    if (!message) return res.status(404).json({ message: 'Message not found' });
 
     const io = req.app.get('io');
     if (io) {
@@ -301,7 +359,7 @@ router.post('/:alignmentId/reaction', protect, messageLimiter, async (req, res) 
   }
 });
 
-router.delete('/:alignmentId/:msgId', protect, async (req, res) => {
+router.delete('/:alignmentId/:msgId', protect, destructiveActionLimiter, async (req, res) => {
   const { alignmentId, msgId } = req.params;
   try {
     const match = await Alignment.findOne({ _id: alignmentId, users: req.user._id, isActive: true });
@@ -311,13 +369,14 @@ router.delete('/:alignmentId/:msgId', protect, async (req, res) => {
     if (!message) return res.status(404).json({ message: 'Message not found' });
     if (message.senderId.toString() !== req.user._id.toString()) return res.status(403).json({ message: 'Can only delete your own messages' });
 
-    // 🧹 CLOUDINARY WIPE: If the message contained a photo or voice note, vaporize it from cloud storage!
+    // 🧹 CLOUDINARY WIPE: Remove the uploaded media asset when its message is deleted.
     if (message.mediaUrl || message.image) {
       deleteCloudinaryFile(message.mediaUrl || message.image, req.user._id);
     }
 
     message.deleted = true;
     message.text = '';
+    message.caption = '';
     message.image = '';
     message.mediaUrl = '';
     // Reactions are scrubbed too. They used to survive deletion, which left

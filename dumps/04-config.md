@@ -1,7 +1,7 @@
 # Chunk 04 — Config
 
-> Matchalize · `config` · files 4 of 27 chunks · 15 file(s) · 30 KB · ~8,798 tokens
-> Generated 2026-10-17 21:10.
+> Matchalize · `config` · files 4 of 28 chunks · 15 file(s) · 31 KB · ~8,934 tokens
+> Generated 2026-10-18 20:29.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -72,6 +72,18 @@ jobs:
       # won't catch.
       - name: Build client
         run: npm run build --prefix client
+
+      # Pure-logic unit tests, no database or browser required. Both suites use
+      # the built-in node:test runner, so this adds no dependency.
+      #
+      # Roulette's camera teardown is deliberately covered here rather than left
+      # to end-of-project device testing: a leaked camera is invisible to a
+      # reviewer but is the failure that reaches users, and the guarantee lives
+      # in `stopStream`, which is testable without hardware.
+      - name: Test server
+        run: npm test --prefix server
+      - name: Test client
+        run: npm test --prefix client
 
       # dumps/ is committed and gets handed to other tools, so it must not
       # silently go stale: a stale dump means a reader gets code that no longer
@@ -219,7 +231,7 @@ dist-ssr
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <!-- Initial chrome colour, replaced per-screen at runtime by utils/chrome.js.
          Defaults to the Deck's night desk so there is no white flash on first paint. -->
     <meta name="theme-color" content="#131313" />
@@ -260,6 +272,7 @@ dist-ssr
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
+    "test": "node --test",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -352,8 +365,8 @@ dist-ssr
 ### ./client/public/sw.js
 
 ```
-// v2 → v3: the v2 cache had no eviction and was caching /uploads/ (photos and
-// voice notes), which are cookie-gated but served from cache without a server
+// v2 → v3: the v2 cache had no eviction and was caching /uploads/ (photos),
+// which are cookie-gated but served from cache without a server
 // request. Bumping the name makes `activate` delete the whole old cache on the
 // next load, purging what was already stored on real devices.
 // Bump this every time caching behaviour changes — it is the only eviction
@@ -396,17 +409,17 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   // NEVER cache API responses — otherwise stale chat/notification data could be served
   if (url.pathname.startsWith('/api/')) return;
-  // NEVER cache /uploads/ — these are the user's own photos and voice notes.
+  // NEVER cache /uploads/ — these are the user's own photos.
   //
   // Two reasons, and the second is the serious one:
   //   1. They are unbounded user media. The cache below is cache-first with no
-  //      eviction and no TTL, so every voice note ever played accumulated in the
+  //      eviction and no TTL, so every uploaded photo accumulated in the
   //      browser permanently — the cache only clears when someone hand-edits
   //      CACHE_NAME (see `activate`).
   //   2. `/uploads` is served behind `protect` (server/index.js). A cache hit is
   //      returned WITHOUT any request to the server, so no cookie is ever
   //      checked. On a shared device the next person to open the app would be
-  //      served the previous user's photos and voice notes straight out of the
+  //      served the previous user's photos straight out of the
   //      cache.
   //
   // In production uploads are Cloudinary URLs (cross-origin, already skipped by
@@ -617,7 +630,6 @@ legacy-peer-deps=true
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "express-mongo-sanitize": "^2.2.0",
     "express-rate-limit": "^7.3.1",
     "express-validator": "^7.1.0",
     "helmet": "^7.1.0",

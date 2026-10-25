@@ -4,6 +4,8 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import OTP from '../models/OTP.js';
 import User from '../models/User.js';
+import ModerationLedger from '../models/ModerationLedger.js';
+import { fingerprintModerationEmail, preserveShadowban } from '../utils/moderationLedger.js';
 import { validate } from '../middleware/validate.js';
 import { protect, setAuthCookie, clearAuthCookie } from '../middleware/auth.js';
 import { APP_CONSTANTS } from '../config/appData.js';
@@ -12,7 +14,7 @@ import { hashOtp, verifyOtp, normalizeEmail } from '../utils/otpHash.js';
 import College from '../models/College.js';
 import { emailMatchesCollege } from '../utils/collegeDomain.js';
 import { isCollegeAllowed, COLLEGE_GATE_MESSAGE } from '../utils/campusGate.js';
-import { verifyOtpLimiter, otpEmailLimiter, reverifyLimiter } from '../middleware/rateLimiters.js';
+import { verifyOtpLimiter, otpEmailLimiter, otpIpLimiter, reverifyLimiter } from '../middleware/rateLimiters.js';
 
 const router = express.Router();
 
@@ -147,6 +149,7 @@ const graceDaysLeft = (due, now = new Date()) => {
 // @access  Public
 router.post(
   '/send-otp',
+  otpIpLimiter,
   otpEmailLimiter,
   [
     body('email')
@@ -273,6 +276,7 @@ router.post(
       if (user && user.isDeleted) {
         const deletedAt = user.deletedAt ? user.deletedAt.getTime() : 0;
         if (Date.now() - deletedAt >= RETENTION_MS) {
+          await preserveShadowban(user);
           await User.deleteOne({ _id: user._id });
           user = null; // fall through to fresh-account creation
         }
@@ -291,6 +295,9 @@ router.post(
       }
 
       if (!user) {
+        const moderationRecord = await ModerationLedger.findOne({
+          emailFingerprint: fingerprintModerationEmail(email),
+        }).lean();
         user = await User.create({
           email,
           college: college.name,
@@ -300,6 +307,11 @@ router.post(
           status: 'active',
           lastVerifiedAt: new Date(),
           reverifyDue: nextReverifyDate(),
+          ...(moderationRecord ? {
+            shadowbanScore: moderationRecord.shadowbanScore,
+            shadowbannedAt: moderationRecord.shadowbannedAt,
+            contentFrozen: moderationRecord.contentFrozen,
+          } : {}),
         });
       } else {
         // 🛡️ Block suspended users from logging in
@@ -360,12 +372,9 @@ router.post(
           collegeCode: user.collegeCode,
           isOnboarded: user.isOnboarded,
           name: user.name,
+          isUnderReview: Boolean(user.shadowbannedAt || user.contentFrozen),
           suspended: user.suspended,
-          suspendedReason: user.suspendedReason,
           isDeleted: user.isDeleted,
-          shadowbanScore: user.shadowbanScore || 0,
-          shadowbannedAt: user.shadowbannedAt || null,
-          contentFrozen: user.contentFrozen || false,
           status: user.status || 'active',
           reverifyDue: user.reverifyDue || null,
           // Returned so the client can decide whether to show the annual
@@ -532,17 +541,30 @@ router.get('/reverify/status', protect, async (req, res) => {
 // @desc    Clear auth cookie
 // @access  Public
 router.post('/logout', async (req, res) => {
+  let userId = null;
   try {
     const token =
       req.cookies?.[APP_CONSTANTS.AUTH_COOKIE_NAME] ||
       (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
     if (token) {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      await User.findByIdAndUpdate(decoded.id, { lastLogoutAt: new Date() });
+      userId = decoded.id;
     }
   } catch {
     // Invalid/expired token — still proceed to clear the cookie
   }
+
+  if (userId) {
+    req.app.get('io')?.in(userId.toString()).disconnectSockets(true);
+    try {
+      await User.findByIdAndUpdate(userId, { lastLogoutAt: new Date() });
+    } catch (error) {
+      console.error('Logout session invalidation error:', error);
+      clearAuthCookie(res);
+      return res.status(500).json({ message: 'Could not fully invalidate the session' });
+    }
+  }
+
   clearAuthCookie(res);
   res.status(200).json({ message: 'Logged out successfully' });
 });
@@ -555,7 +577,11 @@ router.get('/me', protect, async (req, res) => {
     // protect attaches a LIGHT user (route-critical fields only) for performance.
     // /me must return the FULL profile (photos, prompts, bio, etc.), so re-fetch it.
     const fullUser = await User.findById(req.user._id);
-    res.status(200).json(fullUser);
+    if (!fullUser) return res.status(404).json({ message: 'User not found' });
+    res.status(200).json({
+      ...fullUser.toJSON(),
+      isUnderReview: Boolean(fullUser.shadowbannedAt || fullUser.contentFrozen),
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });

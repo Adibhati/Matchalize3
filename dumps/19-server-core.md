@@ -1,10 +1,12 @@
 # Chunk 19 — Server Core
 
-> Matchalize · `server-core` · files 19 of 27 chunks · 18 file(s) · 93 KB · ~27,348 tokens
-> Generated 2026-10-17 21:10.
+> Matchalize · `server-core` · files 19 of 28 chunks · 20 file(s) · 97 KB · ~28,505 tokens
+> Generated 2026-10-18 20:29.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
+> - `./server/models/Message.js`
+> - `./server/models/ModerationLedger.js`
 > - `./server/models/Notification.js`
 > - `./server/models/OTP.js`
 > - `./server/models/Report.js`
@@ -25,6 +27,151 @@
 > - `./server/scripts/verify-deck-metrics.mjs`
 
 ---
+### ./server/models/Message.js
+
+```
+import mongoose from 'mongoose';
+
+const messageSchema = new mongoose.Schema(
+  {
+    alignmentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Alignment',
+      required: true,
+    },
+    senderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    type: {
+      type: String,
+      // Keep the legacy `audio` value readable for existing records; the message
+      // route rejects new messages of that type.
+      enum: ['text', 'image', 'opening_letter', 'audio'],
+      default: 'text',
+    },
+    text: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    clientMsgId: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
+    // ⚠️ DEPRECATED — `image` is a legacy duplicate of `mediaUrl`. Every writer used
+    // to set both to the identical value, so ~half of each message's media bytes
+// were stored twice and nothing read the copy. Writers no longer set it
+    // (routes/messages.js, routes/discover.js, routes/notifications.js).
+    //
+    // It is KEPT in the schema on purpose: existing documents still carry a value
+    // here, and the delete route reads `message.mediaUrl || message.image` so
+    // old messages still get their Cloudinary asset destroyed. Dropping the
+    // field is a separate change, to be done only after confirming no legacy
+    // document has an empty mediaUrl.
+    image: {
+      type: String,
+      default: '',
+    },
+    // The single source of truth for message media (photos).
+    mediaUrl: {
+      type: String,
+      default: '',
+    },
+    // ⚠️ DEPRECATED — `caption` is a dead field. No route ever wrote a value here
+    // and the client never read it; the caption under a photo is always rendered
+    // from `text`. Retained so existing documents still load. The search route's
+    // `caption` branch was removed too, since it could never match.
+    caption: {
+      type: String,
+      default: '',
+    },
+    deliveryStatus: {
+      type: String,
+      enum: ['pending', 'sent', 'read'],
+      default: 'sent',
+    },
+    replyTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Message',
+      default: null,
+    },
+    reactions: [
+      {
+        emoji: { type: String, required: true },
+        user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+      },
+    ],
+    deleted: {
+      type: Boolean,
+      default: false,
+    },
+    readAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+messageSchema.index({ alignmentId: 1, createdAt: 1 });
+// 🚀 COLLISION-PROOF PAGINATION: Instant ObjectId-based cursor queries
+messageSchema.index({ alignmentId: 1, _id: -1 });
+
+// Speeds up moderation queries and global user cleanup operations
+messageSchema.index({ senderId: 1, createdAt: -1 });
+// 🔒 ONE opening letter per alignment, enforced at the DB level.
+// Partial filter → normal text/image messages are NOT affected
+// (an alignment can still have thousands of those). This index is what makes
+// the upserts in discover.js + notifications.js truly race-safe.
+messageSchema.index(
+  { alignmentId: 1, type: 1 },
+  { unique: true, partialFilterExpression: { type: 'opening_letter' } }
+);
+
+const Message = mongoose.model('Message', messageSchema);
+export default Message;
+
+```
+
+### ./server/models/ModerationLedger.js
+
+```
+import mongoose from 'mongoose';
+
+const moderationLedgerSchema = new mongoose.Schema(
+  {
+    // Keyed HMAC only; the deleted user's email is never stored in this ledger.
+    emailFingerprint: {
+      type: String,
+      required: true,
+      unique: true,
+    },
+    shadowbannedAt: {
+      type: Date,
+      required: true,
+    },
+    shadowbanScore: {
+      type: Number,
+      default: 0,
+    },
+    contentFrozen: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  { timestamps: true }
+);
+
+const ModerationLedger = mongoose.model('ModerationLedger', moderationLedgerSchema);
+export default ModerationLedger;
+
+```
+
 ### ./server/models/Notification.js
 
 ```
@@ -226,7 +373,7 @@ const reportSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
 });
 
-reportSchema.index({ reporter: 1, reported: 1 }, { unique: true });
+reportSchema.index({ reporter: 1, reported: 1, createdAt: -1 });
 
 const Report = mongoose.model('Report', reportSchema);
 export default Report;
@@ -262,6 +409,7 @@ export default mongoose.model('Setting', settingSchema);
 ```
 import mongoose from 'mongoose';
 import { randomInt } from 'node:crypto';
+import { GENDERS } from '../config/appData.js';
 
 const userSchema = new mongoose.Schema(
   {
@@ -305,6 +453,7 @@ const userSchema = new mongoose.Schema(
     gender: {
       type: String,
       default: '',
+      maxlength: 50,
     },
     pronouns: {
       type: String,
@@ -404,7 +553,7 @@ const userSchema = new mongoose.Schema(
       default: [],
     },
     intent: {
-      type: [String],
+      type: [{ type: String, maxlength: 50 }],
       default: [],
     },
     // Optional self-described gap year. Still discoverable — no ranking penalty —
@@ -414,7 +563,7 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
     interestedIn: {
-      type: [String],
+      type: [{ type: String, enum: [...GENDERS, 'Everyone'], maxlength: 50 }],
       default: [],
     },
     // ageRange was removed here: it was written by PUT /profile but read by
@@ -424,7 +573,7 @@ const userSchema = new mongoose.Schema(
     // No migration: existing documents keep the orphan subdocument and no code
     // path reads it.
     interests: {
-      type: [String],
+      type: [{ type: String, maxlength: 50 }],
       default: [],
     },
     onboardingStep: {
@@ -593,16 +742,27 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// Legacy columns that predate the current schema and are no longer read or
-// written anywhere in the app, but still sit in the database. Mongoose passes
-// through any DB field it does not know about, so they were being serialised
-// to clients on /me and the login response — including a password hash and
-// salt. Strip them at serialisation time rather than deleting user data.
-const LEGACY_PRIVATE_FIELDS = ['passwordHash', 'passwordSalt', 'emailVerified', 'otp', 'otpExpiry'];
+// Legacy database values and internal user state must never be serialized to
+// clients. Strip them here as a final safeguard without deleting stored data.
+const PRIVATE_FIELDS_TO_OMIT = [
+  'passwordHash',
+  'passwordSalt',
+  'emailVerified',
+  'otp',
+  'otpExpiry',
+  'shadowbanScore',
+  'shadowbannedAt',
+  'contentFrozen',
+  'randomSeed',
+  'pushSubscription',
+  'adminNotes',
+  'suspendedReason',
+  'lastLogoutAt',
+];
 
 userSchema.set('toJSON', {
   transform: (doc, ret) => {
-    for (const field of LEGACY_PRIVATE_FIELDS) {
+    for (const field of PRIVATE_FIELDS_TO_OMIT) {
       delete ret[field];
     }
     return ret;

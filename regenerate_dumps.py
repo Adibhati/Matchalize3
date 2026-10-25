@@ -80,7 +80,7 @@ SKIP_DIRS = {
 }
 # Paths (relative fragments) excluded from the walk.
 SKIP_PATH_FRAGMENTS = ("tests/qa/videos", "tests/qa/media", "tests/qa/report")
-SKIP_NAMES = {".DS_Store", "package-lock.json", ".env", ".env.local"}
+SKIP_NAMES = {".DS_Store", "package-lock.json", ".env", ".env.local", ".env.test"}
 
 # Text types worth inlining verbatim.
 SOURCE_EXTS = {

@@ -2,21 +2,12 @@
  * 🪜 PROFILE LADDER BACKFILL
  *
  * `User.profileScore` is owned by utils/ladder.js and recomputed on every
- * profile write. But documents that existed BEFORE the field landed never go
- * through a write, so they keep the schema default of 0.
+ * profile write. Whenever the scoring formula changes, existing documents
+ * retain their old scores until this script recalculates them.
  *
- * That matters more than it looks: 0 is below LADDER.publish (45), so every
- * pre-existing user would read as "not published" the moment the deck starts
- * gating on this — they'd lose their deck until they edited their profile once.
- *
- * This script recomputes the score for every user from the fields already on
- * the document. Safe to re-run: it only writes rows whose score actually
- * differs, and reports what it changed.
- *
- * It also carries the ladder's invariants as runtime assertions. Re-weighting
- * WEIGHTS in utils/ladder.js without preserving the gate promise would ship a
- * gate that tells users "add a photo and a prompt" and then keeps them locked
- * — so this script fails loudly instead.
+ * This script recomputes every user's score from public profile content. It is
+ * safe to re-run: it writes only rows whose score differs and reports changes.
+ * Runtime assertions protect the public-content rules and the 100-point cap.
  *
  * USAGE
  *   node server/scripts/backfill-ladder.mjs           # report only, changes nothing
@@ -48,48 +39,62 @@ const loadEnv = () => {
 const EXECUTE = process.argv.includes('--execute');
 
 /**
- * Fail fast if the weights no longer satisfy the design. These are cheap and
- * they protect the one promise the gate makes out loud.
+ * Fail fast if the weights no longer satisfy the public-content design.
  */
 const assertInvariants = () => {
   const photo = (n) => Array.from({ length: n }, (_, i) => `photo${i}.jpg`);
   const prompts = (n) =>
     Array.from({ length: n }, (_, i) => ({ question: `q${i}`, answer: `a${i}` }));
 
-  const publishSet = {
-    photos: photo(1),
+  const requiredFactsOnly = {
     gender: 'Female',
     name: 'Anaya',
     year: 'UG',
+    age: 21,
     intent: ['Dating'],
+    interestedIn: ['Male'],
+    currentLatLng: { lat: 1, lng: 1 },
   };
 
-  const publish = computeScore(publishSet);
-  if (publish !== LADDER.publish) {
+  const requiredFactsScore = computeScore(requiredFactsOnly);
+  if (requiredFactsScore !== 0) {
     throw new Error(
-      `Publish band scores ${publish}, expected ${LADDER.publish}. ` +
-        `The 0→${LADDER.publish} weights no longer sum to the threshold.`,
+      `Required facts/preferences scored ${requiredFactsScore}; they must not add profile-strength points.`,
     );
   }
 
-  const unlocked = computeScore({ ...publishSet, photos: photo(2), prompts: prompts(1) });
+  const mainPhoto = computeScore({ ...requiredFactsOnly, photos: photo(1) });
+  if (mainPhoto !== 25) {
+    throw new Error(
+      `A main photo scores ${mainPhoto}, expected 25.`,
+    );
+  }
+
+  const unlocked = computeScore({
+    photos: photo(1),
+    bio: 'A little about me.',
+    prompts: prompts(1),
+  });
   if (unlocked < LADDER.interact) {
     throw new Error(
-      `GATE INVARIANT BROKEN: one photo + one prompt scores ${unlocked}, ` +
-        `which is below interact (${LADDER.interact}). The gate would promise ` +
-        `an unlock and then keep the user locked. photo2 + prompt1 must sum ` +
-        `to ${LADDER.interact - LADDER.publish}.`,
+      `A main photo, bio, and answered prompt score ${unlocked}, ` +
+        `below interact (${LADDER.interact}).`,
     );
   }
 
-  const complete = computeScore({ ...publishSet, photos: photo(4), prompts: prompts(3) });
+  const complete = computeScore({
+    photos: photo(4),
+    bio: 'A little about me.',
+    prompts: prompts(3),
+    interests: ['Music'],
+  });
   if (complete !== LADDER.aspirational) {
     throw new Error(
       `A fully built profile scores ${complete}, expected ${LADDER.aspirational}.`,
     );
   }
 
-  console.log('✅ Invariants hold: publish=45, photo+prompt unlocks, full=100');
+  console.log('✅ Invariants hold: required facts=0, main photo=25, unlock=45, full=100');
 };
 
 const run = async () => {
@@ -110,7 +115,7 @@ const run = async () => {
   // there is no reason to pull whole documents into memory.
   const users = await User.find(
     {},
-    { name: 1, email: 1, photos: 1, prompts: 1, gender: 1, year: 1, intent: 1, profileScore: 1 },
+    { name: 1, email: 1, photos: 1, bio: 1, prompts: 1, interests: 1, profileScore: 1 },
   ).lean();
 
   const ops = [];

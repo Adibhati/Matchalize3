@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, LayoutGroup, motion } from 'framer-motion';
 import { AuthProvider, useAuth } from './utils/AuthContext';
 import { AppConfigProvider } from './utils/AppConfigContext';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
@@ -14,6 +14,9 @@ import { useIsDesktop } from './utils/useIsDesktop';
 
 function AppInner() {
   const isDesktop = useIsDesktop();
+  const [isTabletViewport, setIsTabletViewport] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 601px)').matches
+  );
   const { logout } = useAuth();
   const [screen, setScreen] = useState(() => {
     try {
@@ -28,6 +31,14 @@ function AppInner() {
       return 'splash';
     }
   });
+
+  useEffect(() => {
+    const tabletViewport = window.matchMedia('(min-width: 601px)');
+    const updateTabletViewport = () => setIsTabletViewport(tabletViewport.matches);
+    updateTabletViewport();
+    tabletViewport.addEventListener('change', updateTabletViewport);
+    return () => tabletViewport.removeEventListener('change', updateTabletViewport);
+  }, []);
 
   // Admin check AFTER all hooks (Rules of Hooks)
   if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
@@ -44,57 +55,69 @@ function AppInner() {
 
   return (
     <main style={{
-      maxWidth: isDesktop ? '100%' : '430px',
+      maxWidth: '100%',
       margin: '0 auto',
-      height: screen === 'splash' ? 'auto' : '100dvh',
-      maxHeight: screen === 'splash' ? 'none' : '100dvh',
+      height: '100dvh',
+      maxHeight: '100dvh',
       backgroundColor: 'var(--surface-alt)',
       display: 'flex',
       flexDirection: 'column',
       position: 'relative',
-      overflow: screen === 'splash' ? 'visible' : 'hidden',
-      overscrollBehavior: screen === 'splash' ? 'auto' : 'none'
+      overflow: 'hidden',
+      overscrollBehavior: 'none'
     }}>
-      <AnimatePresence mode="wait">
-        {screen === 'splash' && (
-          <motion.div key="splash" initial={{ opacity: 1 }} exit={{ opacity: 0, scale: 0.98 }} transition={{ duration: 0.5 }}>
-            <Splash onEnter={() => setScreen('auth')} />
-          </motion.div>
-        )}
-        
-        {screen === 'auth' && (
-          <motion.div key="auth" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.6, delay: 0.2 }}>
-            <Auth onSuccess={() => {
-              const u = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
-              // A returning student whose annual check is due lands on the
-              // re-verify step, not onboarding — they're already onboarded.
-              setScreen(u.reverifyRequired ? 'reverify' : u.isOnboarded ? 'home' : 'onboarding');
-            }} />
-          </motion.div>
-        )}
+      <LayoutGroup id="splash-auth-transition">
+        <AnimatePresence mode="sync">
+          {screen === 'splash' && (
+            <motion.div key="splash" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} initial={{ opacity: 1 }} exit={{ opacity: 0, scale: 0.98 }} transition={{ duration: 0.5 }}>
+              <Splash onEnter={() => setScreen('auth')} />
+            </motion.div>
+          )}
+
+          {screen === 'auth' && (
+            <motion.div
+              key="auth"
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
+              initial={{ opacity: 0, y: 18, scale: 0.985 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.99 }}
+              transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <Auth onSuccess={() => {
+                const u = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
+                // A returning student whose annual check is due lands on the
+                // re-verify step, not onboarding — they're already onboarded.
+                setScreen(u.reverifyRequired ? 'reverify' : u.isOnboarded ? 'home' : 'onboarding');
+              }} />
+            </motion.div>
+          )}
 
         {screen === 'reverify' && (
-          <motion.div key="reverify" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }}>
+          <motion.div key="reverify" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }}>
             <Auth onSuccess={() => setScreen('home')} reverifyOnly />
           </motion.div>
         )}
         
         {screen === 'onboarding' && (
-          <motion.div key="onboarding" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.6, delay: 0.2 }}>
+          <motion.div key="onboarding" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.6, delay: 0.2 }}>
             <AppConfigProvider>
-              <Onboarding onComplete={() => setScreen('home')} />
+              <Onboarding
+                onComplete={() => setScreen('home')}
+                onSignOut={handleSignOut}
+              />
             </AppConfigProvider>
           </motion.div>
         )}
         
-        {screen === 'home' && (
-          <motion.div key="home" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <AppConfigProvider>
-              <AppShell onSignOut={handleSignOut} />
-            </AppConfigProvider>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          {screen === 'home' && (
+            <motion.div key="home" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+              <AppConfigProvider>
+                <AppShell onSignOut={handleSignOut} />
+              </AppConfigProvider>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </LayoutGroup>
     </main>
   );
 }

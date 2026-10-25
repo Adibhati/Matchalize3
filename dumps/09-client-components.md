@@ -1,7 +1,7 @@
 # Chunk 09 — Client Components
 
-> Matchalize · `client-components` · files 9 of 27 chunks · 12 file(s) · 98 KB · ~28,649 tokens
-> Generated 2026-10-17 21:10.
+> Matchalize · `client-components` · files 9 of 28 chunks · 11 file(s) · 95 KB · ~27,878 tokens
+> Generated 2026-10-18 20:29.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -16,7 +16,6 @@
 > - `./client/src/components/chat/MessageActionMenu.jsx`
 > - `./client/src/components/chat/MessageBubble.jsx`
 > - `./client/src/components/chat/PhotoViewer.jsx`
-> - `./client/src/components/chat/ReplyPreview.jsx`
 
 ---
 ### ./client/src/components/NotificationDrawer.jsx
@@ -59,6 +58,11 @@ const DRAWER_CSS = `
 const NotificationDrawer = ({ onClose, onSelectMatch }) => {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [notificationTotal, setNotificationTotal] = useState(0);
+  const [loadMoreError, setLoadMoreError] = useState('');
   const [selectedProfile, setSelectedProfile] = useState(null);
   const [decliningIds, setDecliningIds] = useState(new Set());
 
@@ -70,10 +74,39 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
     try {
       const response = await api.get('/notifications');
       setNotifications(response.notifications || []);
+      setHasMore(Boolean(response.hasMore));
+      setPage(response.page || 1);
+      setNotificationTotal(response.total ?? response.notifications?.length ?? 0);
     } catch (err) {
       console.error('Failed to fetch letters:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadMoreNotifications = async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    setLoadMoreError('');
+    try {
+      const nextPage = page + 1;
+      const response = await api.get(`/notifications?page=${nextPage}`);
+      const nextNotifications = response.notifications || [];
+      setNotifications((previous) => {
+        const existingIds = new Set(previous.map((notification) => notification._id));
+        return [
+          ...previous,
+          ...nextNotifications.filter((notification) => !existingIds.has(notification._id)),
+        ];
+      });
+      setPage(response.page || nextPage);
+      setHasMore(Boolean(response.hasMore));
+      setNotificationTotal(response.total ?? notificationTotal);
+    } catch (err) {
+      console.error('Failed to load more letters:', err);
+      setLoadMoreError('Could not load older requests. Try again.');
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -83,6 +116,7 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
     try {
       const response = await api.post(`/notifications/${id}/accept`);
       setNotifications((prev) => prev.filter((n) => n._id !== id));
+      setNotificationTotal((total) => Math.max(0, total - 1));
       setSelectedProfile(null);
 
       if (onSelectMatch) {
@@ -104,6 +138,7 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
 
     setTimeout(() => {
       setNotifications((prev) => prev.filter((n) => n._id !== id));
+      setNotificationTotal((total) => Math.max(0, total - 1));
       setDecliningIds(prev => {
         const next = new Set(prev);
         next.delete(id);
@@ -229,7 +264,7 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
           <h2 style={styles.heading}>Letterbox</h2>
           {!loading && notifications.length > 0 && (
-            <span style={styles.badge}>{notifications.length} pending</span>
+            <span style={styles.badge}>{notificationTotal} pending</span>
           )}
         </div>
         {onClose && (
@@ -302,6 +337,25 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
                 <AnimatePresence>
                   {legacy.map(renderRow)}
                 </AnimatePresence>
+              </div>
+            )}
+
+            {hasMore && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '8px 0 24px' }}>
+                {loadMoreError && (
+                  <p role="alert" style={{ ...styles.emptyText, color: t.red, textAlign: 'center' }}>
+                    {loadMoreError}
+                  </p>
+                )}
+                <button
+                  className="lb-slam"
+                  type="button"
+                  onClick={loadMoreNotifications}
+                  disabled={loadingMore}
+                  style={styles.loadMoreBtn}
+                >
+                  {loadingMore ? 'Loading…' : loadMoreError ? 'Try again' : 'Load more'}
+                </button>
               </div>
             )}
 
@@ -467,6 +521,13 @@ const styles = {
     boxShadow: `3px 3px 0 ${t.ink}`,
     width: 38, height: 38, display: 'flex', alignItems: 'center', justifyContent: 'center',
     cursor: 'pointer', flexShrink: 0, color: t.ink,
+  },
+  loadMoreBtn: {
+    padding: '10px 18px', backgroundColor: t.yellow, color: t.ink,
+    border: `2px solid ${t.ink}`, borderRadius: 10,
+    boxShadow: `3px 3px 0 ${t.ink}`, cursor: 'pointer',
+    fontFamily: t.fontMono, fontSize: 11, fontWeight: 700,
+    letterSpacing: '.1em', textTransform: 'uppercase',
   },
   contentArea: {
     flex: 1, padding: '14px 14px 0', overflowY: 'auto', position: 'relative', zIndex: 2,
@@ -1578,19 +1639,11 @@ const t = neu;
  * NEVER reveals scores, weights, tiers, or how many reports.
  *
  * Props:
- *   score: Number — user's shadowbanScore
+ *   isUnderReview: Boolean — safe status flag for the authenticated user
  *   onLearnMore: Function — callback to open Learn More sheet
- *
- * Visibility: score < 5.0 → null (don't render)
  */
-const ShadowbanBanner = ({ score = 0, onLearnMore }) => {
-  if (score < 5.0) return null;
-
-  const isHighTier = score >= 8.0;
-
-  /* high tier = red tile + red accent · low tier = coral tile + ink accent */
-  const tileBg = isHighTier ? t.red : t.coral;
-  const accent = isHighTier ? t.red : t.ink;
+const ShadowbanBanner = ({ isUnderReview = false, onLearnMore }) => {
+  if (!isUnderReview) return null;
 
   return (
     <motion.div
@@ -1610,19 +1663,18 @@ const ShadowbanBanner = ({ score = 0, onLearnMore }) => {
         position: 'relative',
       }}
     >
-      {/* Standard candy icon tile, colored by tier */}
       <div style={{
         width: 36,
         height: 36,
         borderRadius: 10,
-        backgroundColor: tileBg,
+        backgroundColor: t.coral,
         border: `2px solid ${t.ink}`,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,
       }}>
-        <AlertTriangle size={17} color={isHighTier ? '#fff' : t.ink} strokeWidth={2.4} />
+        <AlertTriangle size={17} color={t.ink} strokeWidth={2.4} />
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -1644,9 +1696,7 @@ const ShadowbanBanner = ({ score = 0, onLearnMore }) => {
           margin: '3px 0 0 0',
           lineHeight: 1.45,
         }}>
-          {isHighTier
-            ? 'Profile editing and photo uploads are temporarily limited.'
-            : 'New profile visibility may be temporarily limited.'}
+          'Profile editing may be temporarily limited.'
         </p>
       </div>
 
@@ -1664,7 +1714,7 @@ const ShadowbanBanner = ({ score = 0, onLearnMore }) => {
           fontWeight: 700,
           letterSpacing: '.1em',
           textTransform: 'uppercase',
-          color: accent,
+          color: t.ink,
           cursor: 'pointer',
           whiteSpace: 'nowrap',
           flexShrink: 0,
@@ -2099,7 +2149,6 @@ import { motion } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
 import { Check, CheckCheck } from 'lucide-react';
 import PolaroidCard from '../PolaroidCard';
-import CassettePlayer from '../CassettePlayer';
 import neu from '../../styles/neu';
 
 const t = neu;
@@ -2145,17 +2194,17 @@ const MessageBubble = ({
         </div>
       );
     }
-    if (message.type === 'audio') {
-      return (
-        <div data-no-longpress>
-          <CassettePlayer audioUrl={message.mediaUrl} themeColor={isMine ? t.yellow : t.ink2} />
-        </div>
-      );
-    }
     if (message.deleted) {
       return (
         <span style={{ fontStyle: 'italic', color: t.ink3, fontSize: '13px', fontFamily: t.fontBody }}>
           This artifact was removed.
+        </span>
+      );
+    }
+    if (message.type !== 'text' && message.type !== 'opening_letter') {
+      return (
+        <span style={{ fontStyle: 'italic', color: t.ink3, fontSize: '13px', fontFamily: t.fontBody }}>
+          This message type is no longer available.
         </span>
       );
     }
@@ -2186,6 +2235,7 @@ const MessageBubble = ({
       // fresh reactions to a message that had already been removed.
       onTouchStart={message.deleted ? undefined : startPress}
       onTouchEnd={message.deleted ? undefined : cancelPress}
+      onTouchCancel={message.deleted ? undefined : cancelPress}
       onTouchMove={message.deleted ? undefined : cancelPress}
       onMouseDown={message.deleted ? undefined : startPress}
       onMouseUp={message.deleted ? undefined : cancelPress}
@@ -2533,170 +2583,5 @@ backgroundColor: t.desk,
 };
 
 export default PhotoViewer;
-```
-
-### ./client/src/components/chat/ReplyPreview.jsx
-
-```
-import React, { memo } from 'react';
-import { motion } from 'framer-motion';
-import { triggerHaptic } from '../../utils/haptics';
-import { Image, Mic, X } from 'lucide-react';
-import neu from '../../styles/neu';
-
-const t = neu;
-
-const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
-  if (!replyTo) return null;
-
-  // Truncate text cleanly and assign proper iconography for media
-  const previewText = replyTo.text
-    ? replyTo.text.slice(0, 60) + (replyTo.text.length > 60 ? '…' : '')
-    : replyTo.type === 'image'
-    ? <><Image size={14} style={{ marginRight: '6px', verticalAlign: 'text-bottom' }} /> Photograph</>
-    : replyTo.type === 'audio'
-    ? <><Mic size={14} style={{ marginRight: '6px', verticalAlign: 'text-bottom' }} /> Voice Note</>
-    : 'Letter';
-
-  return (
-    <motion.div
-      initial={{ height: 0, opacity: 0 }}
-      animate={{ height: 'auto', opacity: 1 }}
-      exit={{ height: 0, opacity: 0 }}
-      transition={{ duration: 0.25, ease: [0.2, 0.8, 0.2, 1] }}
-      style={{
-        backgroundColor: t.paper,
-        borderTop: `1px solid ${t.ink}`,
-        overflow: 'hidden',
-        willChange: 'height, opacity', // GPU Promotion for layout animation
-        position: 'relative',
-        zIndex: 5,
-      }}
-    >
-      {/* Interactive Tactile Physics */}
-      <style>{`
-        .tactile-cancel-btn {
-          transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.2s ease;
-          will-change: transform;
-        }
-        @media (hover: hover) {
-          .tactile-cancel-btn:hover {
-            transform: translate3d(0, -2px, 0) scale3d(1.05, 1.05, 1);
-            background-color: var(--n-red) !important;
-            color: #fff !important;
-            border-color: var(--n-red) !important;
-          }
-        }
-        .tactile-cancel-btn:active {
-          transform: scale3d(0.92, 0.92, 1) translate3d(0, 0, 0) !important;
-          transition: transform 0.08s cubic-bezier(0, 0, 0.2, 1) !important;
-        }
-      `}</style>
-
-      {/* 
-        Inner wrapper with fixed padding. 
-        This prevents margin-collapse stuttering during Framer Motion height animations.
-      */}
-      <div style={{
-        padding: '12px 16px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '12px',
-        width: '100%',
-        boxSizing: 'border-box',
-      }}>
-        
-        {/* Cinematic Film Grain */}
-        <div 
-          aria-hidden="true" 
-          style={{ 
-            position: 'absolute', inset: 0, 
-            backgroundImage: `url("${t.grain || ''}")`, 
-            mixBlendMode: 'multiply', opacity: 0.5, pointerEvents: 'none', zIndex: 0 
-          }} 
-        />
-        
-        {/* Archival Reference Line */}
-        <div
-          aria-hidden="true"
-          style={{
-            width: '3px',
-            alignSelf: 'stretch',
-            backgroundColor: t.yellow,
-            borderRadius: '2px',
-            flexShrink: 0,
-            zIndex: 1,
-          }}
-        />
-        
-        {/* Typography Block */}
-        <div style={{ flex: 1, minWidth: 0, zIndex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          <div
-            style={{
-              fontFamily: t.fontBody,
-              fontSize: '10px',
-              fontWeight: 800,
-              letterSpacing: '1px',
-              textTransform: 'uppercase',
-              color: t.yellow,
-              lineHeight: 1,
-            }}
-          >
-            Replying to {otherName || 'letter'}
-          </div>
-          <div
-            style={{
-              fontFamily: t.fontMono,
-              fontSize: '13px',
-              fontWeight: 600,
-              color: t.ink2,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              display: 'flex',
-              alignItems: 'center',
-              lineHeight: 1.2,
-            }}
-          >
-            {previewText}
-          </div>
-        </div>
-        
-        {/* Action Button */}
-        <button
-          className="tactile-cancel-btn"
-          onClick={() => {
-            triggerHaptic('light');
-            onCancel();
-          }}
-          aria-label="Cancel reply"
-          style={{
-            backgroundColor: t.paper,
-            border: `2px solid ${t.ink}`,
-            borderRadius: '50%',
-            width: '28px',
-            height: '28px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: t.ink,
-            cursor: 'pointer',
-            padding: 0,
-            flexShrink: 0,
-            zIndex: 1,
-            outline: 'none',
-            WebkitTapHighlightColor: 'transparent',
-          }}
-        >
-          <X size={14} strokeWidth={2.5} color="currentColor" />
-        </button>
-
-      </div>
-    </motion.div>
-  );
-};
-
-// Memoize to prevent re-renders while the user is typing in the chat input
-export default memo(ReplyPreview);
 ```
 

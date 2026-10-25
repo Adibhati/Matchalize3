@@ -1,7 +1,7 @@
 # Chunk 16 — Client Pages
 
-> Matchalize · `client-pages` · files 16 of 27 chunks · 1 file(s) · 96 KB · ~27,947 tokens
-> Generated 2026-10-17 21:10.
+> Matchalize · `client-pages` · files 16 of 28 chunks · 1 file(s) · 95 KB · ~27,925 tokens
+> Generated 2026-10-18 20:29.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -729,8 +729,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
     onClick: () => { window.location.href = 'mailto:support@matchalize.com'; },
   };
 
-  const contentFrozen = userData?.contentFrozen ?? authUser?.contentFrozen ?? false;
-  const shadowbanScore = userData?.shadowbanScore ?? authUser?.shadowbanScore ?? 0;
+  const contentFrozen = userData?.isUnderReview ?? authUser?.isUnderReview ?? false;
 
   /* True when the draft differs from what's on the server. Drives both the Save
      button's enabled state and the discard-on-close guard.
@@ -1597,7 +1596,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
       <input type="file" accept="image/*" ref={fileInputRef} style={{ display: 'none' }} onChange={handlePhotoSelect} />
 
       <div style={{ position: 'relative', zIndex: 45 }}>
-        <ShadowbanBanner score={shadowbanScore} onLearnMore={() => setShowLearnMore(true)} />
+        <ShadowbanBanner isUnderReview={contentFrozen} onLearnMore={() => setShowLearnMore(true)} />
         {showLearnMore && <LearnMoreSheet onClose={() => setShowLearnMore(false)} />}
       </div>
 

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { randomInt } from 'node:crypto';
+import { GENDERS } from '../config/appData.js';
 
 const userSchema = new mongoose.Schema(
   {
@@ -43,6 +44,7 @@ const userSchema = new mongoose.Schema(
     gender: {
       type: String,
       default: '',
+      maxlength: 50,
     },
     pronouns: {
       type: String,
@@ -142,7 +144,7 @@ const userSchema = new mongoose.Schema(
       default: [],
     },
     intent: {
-      type: [String],
+      type: [{ type: String, maxlength: 50 }],
       default: [],
     },
     // Optional self-described gap year. Still discoverable — no ranking penalty —
@@ -152,7 +154,7 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
     interestedIn: {
-      type: [String],
+      type: [{ type: String, enum: [...GENDERS, 'Everyone'], maxlength: 50 }],
       default: [],
     },
     // ageRange was removed here: it was written by PUT /profile but read by
@@ -162,7 +164,7 @@ const userSchema = new mongoose.Schema(
     // No migration: existing documents keep the orphan subdocument and no code
     // path reads it.
     interests: {
-      type: [String],
+      type: [{ type: String, maxlength: 50 }],
       default: [],
     },
     onboardingStep: {
@@ -331,16 +333,27 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// Legacy columns that predate the current schema and are no longer read or
-// written anywhere in the app, but still sit in the database. Mongoose passes
-// through any DB field it does not know about, so they were being serialised
-// to clients on /me and the login response — including a password hash and
-// salt. Strip them at serialisation time rather than deleting user data.
-const LEGACY_PRIVATE_FIELDS = ['passwordHash', 'passwordSalt', 'emailVerified', 'otp', 'otpExpiry'];
+// Legacy database values and internal user state must never be serialized to
+// clients. Strip them here as a final safeguard without deleting stored data.
+const PRIVATE_FIELDS_TO_OMIT = [
+  'passwordHash',
+  'passwordSalt',
+  'emailVerified',
+  'otp',
+  'otpExpiry',
+  'shadowbanScore',
+  'shadowbannedAt',
+  'contentFrozen',
+  'randomSeed',
+  'pushSubscription',
+  'adminNotes',
+  'suspendedReason',
+  'lastLogoutAt',
+];
 
 userSchema.set('toJSON', {
   transform: (doc, ret) => {
-    for (const field of LEGACY_PRIVATE_FIELDS) {
+    for (const field of PRIVATE_FIELDS_TO_OMIT) {
       delete ret[field];
     }
     return ret;

@@ -2,7 +2,7 @@ import { readLocationOnce } from './geolocation.js';
 import { api } from './api';
 
 /**
- * 📍 REFRESH THE STORED POSITION WHEN THE APP OPENS.
+ * 📍 REFRESH THE STORED POSITION FOR USERS WHO CHOSE CURRENT LOCATION.
  *
  * ── WHY THIS EXISTS ────────────────────────────────────────────────────────
  * Location is otherwise written once and then read for 30 days. That is fine
@@ -12,14 +12,16 @@ import { api } from './api';
  * confidently wrong — and that is exactly the case location was added for.
  *
  * ── WHY IT IS NOT "TRACKING" ───────────────────────────────────────────────
- * ONE reading, each time the app is opened, compared server-side against what is
- * already stored. Nothing is watched while the app is closed, nothing is logged
- * between openings, and no history is kept. There is no `watchPosition` anywhere
- * in this codebase and there must never be one.
+ * One reading when the Deck opens, and after it returns from at least five
+ * minutes in the background, compared server-side against what is already stored.
+ * This only runs when the saved preference is GPS and the browser already reports
+ * geolocation permission as granted; it never triggers a permission prompt.
+ * Nothing is watched while the app is closed, nothing is logged between readings,
+ * and no history is kept. There is no `watchPosition` anywhere in this codebase.
  *
  * The browser does not notify us of movement on its own; a page that has been
- * closed for an hour cannot know it moved. Re-reading on open is the only honest
- * option that does not involve continuous tracking.
+ * closed for an hour cannot know it moved. A one-shot reading at these deliberate
+ * return points is the option that avoids continuous tracking.
  *
  * ── WHY IT IS SILENT ───────────────────────────────────────────────────────
  * No prompt, no toast, no navigation. The user opened the app to see people, not
@@ -50,6 +52,8 @@ export const GEO_PERMISSION = {
   PROMPT: 'prompt',
   UNSUPPORTED: 'unsupported',
 };
+
+export const LOCATION_PREFERENCE_UPDATED_EVENT = 'matchalize:location-preference-updated';
 
 /**
  * Ask the browser what it currently permits.
@@ -120,6 +124,15 @@ export const watchGeolocationPermission = (onChange) => {
 };
 export const syncLocationIfPermitted = async () => {
   try {
+    const permission = await readGeolocationPermission();
+    if (permission !== GEO_PERMISSION.GRANTED) {
+      return {
+        ok: false,
+        reason: permission === GEO_PERMISSION.DENIED ? 'denied' : 'not-granted',
+        permission,
+      };
+    }
+
     /* `readLocationOnce` never rejects and never throws — every failure resolves
        to `{ok: false, reason}`. The try/catch here is for the network call
        below, which can. */

@@ -1,11 +1,11 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import neu from '../styles/neu';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import ProfileCard from '../components/ProfileCard';
 import { closeAllPopouts } from '../components/PopoutItem';
 import DeckActions from '../components/DeckActions';
-import ProfileCardSkeleton from '../components/ProfileCardSkeleton';
 import { api } from '../utils/api';
 import { useAuth } from '../utils/AuthContext';
 import { useAppConfig } from '../utils/AppConfigContext';
@@ -24,14 +24,14 @@ import { useIsDesktop } from '../utils/useIsDesktop';
 import {
   syncLocationIfPermitted,
   releaseEphemeralLocation,
-  watchGeolocationPermission,
-  GEO_PERMISSION,
+  LOCATION_PREFERENCE_UPDATED_EVENT,
 } from '../utils/locationSync';
 import shuffle from '../utils/shuffle';
 import socket from '../utils/socket';
 import LocationNotice from '../components/LocationNotice';
-import DiscoverRebuildOverlay from '../components/DiscoverRebuildOverlay';
-import { RotateCw, Compass, AlertTriangle, X, Undo2, Heart } from 'lucide-react';
+import {
+  RotateCw, Compass, AlertTriangle, Heart, Undo2, X,
+} from 'lucide-react';
 
 /* Neubrutalist design tokens inspired by the supplied reference; preserve neu token compatibility. */
 const t = {
@@ -54,47 +54,14 @@ const t = {
   fontMono: "'IBM Plex Mono', monospace",
 };
 
-const slideVariants = {
-  enter: (direction = 'up') => ({
-    opacity: 0,
-    y: direction === 'down' ? -34 : 34,
-    scale: 0.985,
-    zIndex: 1,
-  }),
-  center: {
-    opacity: 1,
-    y: 0,
-    scale: 1,
-    zIndex: 2,
-    transition: {
-      type: 'spring',
-      stiffness: 280,
-      damping: 27,
-      mass: 0.85,
-    },
-  },
-  exit: (direction = 'up') => ({
-    opacity: 0,
-    y: direction === 'down' ? 42 : -42,
-    scale: 0.985,
-    zIndex: 1,
-    transition: {
-      duration: 0.19,
-      ease: [0.22, 1, 0.36, 1],
-    },
-  }),
-};
-
-const springTransition = {
-  type: 'spring',
-  stiffness: 280,
-  damping: 27,
-  mass: 0.85,
-};
-
 const MAX_GATE_RETRIES = 2;
 
-const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
+const Discover = ({
+  onSheetNearHeader,
+  onGoToProfile,
+  onPhoneReplyKeyboardChange,
+  isTabletLayout = false,
+}) => {
   const isDesktop = useIsDesktop();
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -103,42 +70,26 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
   const [fetchingMore, setFetchingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [deckExhausted, setDeckExhausted] = useState(false);
+  const [appendFetchFailed, setAppendFetchFailed] = useState(false);
   const [rebuiltAt, setRebuiltAt] = useState(0);
-  const [slideDirection, setSlideDirection] = useState('up');
   const [undoNonce, setUndoNonce] = useState(0);
+  const [undoAvailable, setUndoAvailable] = useState(false);
+  const [actionPending, setActionPending] = useState(false);
+  const [actionFlash, setActionFlash] = useState(null);
+  const stageRef = useRef(null);
+  const reduceMotion = useReducedMotion();
   const [merging, setMerging] = useState(false);
-  const [locationDenied, setLocationDenied] = useState(false);
-  const [showAlignmentModal, setShowAlignmentModal] = useState(false);
-  const [alignedProfile, setAlignedProfile] = useState(null);
 
   const actionPendingRef = useRef(false);
+  const waitingForDeckStateRef = useRef(null);
   const servedRef = useRef(0);
   const rebuiltTimer = useRef(null);
   const { user: myUser } = useAuth();
 
   const [locationRead, setLocationRead] = useState(null);
 
-  useEffect(() => {
-    if (!myUser?._id) return;
-    let alive = true;
-
-    api.get('/users/location')
-      .then((r) => {
-        if (alive) setLocationRead(r ?? null);
-      })
-      .catch(() => {});
-
-    return () => {
-      alive = false;
-    };
-  }, [myUser?._id]);
-
   const [showLearnMore, setShowLearnMore] = useState(false);
-  const shadowbanScore = myUser?.shadowbanScore || 0;
   const config = useAppConfig();
-
-  const [rebuildOverlay, setRebuildOverlay] = useState(false);
-  const rebuildOverlayTimer = useRef(null);
 
   const [myProfile, setMyProfile] = useState(null);
   const [myProfileState, setMyProfileState] = useState('loading');
@@ -206,6 +157,7 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
         resetDiscoverStore();
       } else {
         setFetchingMore(true);
+        setAppendFetchFailed(false);
       }
 
       try {
@@ -224,7 +176,7 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
             setDeckExhausted(!!data.deckExhausted);
             discoverStore.hasMore = false;
             saveDiscoverStore();
-            return;
+            return true;
           }
 
           setProfiles((prev) => {
@@ -251,9 +203,12 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
           clearTimeout(rebuiltTimer.current);
           rebuiltTimer.current = setTimeout(() => setRebuiltAt(0), 4000);
         }
+        return true;
       } catch (err) {
         console.error('Failed to fetch deck profiles:', err);
         if (!append) setError(err.message || 'Something went wrong');
+        else setAppendFetchFailed(true);
+        return false;
       } finally {
         setLoading(false);
         setFetchingMore(false);
@@ -271,111 +226,87 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
     return run;
   }, []);
 
-  const refreshLocation = useCallback(async () => {
-    const res = await syncLocationIfPermitted();
-
-    if (!res.ok) {
-      if (res.reason === 'denied') setLocationDenied(true);
-
-      toast.error(
-        res.reason === 'denied'
-          ? 'Location permission was denied. Enable it in browser settings.'
-          : res.reason === 'insecure-context'
-            ? 'Location only works on a secure connection.'
-            : "Couldn't get a location reading. Try again, or check phone GPS settings.",
-      );
-      return;
-    }
-
-    if (!res.moved) {
-      toast.info('Your location is already current.');
-      return;
-    }
-
+  const rebuildDeckForLocation = useCallback(async () => {
+    if (deckFetchInFlight.current) await deckFetchInFlight.current;
+    clearTimeout(rebuiltTimer.current);
     resetDiscoverStore();
     setProfiles([]);
     setCurrentIndex(0);
     setHasMore(true);
     setDeckExhausted(false);
-    setRebuiltAt(Date.now());
     servedRef.current = 0;
 
     await fetchProfiles(false);
-    toast.success('Location updated. Showing people near you.');
-  }, [fetchProfiles]);
-
-  const rebuildDeckForLocation = useCallback(async () => {
-    clearTimeout(rebuiltTimer.current);
-    clearTimeout(rebuildOverlayTimer.current);
-    resetDiscoverStore();
-    setProfiles([]);
-    setCurrentIndex(0);
-    setHasMore(true);
-    setDeckExhausted(false);
-    servedRef.current = 0;
-
-    rebuildOverlayTimer.current = setTimeout(
-      () => setRebuildOverlay(true),
-      250,
-    );
-
-    try {
-      await fetchProfiles(false);
-    } finally {
-      clearTimeout(rebuildOverlayTimer.current);
-      setRebuildOverlay(false);
-    }
   }, [fetchProfiles]);
 
   useEffect(() => {
-    if (!navigator?.permissions?.query) return;
     let alive = true;
+    let checkingLocation = false;
+    let hiddenAt = document.visibilityState === 'hidden' ? Date.now() : null;
 
-    navigator.permissions.query({ name: 'geolocation' })
-      .then((r) => {
-        if (!alive) return;
-        setLocationDenied(r.state === GEO_PERMISSION.DENIED);
-      })
-      .catch(() => {});
+    const checkLocation = async (releaseTemporaryGrant = false) => {
+      if (checkingLocation) return;
+      checkingLocation = true;
 
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-
-    (async () => {
       try {
-        await releaseEphemeralLocation();
-        const res = await syncLocationIfPermitted();
+        if (releaseTemporaryGrant) await releaseEphemeralLocation();
+        const savedLocation = await api.get('/users/location');
+        if (!alive) return;
+        setLocationRead(savedLocation ?? null);
 
-        if (!alive || !res.ok || !res.moved) return;
+        // The saved preference is authoritative. Never read GPS in college mode.
+        if (savedLocation?.locationSource !== 'gps') return;
 
-        resetDiscoverStore();
-        setProfiles([]);
-        setCurrentIndex(0);
-        setHasMore(true);
-        setDeckExhausted(false);
-        servedRef.current = 0;
-      } catch {
-        // Location maintenance must not interrupt Discover.
+        const result = await syncLocationIfPermitted();
+        if (!alive || !result.ok) return;
+
+        const refreshedLocation = await api.get('/users/location');
+        if (!alive) return;
+        setLocationRead(refreshedLocation ?? null);
+
+        if (result.moved) await rebuildDeckForLocation();
+      } catch (error) {
+        console.warn('Could not refresh the Deck location state:', error);
+      } finally {
+        checkingLocation = false;
       }
-    })();
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now();
+        return;
+      }
+      if (hiddenAt !== null && Date.now() - hiddenAt >= 5 * 60 * 1000) {
+        void checkLocation();
+      }
+      hiddenAt = null;
+    };
+
+    const onLocationPreferenceUpdated = async (event) => {
+      try {
+        const savedLocation = await api.get('/users/location');
+        if (!alive) return;
+        setLocationRead(savedLocation ?? null);
+        if (event.detail?.moved) await rebuildDeckForLocation();
+      } catch (error) {
+        console.warn('Could not update the Deck location preference:', error);
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener(LOCATION_PREFERENCE_UPDATED_EVENT, onLocationPreferenceUpdated);
+    void checkLocation(true);
 
     return () => {
       alive = false;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener(LOCATION_PREFERENCE_UPDATED_EVENT, onLocationPreferenceUpdated);
     };
-  }, []);
-
-  useEffect(() => watchGeolocationPermission((state) => {
-    setLocationDenied(state === GEO_PERMISSION.DENIED);
-  }), []);
+  }, [myUser?._id, rebuildDeckForLocation]);
 
   useEffect(() => () => {
     clearTimeout(rebuiltTimer.current);
-    clearTimeout(rebuildOverlayTimer.current);
   }, []);
 
   const refreshMerged = useCallback(async () => {
@@ -469,12 +400,10 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
       setCurrentIndex(next);
       discoverStore.currentIndex = next;
       saveDiscoverStore();
-      setSlideDirection('down');
       return;
     }
 
     if (currentIndex >= profiles.length) return;
-    setSlideDirection(direction);
 
     if (!isAction) {
       const passedProfile = profiles[currentIndex];
@@ -503,6 +432,109 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
     currentIndex, profiles, hasMore, deckExhausted, fetchingMore, fetchProfiles,
   ]);
 
+  const runActionTransition = useCallback(async (action, targetIndex, direction) => {
+    const waitingAction = action === 'pass' ? 'pass' : action === 'undo' ? 'undo' : 'align';
+    waitingForDeckStateRef.current = { targetIndex, action: waitingAction };
+
+    const isMatch = action === 'match';
+    if (reduceMotion) {
+      handleNextProfile(direction, true);
+      return;
+    }
+
+    const stage = stageRef.current;
+    const stageRect = stage?.getBoundingClientRect();
+    const fullViewport = isMatch || (!isDesktop && !isTabletLayout);
+    const transitionTarget = fullViewport
+      ? null
+      : stage?.querySelector('.pc-heroWrap');
+    const phoneNav = fullViewport
+      ? document.querySelector('nav[aria-label="Primary"]')
+      : null;
+    const phoneNavTop = phoneNav?.getBoundingClientRect().top ?? window.innerHeight;
+    const targetRect = fullViewport
+        ? { left: 0, top: 0, width: window.innerWidth, height: phoneNavTop }
+        : transitionTarget?.getBoundingClientRect() ?? stageRect;
+    const buttonLabel = action === 'pass'
+      ? 'Pass this profile'
+      : action === 'undo'
+        ? 'Go to previous profile — available for 5 seconds'
+        : 'Like this profile';
+    const button = [...(stage?.querySelectorAll('button[aria-label]') || [])]
+      .find((candidate) => candidate.getAttribute('aria-label') === buttonLabel
+        && candidate.getClientRects().length > 0);
+    const buttonRect = button?.getBoundingClientRect();
+    const rawOriginX = targetRect && buttonRect
+      ? buttonRect.left + buttonRect.width / 2 - targetRect.left
+      : (targetRect?.width ?? 0) / 2;
+    const rawOriginY = targetRect && buttonRect
+      ? buttonRect.top + buttonRect.height / 2 - targetRect.top
+      : (targetRect?.height ?? 0) / 2;
+    const width = targetRect?.width ?? 0;
+    const height = targetRect?.height ?? 0;
+    const originX = Math.min(Math.max(rawOriginX, 0), width);
+    const originY = Math.min(Math.max(rawOriginY, 0), height);
+    const diameter = 2 * Math.max(
+      Math.hypot(originX, originY),
+      Math.hypot(width - originX, originY),
+      Math.hypot(originX, height - originY),
+      Math.hypot(width - originX, height - originY),
+    ) + 24;
+    const color = isMatch
+      ? t.coral
+      : action === 'pass'
+        ? t.red
+        : action === 'undo'
+          ? t.yellow
+          : '#5BD98A';
+
+    setActionFlash({
+      phase: 'expand',
+      left: (targetRect?.left ?? stageRect?.left ?? 0) - (stageRect?.left ?? 0),
+      top: (targetRect?.top ?? stageRect?.top ?? 0) - (stageRect?.top ?? 0),
+      width,
+      height,
+      originX,
+      originY,
+      diameter,
+      color,
+      action,
+      fullViewport,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    handleNextProfile(direction, true);
+    await new Promise((resolve) => setTimeout(resolve, 320));
+    if (isMatch) {
+      setActionFlash(null);
+      return;
+    }
+    setActionFlash((current) => current ? { ...current, phase: 'reveal' } : current);
+    await new Promise((resolve) => setTimeout(resolve, 280));
+    setActionFlash(null);
+  }, [handleNextProfile, isDesktop, isTabletLayout, reduceMotion]);
+
+  const handleUndo = useCallback(async () => {
+    if (actionPendingRef.current || currentIndex <= 0) return false;
+    const previousProfile = profiles[currentIndex - 1];
+    if (!previousProfile?._id) return false;
+
+    actionPendingRef.current = true;
+    setActionPending(true);
+    try {
+      await api.post(`/discover/undo/${previousProfile._id}`, {});
+      setUndoAvailable(false);
+      await runActionTransition('undo', currentIndex - 1, 'down');
+      return true;
+    } catch (err) {
+      console.error('Undo pass failed:', err);
+      if (!err?.toasted) toast.error('Could not undo this pass. Please try again.');
+      actionPendingRef.current = false;
+      setActionPending(false);
+      return false;
+    }
+  }, [currentIndex, profiles, runActionTransition]);
+
   const handleAction = useCallback(async (action, payload = {}) => {
     if (actionPendingRef.current) return;
     if (currentIndex >= profiles.length) return;
@@ -527,6 +559,8 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
     }
 
     actionPendingRef.current = true;
+    setActionPending(true);
+    let waitingForNextState = false;
 
     try {
       if (action === 'align') {
@@ -534,20 +568,26 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
         const response = await api.post(`/discover/align/${profile._id}`, payload);
 
         if (response.matched) {
-          setAlignedProfile({
-            ...response.user,
-            alignmentId: response.alignmentId,
-          });
-          setShowAlignmentModal(true);
+          if (!response.alignmentId || !response.user?._id || !response.user?.name) {
+            throw new Error('Mutual align response is missing the match details.');
+          }
+          waitingForNextState = true;
+          await runActionTransition('match', currentIndex + 1, 'up');
+          return;
         }
       } else if (action === 'pass') {
         triggerHaptic('medium');
         await api.post(`/discover/pass/${profile._id}`);
-        setUndoNonce((n) => n + 1);
+        waitingForNextState = true;
+        await runActionTransition('pass', currentIndex + 1, 'none');
+        return;
       }
 
-      handleNextProfile('up', true);
+      waitingForNextState = true;
+      await runActionTransition('like', currentIndex + 1, 'up');
     } catch (err) {
+      actionPendingRef.current = false;
+      setActionPending(false);
       if (err.code === 'GATED') {
         toast.info(
           `Finish your profile to interact — you need ${readLadder(config).interact}%.`,
@@ -555,18 +595,60 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
         );
         return;
       }
+      if (err.code === 'DAILY_ALIGN_LIMIT') return;
       console.error('Action failed:', err);
+      if (!err?.toasted) {
+        toast.error(action === 'align'
+          ? 'Could not send the align request. Please try again.'
+          : 'Could not pass on this profile. Please try again.');
+      }
     } finally {
-      actionPendingRef.current = false;
+      if (!waitingForNextState) {
+        actionPendingRef.current = false;
+        setActionPending(false);
+      }
     }
   }, [
     currentIndex,
     profiles,
-    handleNextProfile,
     deckGated,
     config,
     loadMyProfile,
     onGoToProfile,
+    runActionTransition,
+  ]);
+
+  useEffect(() => {
+    const waiting = waitingForDeckStateRef.current;
+    if (!waiting) return;
+    if (actionFlash !== null) return;
+
+    if (waiting.targetIndex !== currentIndex) {
+      waitingForDeckStateRef.current = null;
+      actionPendingRef.current = false;
+      setActionPending(false);
+      return;
+    }
+
+    const nextProfileReady = Boolean(profiles[currentIndex]);
+    const endStateReady = currentIndex >= profiles.length
+      && !fetchingMore
+      && (!hasMore || deckExhausted || appendFetchFailed);
+    if (!nextProfileReady && !endStateReady) return;
+
+    if (waiting.action === 'pass') {
+      setUndoAvailable(true);
+      setUndoNonce((nonce) => nonce + 1);
+    } else if (waiting.action === 'align') {
+      setUndoAvailable(false);
+    }
+
+    waitingForDeckStateRef.current = null;
+    actionPendingRef.current = false;
+    setActionPending(false);
+  }, [
+    currentIndex, profiles, fetchingMore, hasMore, deckExhausted, appendFetchFailed,
+    actionFlash,
   ]);
 
   useEffect(() => {
@@ -579,53 +661,9 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
     img.src = next;
   }, [isDesktop, profiles, currentIndex]);
 
-  useEffect(() => {
-    if (!isDesktop) return;
-
-    const onKey = (e) => {
-      const tag = (e.target?.tagName || '').toLowerCase();
-      if (
-        tag === 'input'
-        || tag === 'textarea'
-        || e.target?.isContentEditable
-      ) return;
-
-      if (showAlignmentModal) {
-        if (e.key === 'Escape') {
-          setShowAlignmentModal(false);
-          setAlignedProfile(null);
-        }
-        return;
-      }
-
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-
-      const k = e.key;
-
-      if (k === 'ArrowRight' || k === 'l' || k === 'L') {
-        e.preventDefault();
-        triggerHaptic('heavy');
-        handleAction('align', {});
-      } else if (k === 'ArrowLeft' || k === 'p' || k === 'P') {
-        e.preventDefault();
-        triggerHaptic('medium');
-        handleAction('pass');
-      } else if (k === 'ArrowDown' || k === 'b' || k === 'B') {
-        e.preventDefault();
-        triggerHaptic('light');
-        handleNextProfile('down');
-      }
-    };
-
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [isDesktop, showAlignmentModal, handleAction, handleNextProfile]);
-
   if (loading) {
     return (
       <div style={styles.loadingRoot}>
-        <ProfileCardSkeleton />
-        <DiscoverRebuildOverlay show={rebuildOverlay} />
         <style>{DECK_CSS}</style>
       </div>
     );
@@ -653,6 +691,14 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
     );
   }
 
+  if (currentIndex >= profiles.length && fetchingMore) {
+    return (
+      <div style={styles.loadingRoot}>
+        <style>{DECK_CSS}</style>
+      </div>
+    );
+  }
+
   if (!profiles || profiles.length === 0 || currentIndex >= profiles.length) {
     return (
       <div style={styles.stateRoot}>
@@ -662,33 +708,51 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
             <Compass size={22} strokeWidth={2.2} color={t.ink} />
           </div>
 
-          <h3 style={styles.stateTitle}>You're all caught up</h3>
+          <h3 style={styles.stateTitle}>
+            {appendFetchFailed ? 'Could not load more profiles' : "You're all caught up"}
+          </h3>
           <p style={styles.stateBody}>
-            {deckExhausted
+            {appendFetchFailed
+              ? 'Check your connection and try loading the deck again.'
+              : deckExhausted
               ? "You've seen everyone who fits right now. New people join all the time — check back later."
               : "You've reviewed everyone for now. Check back later — new people land all the time."}
           </p>
 
-          {!deckExhausted && (
+          {(appendFetchFailed || !deckExhausted) && (
             <button
-              onClick={() => fetchProfiles(false)}
+              onClick={() => fetchProfiles(appendFetchFailed)}
               className="slam-btn"
               style={styles.slamBtn}
             >
-              <RotateCw size={14} strokeWidth={2.5} /> Refresh
+              <RotateCw size={14} strokeWidth={2.5} /> {appendFetchFailed ? 'Try again' : 'Refresh'}
             </button>
           )}
         </div>
+        <DeckActions
+          placement={isDesktop || isTabletLayout ? 'desktop' : 'mobile'}
+          onUndo={handleUndo}
+          canGoBack={currentIndex > 0}
+          undoNonce={undoNonce}
+          undoAvailable={undoAvailable}
+          actionsDisabled={actionPending}
+          showPassButton={false}
+          showAlignButton={false}
+        />
       </div>
     );
   }
 
   return (
-    <div style={{ ...styles.viewportRoot, ...(isDesktop ? styles.viewportRootDesktop : null) }}>
+    <div
+      data-popout-affected-region
+      aria-busy={actionPending || undefined}
+      style={{ ...styles.viewportRoot, ...(isDesktop ? styles.viewportRootDesktop : null) }}
+    >
       <style>{DECK_CSS}</style>
 
       <ShadowbanBanner
-        score={shadowbanScore}
+        isUnderReview={myUser?.isUnderReview}
         onLearnMore={() => setShowLearnMore(true)}
       />
       {showLearnMore && (
@@ -700,8 +764,9 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
           college={myUser.college}
           variant={locationRead.active ? 'active' : 'fallback'}
           onLocationChanged={async (moved) => {
-            if (!moved) return;
-            await rebuildDeckForLocation();
+            const refreshedLocation = await api.get('/users/location');
+            setLocationRead(refreshedLocation ?? null);
+            if (moved) await rebuildDeckForLocation();
           }}
         />
       )}
@@ -722,8 +787,6 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
         )}
       </AnimatePresence>
 
-      <DiscoverRebuildOverlay show={rebuildOverlay} />
-
       {merging && !loading && (
         <div aria-live="polite" style={styles.mergingNotice}>
           Updating…
@@ -731,191 +794,155 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
       )}
 
       <div
-        className={isDesktop ? 'discover-desktop-stage' : 'discover-mobile-stage'}
+        ref={stageRef}
+        className={isDesktop ? 'discover-desktop-stage' : isTabletLayout ? 'discover-tablet-stage' : 'discover-mobile-stage'}
         style={{
           ...styles.stageContainer,
           ...(isDesktop ? styles.stageContainerDesktopNoPad : null),
         }}
       >
-        <div style={isDesktop ? styles.deckColumnDesktop : styles.deckColumnMobile}>
-          <AnimatePresence custom={slideDirection}>
-            {profiles[currentIndex] && (
-              <motion.div
-                key={profiles[currentIndex]._id || profiles[currentIndex].id}
-                custom={slideDirection}
-                variants={slideVariants}
-                initial="enter"
-                animate="center"
-                exit="exit"
-                transition={springTransition}
-                style={styles.cardMotionLayer}
-              >
-                <ProfileCard
-                  profile={profiles[currentIndex]}
-                  onAction={handleAction}
-                  onSheetNearHeader={onSheetNearHeader}
-                  isGated={deckGated}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
+        <div style={isDesktop ? styles.deckColumnDesktop : isTabletLayout ? styles.deckColumnTablet : styles.deckColumnMobile}>
+          {isTabletLayout && profiles[currentIndex] && (
+            <div className="discover-tablet-layout">
+              <div className="discover-tablet-card-frame">
+                <div
+                  key={profiles[currentIndex]._id || profiles[currentIndex].id}
+                  style={styles.cardMotionLayer}
+                >
+                  <ProfileCard
+                    profile={profiles[currentIndex]}
+                    onAction={handleAction}
+                    onSheetNearHeader={onSheetNearHeader}
+                    isGated={deckGated}
+                    isTabletLayout
+                    onPhoneReplyKeyboardChange={onPhoneReplyKeyboardChange}
+                  />
+                </div>
+              </div>
+              <DeckActions
+                placement="desktop"
+                onPass={() => handleAction('pass')}
+                onAlign={() => handleAction('align', {})}
+                canAlign={!!profiles[currentIndex]}
+                onUndo={handleUndo}
+                canGoBack={currentIndex > 0}
+                undoNonce={undoNonce}
+                undoAvailable={undoAvailable}
+                actionsDisabled={actionPending}
+              />
+            </div>
+          )}
+          {!isTabletLayout && (
+            profiles[currentIndex] && (
+                <div
+                  key={profiles[currentIndex]._id || profiles[currentIndex].id}
+                  style={{
+                    ...styles.cardMotionLayer,
+                    ...(isDesktop ? { left: 68 } : null),
+                  }}
+                >
+                  <ProfileCard
+                    profile={profiles[currentIndex]}
+                    onAction={handleAction}
+                    onSheetNearHeader={onSheetNearHeader}
+                    isGated={deckGated}
+                    isDesktop={isDesktop}
+                    onPhoneReplyKeyboardChange={onPhoneReplyKeyboardChange}
+                  />
+                </div>
+            )
+          )}
+          {isDesktop && profiles[currentIndex] && (
+            <DeckActions
+              placement="desktop"
+              onPass={() => handleAction('pass')}
+              onAlign={() => handleAction('align', {})}
+              canAlign={!!profiles[currentIndex]}
+              onUndo={handleUndo}
+              canGoBack={currentIndex > 0}
+              undoNonce={undoNonce}
+              undoAvailable={undoAvailable}
+              actionsDisabled={actionPending}
+            />
+          )}
         </div>
 
-        {!isDesktop && (
+        {!isDesktop && !isTabletLayout && (
           <DeckActions
             onPass={() => handleAction('pass')}
             onAlign={() => handleAction('align', {})}
             canAlign={!!profiles[currentIndex]}
-            onUndo={() => handleNextProfile('down')}
+            onUndo={handleUndo}
             canGoBack={currentIndex > 0}
             undoNonce={undoNonce}
-            onRefreshLocation={locationDenied ? undefined : refreshLocation}
+            undoAvailable={undoAvailable}
+            actionsDisabled={actionPending}
           />
         )}
+
+        {actionFlash && (() => {
+          const overlay = (
+            <div
+              aria-hidden="true"
+              style={{
+                position: actionFlash.fullViewport ? 'fixed' : 'absolute',
+                top: actionFlash.fullViewport ? 0 : actionFlash.top,
+                left: actionFlash.fullViewport ? 0 : actionFlash.left,
+                width: actionFlash.fullViewport ? '100vw' : actionFlash.width,
+                height: actionFlash.height,
+                borderRadius: 0,
+                overflow: 'hidden',
+                zIndex: actionFlash.fullViewport ? 10000 : 3,
+                pointerEvents: actionFlash.fullViewport ? 'auto' : 'none',
+                background: 'transparent',
+              }}
+            >
+              <motion.div
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{
+                  duration: reduceMotion ? 0 : 0.3,
+                  ease: 'easeInOut',
+                }}
+                style={{
+                  position: 'absolute',
+                  width: actionFlash.diameter,
+                  height: actionFlash.diameter,
+                  left: actionFlash.originX - actionFlash.diameter / 2,
+                  top: actionFlash.originY - actionFlash.diameter / 2,
+                  borderRadius: '28%',
+                  background: actionFlash.color,
+                  transformOrigin: 'center',
+                }}
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.72 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{
+                  opacity: { duration: 0.12, delay: 0.24 },
+                  scale: { duration: 0.18, ease: 'easeOut' },
+                }}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: actionFlash.action === 'undo' ? t.ink : '#fff',
+                }}
+              >
+                {actionFlash.action === 'pass'
+                  ? <X size={64} strokeWidth={3.2} />
+                  : actionFlash.action === 'undo'
+                    ? <Undo2 size={64} strokeWidth={3.2} />
+                    : <Heart size={64} fill="currentColor" strokeWidth={3.2} />}
+              </motion.div>
+            </div>
+          );
+          return actionFlash.fullViewport ? createPortal(overlay, document.body) : overlay;
+        })()}
       </div>
 
-      {isDesktop && (
-        <div
-          className="discover-desktop-actions"
-          style={styles.desktopActionBar}
-          role="toolbar"
-          aria-label="Discovery actions"
-        >
-          <button
-            className="deck-action-btn"
-            title="Previous profile (↓ or B)"
-            aria-label="Previous profile"
-            disabled={currentIndex <= 0}
-            onClick={() => handleNextProfile('down')}
-            style={{ ...styles.deckBtn, background: t.paper, color: t.ink }}
-          >
-            <Undo2 size={19} strokeWidth={2.2} />
-          </button>
-
-          <button
-            className="deck-action-btn"
-            title="Pass (← or P)"
-            aria-label="Pass"
-            onClick={() => handleAction('pass')}
-            style={{ ...styles.deckBtn, background: t.card, color: t.ink }}
-          >
-            <X size={21} strokeWidth={2.4} />
-          </button>
-
-          <button
-            className="deck-action-btn deck-align-btn"
-            title="Align with this profile (→ or L)"
-            aria-label="Align with this profile"
-            onClick={() => handleAction('align', {})}
-            style={{
-              ...styles.deckBtn,
-              width: 104,
-              background: t.yellow,
-              color: t.ink,
-              borderColor: t.yellow,
-            }}
-          >
-            ALIGN <span aria-hidden="true">↗</span>
-          </button>
-
-          <div
-            className="deck-hints-desktop"
-            aria-hidden="true"
-            style={styles.deckHints}
-          >
-            <span><kbd className="deck-kbd">←</kbd> pass</span>
-            <span><kbd className="deck-kbd">→</kbd> align</span>
-            <span><kbd className="deck-kbd">↓</kbd> back</span>
-          </div>
-        </div>
-      )}
-
-      <AnimatePresence>
-        {showAlignmentModal && alignedProfile && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.25 }}
-              style={styles.modalScrim}
-              onClick={() => {
-                setShowAlignmentModal(false);
-                setAlignedProfile(null);
-              }}
-            />
-
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.94, opacity: 0, y: 16 }}
-              transition={{
-                type: 'spring',
-                damping: 22,
-                stiffness: 300,
-              }}
-              style={styles.matchModal}
-            >
-              <span aria-hidden="true" style={styles.confettiAmber} />
-              <span aria-hidden="true" style={styles.confettiCoral} />
-              <span aria-hidden="true" style={styles.confettiSage} />
-              <span aria-hidden="true" style={styles.confettiConcrete} />
-
-              <motion.div
-                initial={{ scale: 0.5, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{
-                  delay: 0.1,
-                  type: 'spring',
-                  damping: 14,
-                  stiffness: 280,
-                }}
-                style={styles.matchIcon}
-              >
-                <Heart size={40} strokeWidth={2.2} color={t.ink} fill={t.ink} />
-              </motion.div>
-
-              <h2 style={styles.matchTitle}>
-                Aligned<span style={{ color: t.coral }}>!</span>
-              </h2>
-
-              <p style={styles.matchBody}>
-                You and {alignedProfile.name} found common ground. The chat is now open.
-              </p>
-
-              <div style={styles.matchActions}>
-                <button
-                  className="slam-btn"
-                  onClick={() => {
-                    triggerHaptic('heavy');
-                    setShowAlignmentModal(false);
-                    if (onOpenChat && alignedProfile) {
-                      onOpenChat({
-                        _id: alignedProfile.alignmentId,
-                        user: alignedProfile,
-                      });
-                    }
-                    setAlignedProfile(null);
-                  }}
-                  style={styles.openChatButton}
-                >
-                  Open chat
-                </button>
-
-                <button
-                  onClick={() => {
-                    setShowAlignmentModal(false);
-                    setAlignedProfile(null);
-                  }}
-                  style={styles.keepBrowsingButton}
-                >
-                  Keep browsing
-                </button>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
     </div>
   );
 };
@@ -926,8 +953,7 @@ const DECK_CSS = `
   /* Keep the iOS safe-area/status-bar backdrop in warm cream, not a full-bleed pink band. */
   html, body, #root { background-color: #FFF9F4 !important; }
 
-  .slam-btn,
-  .deck-action-btn {
+  .slam-btn {
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
     transition: transform .14s ease, box-shadow .14s ease, background-color .14s ease, border-color .14s ease, opacity .14s ease;
@@ -954,27 +980,12 @@ const DECK_CSS = `
     color: ${t.ink};
   }
 
-  .deck-action-btn {
-    flex-shrink: 0;
-    cursor: pointer;
-    touch-action: manipulation;
-  }
-
-  .deck-action-btn:disabled {
-    opacity: .34;
-    cursor: not-allowed;
-    box-shadow: none !important;
-    transform: none !important;
-  }
-
-  .deck-action-btn:focus-visible,
   .slam-btn:focus-visible {
     outline: 3px solid ${t.pink};
     outline-offset: 4px;
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .deck-action-btn:hover:not(:disabled),
     .slam-btn:hover {
       transform: translate(-2px, -2px);
       box-shadow: 6px 6px 0 #171414;
@@ -982,54 +993,66 @@ const DECK_CSS = `
     }
   }
 
-  .deck-action-btn:active:not(:disabled),
   .slam-btn:active {
     transform: translate(3px, 3px) !important;
     box-shadow: 1px 1px 0 #171414 !important;
   }
 
-  kbd.deck-kbd {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 23px;
-    min-height: 22px;
-    padding: 2px 5px;
-    border: 2px solid #171414;
-    border-radius: 7px;
-    background: ${t.paper};
-    color: ${t.ink};
-    box-shadow: 2px 2px 0 #171414;
-    font: 600 10px ${t.fontMono};
-  }
-
   .discover-mobile-stage,
+  .discover-tablet-stage,
   .discover-desktop-stage {
     flex: 1;
     min-height: 0;
     min-width: 0;
   }
 
-  .deck-action-btn.deck-align-btn {
-    background: ${t.yellow};
+  @media (min-width: 768px) {
+    .discover-desktop-stage {
+      width: 100%;
+      padding: 16px 24px 8px !important;
+    }
+  }
+
+  .discover-tablet-stage {
+    padding: 10px 16px !important;
+  }
+
+  .discover-tablet-layout {
+    --tablet-card-width: min(460px, calc((100dvh - 20px) * 0.64), calc(100% - 68px));
+    --tablet-card-height: min(700px, calc(100dvh - 20px));
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: calc(var(--tablet-card-width) + 68px);
+    height: var(--tablet-card-height);
+    max-width: 100%;
+    transform: translate(-50%, -50%);
+  }
+
+  .discover-tablet-card-frame {
+    position: absolute;
+    top: 0;
+    left: 68px;
+    width: var(--tablet-card-width);
+    max-width: none;
+    height: 100%;
+    margin: 0;
+    box-sizing: border-box;
+    min-width: 0;
+    min-height: 260px;
+    overflow: visible;
   }
 
   @media (max-width: 760px) {
-    .deck-hints-desktop { display: none !important; }
     .discover-mobile-stage { padding: 0 !important; }
   }
 
   @media (max-height: 680px) and (min-width: 761px) {
     .discover-desktop-stage { padding-top: 8px !important; padding-bottom: 4px !important; }
-    .discover-desktop-actions { padding-top: 6px !important; padding-bottom: 8px !important; }
-  }
-
-  @media (max-width: 380px) {
-    .discover-desktop-actions { gap: 8px; }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .slam-btn, .deck-action-btn { transition: none !important; }
+    .slam-btn { transition: none !important; }
   }
 `;
 
@@ -1094,7 +1117,7 @@ const styles = {
 
   stageContainerDesktop: {
     width: '100%',
-    maxWidth: 580,
+    maxWidth: 920,
     padding: '14px 20px 8px',
     margin: '0 auto',
     boxSizing: 'border-box',
@@ -1102,7 +1125,7 @@ const styles = {
 
   stageContainerDesktopNoPad: {
     width: '100%',
-    maxWidth: 580,
+    maxWidth: 920,
     padding: '14px 20px 8px',
     margin: '0 auto',
     boxSizing: 'border-box',
@@ -1123,12 +1146,18 @@ const styles = {
     height: '100%',
     minHeight: 0,
     minWidth: 0,
-    background: '#FFF9F4',
-    border: '2px solid #171414',
-    borderRadius: 22,
-    boxShadow: '7px 7px 0 #171414',
-    overflow: 'hidden',
-    isolation: 'isolate',
+    overflow: 'visible',
+  },
+
+  deckColumnTablet: {
+    position: 'relative',
+    display: 'block',
+    width: '100%',
+    maxWidth: 1000,
+    height: '100%',
+    minHeight: 0,
+    minWidth: 0,
+    overflow: 'visible',
   },
 
   cardMotionLayer: {
@@ -1140,51 +1169,6 @@ const styles = {
     minWidth: 0,
     willChange: 'transform, opacity',
     backfaceVisibility: 'hidden',
-  },
-
-  desktopActionBar: {
-    position: 'relative',
-    zIndex: 3,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    padding: '10px 20px 16px',
-    width: '100%',
-    maxWidth: 580,
-    margin: '0 auto',
-    boxSizing: 'border-box',
-    flexShrink: 0,
-  },
-
-  deckBtn: {
-    width: 52,
-    height: 52,
-    minWidth: 52,
-    borderRadius: 16,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    cursor: 'pointer',
-    border: `2px solid ${t.ink}`,
-    boxShadow: '4px 4px 0 #171414',
-    backdropFilter: 'none',
-    WebkitBackdropFilter: 'none',
-    fontFamily: t.fontMono,
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: '.08em',
-  },
-
-  deckHints: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    marginLeft: 8,
-    fontFamily: t.fontMono,
-    fontSize: 9,
-    color: t.ink3,
-    whiteSpace: 'nowrap',
   },
 
   stateCard: {
@@ -1298,147 +1282,6 @@ const styles = {
     overflowWrap: 'anywhere',
   },
 
-  modalScrim: {
-    position: 'fixed',
-    inset: 0,
-    backgroundColor: 'rgba(23, 20, 20, .62)',
-    backdropFilter: 'none',
-    WebkitBackdropFilter: 'none',
-    zIndex: 99998,
-  },
-
-  matchModal: {
-    position: 'fixed',
-    top: '50%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
-    width: '90%',
-    maxWidth: 340,
-    backgroundColor: t.paper,
-    border: `2px solid ${t.ink}`,
-    borderRadius: 24,
-    boxShadow: '8px 8px 0 #171414',
-    backdropFilter: 'none',
-    WebkitBackdropFilter: 'none',
-    padding: '30px 24px 24px',
-    textAlign: 'left',
-    zIndex: 99999,
-    overflow: 'hidden',
-  },
-
-  confettiAmber: {
-    position: 'absolute',
-    top: 18,
-    left: 20,
-    width: 12,
-    height: 12,
-    borderRadius: 0,
-    background: t.yellow,
-    border: `2px solid ${t.ink}`,
-  },
-
-  confettiCoral: {
-    position: 'absolute',
-    top: 26,
-    right: 24,
-    width: 10,
-    height: 10,
-    borderRadius: 0,
-    background: t.coral,
-    border: `2px solid ${t.ink}`,
-  },
-
-  confettiSage: {
-    position: 'absolute',
-    bottom: 78,
-    left: 28,
-    width: 10,
-    height: 10,
-    borderRadius: 0,
-    background: t.green,
-    border: `2px solid ${t.ink}`,
-  },
-
-  confettiConcrete: {
-    position: 'absolute',
-    bottom: 88,
-    right: 30,
-    width: 12,
-    height: 12,
-    borderRadius: 0,
-    background: t.pink,
-    border: `2px solid ${t.ink}`,
-  },
-
-  matchIcon: {
-    width: 72,
-    height: 72,
-    margin: '0 0 20px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: t.yellow,
-    border: `2px solid ${t.ink}`,
-    borderRadius: 15,
-    boxShadow: '4px 4px 0 #171414',
-  },
-
-  matchTitle: {
-    fontFamily: t.fontHeavy,
-    fontSize: 34,
-    lineHeight: .9,
-    fontWeight: 800,
-    color: t.ink,
-    margin: '0 0 10px',
-    letterSpacing: '-.015em',
-    textTransform: 'uppercase',
-  },
-
-  matchBody: {
-    fontFamily: t.fontBody,
-    fontSize: 13,
-    fontWeight: 500,
-    color: t.ink2,
-    margin: '0 0 24px',
-    lineHeight: 1.7,
-  },
-
-  matchActions: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 10,
-  },
-
-  openChatButton: {
-    width: '100%',
-    padding: 15,
-    background: t.coral,
-    color: '#171414',
-    border: `2px solid ${t.ink}`,
-    borderRadius: 13,
-    boxShadow: '4px 4px 0 #171414',
-    fontFamily: t.fontMono,
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: '.12em',
-    textTransform: 'uppercase',
-    cursor: 'pointer',
-  },
-
-  keepBrowsingButton: {
-    width: '100%',
-    padding: 15,
-    background: 'transparent',
-    color: t.ink,
-    border: `2px solid ${t.ink}`,
-    borderRadius: 13,
-    fontFamily: t.fontMono,
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: '.12em',
-    textTransform: 'uppercase',
-    cursor: 'pointer',
-  },
 };
 
 export default Discover;

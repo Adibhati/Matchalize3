@@ -5,8 +5,8 @@
  *
  * The score itself lives on the server (utils/ladder.js) and is stored as
  * `User.profileScore`. This module only reads the thresholds, which the server
- * ships through GET /config, so the profile bar, the gate, and any future nudge
- * all mark up against the same numbers instead of each hardcoding 45/75/100.
+ * ships through GET /config, so the profile bar, the gate, and personalized
+ * score guidance all use the same thresholds and point values.
  *
  * Do not add a client-side scorer. The ladder gates the discover deck, so a
  * score the client could recompute is a score someone can edit in devtools and
@@ -20,12 +20,21 @@
  */
 export const LADDER_FALLBACK = {
   publish: 45,
-  interact: 75,
+  interact: 45,
   aspirational: 100,
 };
 
 /** Max photos a profile may hold. Mirrored by `slice(0, 4)` server-side. */
 export const MAX_PHOTOS = 4;
+export const MAX_PROMPTS = 3;
+
+export const SCORE_WEIGHTS_FALLBACK = {
+  mainPhoto: 25,
+  additionalPhoto: 10,
+  bio: 10,
+  answeredPrompt: 10,
+  interests: 5,
+};
 
 /**
  * Read the thresholds off the /config payload.
@@ -40,6 +49,81 @@ export const readLadder = (config) => {
     interact: fromServer?.interact ?? LADDER_FALLBACK.interact,
     aspirational: fromServer?.aspirational ?? LADDER_FALLBACK.aspirational,
   };
+};
+
+const readScoreRules = (config) => {
+  const fromServer = config?.ladder;
+  return {
+    weights: { ...SCORE_WEIGHTS_FALLBACK, ...(fromServer?.weights || {}) },
+    maxPhotos: fromServer?.maxPhotos ?? MAX_PHOTOS,
+    maxPrompts: fromServer?.maxPrompts ?? MAX_PROMPTS,
+  };
+};
+
+const isAnswered = (prompt) =>
+  Boolean(prompt?.question?.trim()) && Boolean(prompt?.answer?.trim());
+
+/**
+ * Build personalized next-step suggestions using server-published point
+ * values. This does not calculate the user's score; `profileScore` remains
+ * server-authoritative.
+ */
+export const getScoreOpportunities = (user, config) => {
+  const { weights, maxPhotos, maxPrompts } = readScoreRules(config);
+  const photos = Array.isArray(user?.photos) ? user.photos : [];
+  const prompts = Array.isArray(user?.prompts) ? user.prompts : [];
+  const opportunities = [];
+
+  if (!photos[0]) {
+    opportunities.push({
+      key: 'main-photo',
+      label: 'Add a main photo',
+      points: weights.mainPhoto,
+      action: { type: 'photo', slot: 0 },
+    });
+  }
+
+  for (let slot = 1; slot < maxPhotos; slot += 1) {
+    if (!photos[slot]) {
+      opportunities.push({
+        key: `photo-${slot}`,
+        label: `Add another photo${slot > 1 ? ` (${slot + 1} of ${maxPhotos})` : ''}`,
+        points: weights.additionalPhoto,
+        action: { type: 'photo', slot },
+      });
+    }
+  }
+
+  if (!user?.bio?.trim()) {
+    opportunities.push({
+      key: 'bio',
+      label: 'Add an about-you bio',
+      points: weights.bio,
+      action: { type: 'bio' },
+    });
+  }
+
+  for (let slot = 0; slot < maxPrompts; slot += 1) {
+    if (!isAnswered(prompts[slot])) {
+      opportunities.push({
+        key: `prompt-${slot}`,
+        label: `Answer a profile prompt${slot > 0 ? ` (${slot + 1})` : ''}`,
+        points: weights.answeredPrompt,
+        action: { type: 'prompt', slot },
+      });
+    }
+  }
+
+  if (!Array.isArray(user?.interests) || user.interests.length === 0) {
+    opportunities.push({
+      key: 'interests',
+      label: 'Add interests',
+      points: weights.interests,
+      action: { type: 'interests' },
+    });
+  }
+
+  return opportunities;
 };
 
 /**

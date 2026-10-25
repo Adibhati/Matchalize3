@@ -21,7 +21,7 @@ const reportSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
 });
 
-reportSchema.index({ reporter: 1, reported: 1 }, { unique: true });
+reportSchema.index({ reporter: 1, reported: 1, createdAt: -1 });
 
 const Report = mongoose.model('Report', reportSchema);
 export default Report;

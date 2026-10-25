@@ -1,7 +1,7 @@
-# Chunk 27 — Tools
+# Chunk 28 — Tools
 
-> Matchalize · `tools` · files 27 of 27 chunks · 4 file(s) · 43 KB · ~12,436 tokens
-> Generated 2026-10-17 21:10.
+> Matchalize · `tools` · files 28 of 28 chunks · 4 file(s) · 43 KB · ~12,439 tokens
+> Generated 2026-10-18 20:29.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -96,7 +96,7 @@ SKIP_DIRS = {
 }
 # Paths (relative fragments) excluded from the walk.
 SKIP_PATH_FRAGMENTS = ("tests/qa/videos", "tests/qa/media", "tests/qa/report")
-SKIP_NAMES = {".DS_Store", "package-lock.json", ".env", ".env.local"}
+SKIP_NAMES = {".DS_Store", "package-lock.json", ".env", ".env.local", ".env.test"}
 
 # Text types worth inlining verbatim.
 SOURCE_EXTS = {

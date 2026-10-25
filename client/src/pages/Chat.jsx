@@ -24,6 +24,19 @@ const genId = () =>
     ? crypto.randomUUID()
     : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 
+const appendMessageOnce = (messages = [], incoming) => {
+  if (!incoming?._id) return messages;
+  const existingIndex = messages.findIndex((message) =>
+    message._id === incoming._id
+    || (incoming.clientMsgId && message.clientMsgId === incoming.clientMsgId)
+  );
+
+  if (existingIndex === -1) return [...messages, incoming];
+  return messages.map((message, index) =>
+    index === existingIndex ? { ...message, ...incoming } : message
+  );
+};
+
 const Icon = React.memo(({ path, size = 20, color = 'currentColor', strokeWidth = 2 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
     {path}
@@ -308,9 +321,6 @@ const Chat = ({ match, onBack }) => {
   const [inputText, setInputText] = useState('');
   const [otherTyping, setOtherTyping] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [recording, setRecording] = useState(false);
-  const [showActionSheet, setShowActionSheet] = useState(false);
-  const [pendingFile, setPendingFile] = useState(null);
   
   // Online status
   const [isOnline, setIsOnline] = useState(false);
@@ -337,14 +347,13 @@ const Chat = ({ match, onBack }) => {
   const [showReportModal, setShowReportModal] = useState(false);
 
   const fileInputRef = useRef(null);
-  const recorderRef = useRef(null);
-  const chunksRef = useRef([]);
   const typingTimer = useRef(null);
   const listEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const prevScrollHeightRef = useRef(0);
   const prevMessagesLengthRef = useRef(0);
   const pendingMsgIdRef = useRef(null);
+  const pendingSearchMsgIdRef = useRef(null);
   const [socketConnected, setSocketConnected] = useState(socket?.connected ?? true);
   const otherUnavailable = matchUser?.suspended || matchUser?.isDeleted;
 
@@ -385,7 +394,12 @@ const Chat = ({ match, onBack }) => {
 
     const onNew = (msg) => {
       if (msg?.alignmentId === alignmentId) {
-        queryClient.setQueryData(['messages', alignmentId], (prev = []) => (prev.some((p) => p._id === msg._id) ? prev : [...prev, msg]));
+        if (msg?._id) {
+          queryClient.setQueryData(
+            ['messages', alignmentId],
+            (prev = []) => appendMessageOnce(prev, msg),
+          );
+        }
         socket.emit('read-messages', { alignmentId });
         triggerHaptic('light');
       }
@@ -472,6 +486,18 @@ const Chat = ({ match, onBack }) => {
     prevMessagesLengthRef.current = messages.length;
   }, [messages]);
 
+  useLayoutEffect(() => {
+    const msgId = pendingSearchMsgIdRef.current;
+    if (!msgId) return;
+    const el = document.querySelector(`[data-msg-id="${msgId}"]`);
+    if (!el) return;
+
+    pendingSearchMsgIdRef.current = null;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('highlight-pulse');
+    setTimeout(() => { el.classList.remove('highlight-pulse'); }, 2000);
+  }, [messages]);
+
   // Auto-scroll to bottom on new messages
   useEffect(() => {
     if (!showScrollButton) {
@@ -528,7 +554,7 @@ const Chat = ({ match, onBack }) => {
         replyTo: replyTo?._id || null,
         clientMsgId: pendingMsgIdRef.current,
       });
-      queryClient.setQueryData(['messages', alignmentId], (prev = []) => [...prev, msg]);
+      queryClient.setQueryData(['messages', alignmentId], (prev = []) => appendMessageOnce(prev, msg));
       setInputText('');
       setReplyTo(null);
       setShowScrollButton(false);
@@ -549,16 +575,12 @@ const Chat = ({ match, onBack }) => {
   const onFileSelected = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setPendingFile(file);
-    setShowActionSheet(true);
     triggerHaptic('medium');
+    uploadAndSend(file);
     e.target.value = '';
   };
 
-  const uploadAndSend = async (kind) => {
-    const file = pendingFile;
-    setShowActionSheet(false);
-    if (!file) return;
+  const uploadAndSend = async (file) => {
     setUploading(true);
     try {
       const { url } = await api.upload(file);
@@ -566,12 +588,12 @@ const Chat = ({ match, onBack }) => {
         triggerHaptic('heavy');
         if (!pendingMsgIdRef.current) pendingMsgIdRef.current = genId();
         const msg = await api.post(`/messages/${alignmentId}`, {
-          type: kind,
+          type: 'image',
           mediaUrl: url,
           replyTo: replyTo?._id || null,
           clientMsgId: pendingMsgIdRef.current,
         });
-        queryClient.setQueryData(['messages', alignmentId], (prev = []) => [...prev, msg]);
+        queryClient.setQueryData(['messages', alignmentId], (prev = []) => appendMessageOnce(prev, msg));
         pendingMsgIdRef.current = null;
         setReplyTo(null);
         setShowScrollButton(false);
@@ -581,40 +603,13 @@ const Chat = ({ match, onBack }) => {
       if (!err?.toasted) {
         toast.error('Couldn\'t upload photo. Check your connection.', {
           label: 'Retry',
-          onClick: () => uploadAndSend(kind)
+          onClick: () => uploadAndSend(file)
         }); 
       }
     } finally { 
       setUploading(false);
-      setPendingFile(null);
     }
   };
-
-  const startRecording = async () => {
-    triggerHaptic('medium');
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/mp4';
-      const rec = new MediaRecorder(stream, { mimeType });
-      chunksRef.current = [];
-      rec.ondataavailable = (e) => chunksRef.current.push(e.data);
-      rec.onstop = async () => {
-        const ext = mimeType.includes('mp4') ? 'm4a' : 'webm';
-        const blob = new Blob(chunksRef.current, { type: mimeType });
-        const file = new File([blob], `voice.${ext}`, { type: mimeType });
-        setPendingFile(file);
-        setShowActionSheet(true);
-        stream.getTracks().forEach((t) => t.stop());
-      };
-      recorderRef.current = rec;
-      rec.start();
-      setRecording(true);
-    } catch { setRecording(false); }
-  };
-
-  const stopRecording = () => { triggerHaptic('heavy'); recorderRef.current?.stop(); setRecording(false); };
 
   const handleLongPress = (message, event) => {
     if (message.deleted) return;
@@ -640,7 +635,10 @@ const Chat = ({ match, onBack }) => {
     try {
       const data = await api.post(`/messages/${alignmentId}/reaction`, { msgId: target._id, emoji });
       queryClient.setQueryData(['messages', alignmentId], (prev = []) => prev.map((m) => (m._id === target._id ? { ...m, reactions: data.reactions } : m)));
-    } catch (err) { console.error('Reaction failed:', err); }
+    } catch (err) {
+      console.error('Reaction failed:', err);
+      if (!err?.toasted) toast.error('Could not update reaction. Please try again.');
+    }
   };
 
   const handleCopy = () => {
@@ -672,13 +670,32 @@ const Chat = ({ match, onBack }) => {
 
   const handleImageClick = (url) => { setPhotoViewerUrl(url); setShowPhotoViewer(true); triggerHaptic('light'); };
 
-  // Optimized Search Jump utilizing CSS class animations to prevent DOM style lag
-  const handleSearchJump = (msgId) => {
+  // Jump to loaded results directly; otherwise load a server page centered on the result.
+  const handleSearchJump = async (message) => {
+    const msgId = message?._id;
+    if (!msgId) return;
     const el = document.querySelector(`[data-msg-id="${msgId}"]`);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       el.classList.add('highlight-pulse');
       setTimeout(() => { el.classList.remove('highlight-pulse'); }, 2000);
+      return;
+    }
+
+    pendingSearchMsgIdRef.current = msgId;
+    setShowScrollButton(true);
+    try {
+      const data = await api.get(`/messages/${alignmentId}?around=${encodeURIComponent(msgId)}&limit=50`);
+      if (!Array.isArray(data?.messages)) {
+        throw new Error('Invalid message history response');
+      }
+      setCursor(data.nextCursor || null);
+      setHasMore(Boolean(data.hasMore));
+      queryClient.setQueryData(['messages', alignmentId], data.messages);
+    } catch (err) {
+      pendingSearchMsgIdRef.current = null;
+      console.error('Search jump failed:', err);
+      if (!err?.toasted) toast.error('Could not load this message. Please try again.');
     }
   };
 
@@ -958,7 +975,7 @@ const Chat = ({ match, onBack }) => {
           />
         </div>
 
-        {inputText.trim() ? (
+        {inputText.trim() && (
           <button 
             className="tactile-btn"
             style={styles.sendBtn} 
@@ -967,20 +984,6 @@ const Chat = ({ match, onBack }) => {
             aria-label="Send message"
           >
             <Icon path={<><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></>} size={20} color="#fff" />
-          </button>
-        ) : (
-          <button 
-            className="tactile-btn"
-            style={styles.attachBtn} 
-            onClick={recording ? stopRecording : startRecording}
-            title="Voice"
-            aria-label="Record voice message"
-          >
-            <Icon 
-              path={<><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></>} 
-              size={22} 
-              color={recording ? t.red : t.yellow}
-            />
           </button>
         )}
       </div>
@@ -999,7 +1002,7 @@ const Chat = ({ match, onBack }) => {
         <MessageActionMenu
           anchorRect={menuAnchor}
           isMine={String(selectedMessage.sender || selectedMessage.senderId) === String(myId)}
-          isMedia={selectedMessage.type === 'image' || selectedMessage.type === 'audio'}
+          isMedia={selectedMessage.type === 'image'}
           onClose={handleCloseMenu}
           onReply={handleReply}
           onReact={handleReact}
@@ -1039,32 +1042,6 @@ const Chat = ({ match, onBack }) => {
           }}
         />
       )}
-
-      {/* ACTION SHEET */}
-      <AnimatePresence>
-        {showActionSheet && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={styles.sheetBackdrop} onClick={() => { setShowActionSheet(false); setPendingFile(null); }}>
-            <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} style={styles.sheet} onClick={(e) => e.stopPropagation()}>
-              <div style={{ padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${t.ink}` }}>
-                <span style={{ fontFamily: t.fontHeavy, fontSize: '18px', fontWeight: '700', color: t.ink }}>Attach Media</span>
-                <button onClick={() => { setShowActionSheet(false); setPendingFile(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-                  <Icon path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} size={20} color={t.ink3} />
-                </button>
-              </div>
-              <div style={{ padding: '16px 24px 24px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <button className="tactile-btn" style={styles.sheetBtn} onClick={() => uploadAndSend('image')}>
-                  <Icon path={<><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></>} size={20} />
-                  Send as Photograph
-                </button>
-                <button className="tactile-btn" style={styles.sheetBtn} onClick={() => uploadAndSend('audio')}>
-                  <Icon path={<><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /></>} size={20} />
-                  Send as Voice Note
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* ARCHIVAL PROFILE SHEET */}
       <AnimatePresence>
@@ -1126,9 +1103,6 @@ const styles = {
   inputWrapper: { flex: 1, backgroundColor: t.card, border: `2px solid ${t.ink}`, borderRadius: '24px', padding: '0 20px', display: 'flex', alignItems: 'center' },
   sendBtn: { width: '44px', height: '44px', borderRadius: t.radius.md, backgroundColor: t.coral, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 },
 
-  sheetBackdrop: { position: 'fixed', inset: 0, backgroundColor: 'rgba(25,25,25,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-end', zIndex: 120 },
-  sheet: { backgroundColor: t.paper, backgroundImage: `url("${t.grain || ''}")`, width: '100%', borderTopLeftRadius: t.radius.lg, borderTopRightRadius: t.radius.lg, boxShadow: `0 -12px 32px ${t.ink}` },
-  sheetBtn: { display: 'flex', alignItems: 'center', gap: '12px', width: '100%', background: t.card, border: `2px solid ${t.ink}`, color: t.ink, fontFamily: t.fontBody, fontWeight: '600', padding: '16px', borderRadius: t.radius.md, fontSize: '14px', cursor: 'pointer' },
 };
 
 export default Chat;

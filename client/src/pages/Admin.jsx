@@ -92,10 +92,6 @@ function Badge({ children, color = T.ink3, style = {} }) {
   );
 }
 
-function Skeleton({ style = {} }) {
-  return <div style={{ backgroundColor: T.hair, borderRadius: 6, ...style }} />;
-}
-
 function PageHeader({ title, subtitle }) {
   return (
     <div style={{ marginBottom: 24 }}>
@@ -191,16 +187,7 @@ function OverviewTab() {
   ] : [];
 
   if (loading) {
-    return (
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
-        {Array.from({ length: 7 }).map((_, i) => (
-          <Card key={i} style={{ padding: 20 }}>
-            <Skeleton style={{ height: 10, width: 100, marginBottom: 14 }} />
-            <Skeleton style={{ height: 30, width: 80 }} />
-          </Card>
-        ))}
-      </div>
-    );
+    return null;
   }
 
   if (!stats) {
@@ -303,14 +290,7 @@ function ReportsTab() {
       </div>
 
       {loading ? (
-        <div style={{ display: 'grid', gap: 12 }}>
-          {Array.from({ length: 5 }).map((_, i) => (
-            <Card key={i} style={{ padding: 16 }}>
-              <Skeleton style={{ height: 14, width: '60%', marginBottom: 10 }} />
-              <Skeleton style={{ height: 12, width: '40%' }} />
-            </Card>
-          ))}
-        </div>
+        null
       ) : reports.length === 0 ? (
         <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ fontFamily: T.fontBody, fontSize: 13.5, fontWeight: 500, color: T.ink2, margin: 0 }}>No reports found</p></Card>
       ) : (
@@ -465,7 +445,7 @@ function UsersTab() {
       </div>
 
       {loading ? (
-        <div style={{ display: 'grid', gap: 12 }}>{Array.from({ length: 5 }).map((_, i) => <Card key={i} style={{ padding: 16 }}><Skeleton style={{ height: 14, width: '50%', marginBottom: 10 }} /><Skeleton style={{ height: 12, width: '30%' }} /></Card>)}</div>
+        null
       ) : users.length === 0 ? (
         <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ fontFamily: T.fontBody, fontSize: 13.5, fontWeight: 500, color: T.ink2, margin: 0 }}>No users found</p></Card>
       ) : (
@@ -589,7 +569,7 @@ function AnalyticsTab() {
     );
   };
 
-  if (loading) return <div style={{ display: 'grid', gap: 16 }}>{Array.from({ length: 4 }).map((_, i) => <Card key={i} style={{ padding: 20, height: 180 }}><Skeleton style={{ height: '100%', width: '100%' }} /></Card>)}</div>;
+  if (loading) return null;
   if (!data) return <Card style={{ padding: 40, textAlign: 'center' }}><p style={{ fontFamily: T.fontBody, fontSize: 13.5, fontWeight: 500, color: T.ink2, margin: 0 }}>Failed to load analytics</p></Card>;
 
   return (
@@ -636,14 +616,20 @@ function SettingsTab() {
       { key: 'maintenanceMode', label: 'Maintenance Mode', type: 'bool' },
     ]},
     { group: 'Moderation', items: [
-      { key: 'shadowbanThreshold', label: 'Shadowban Score Threshold', type: 'number' },
-      { key: 'autoShadowban', label: 'Auto-Shadowban', type: 'bool' },
+      {
+        key: 'reportReviewThreshold',
+        label: 'Different reporters needed to flag an account for review',
+        type: 'number',
+        min: 1,
+        max: 1000,
+        description: 'Repeat reports from the same person count once. Reports flag an account for review; an admin must decide whether to suspend it.',
+      },
     ]},
   ];
 
   const hasChanges = JSON.stringify(settings) !== JSON.stringify(original);
 
-  if (loading) return <div>{Array.from({ length: 3 }).map((_, i) => <Card key={i} style={{ padding: 20, marginBottom: 12 }}><Skeleton style={{ height: 12, width: 200, marginBottom: 14 }} /><Skeleton style={{ height: 40 }} /></Card>)}</div>;
+  if (loading) return null;
 
   return (
     <div>
@@ -654,6 +640,7 @@ function SettingsTab() {
           {group.items.map(f => (
             <div key={f.key} style={{ marginBottom: 14 }}>
               <label style={label}>{f.label}</label>
+              {f.description && <p style={{ fontSize: 12, color: T.ink2, margin: '6px 0 0' }}>{f.description}</p>}
               {f.type === 'bool'
                 ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
                     <button onClick={() => set(f.key, !settings[f.key])} style={{ width: 46, height: 26, borderRadius: 999, border: `2px solid ${T.ink}`, backgroundColor: settings[f.key] ? T.yellow : T.hair, cursor: 'pointer', position: 'relative', transition: 'background 0.2s' }}>
@@ -663,6 +650,9 @@ function SettingsTab() {
                   </div>
                 : <input
                     type={f.type === 'number' ? 'number' : 'text'}
+                    min={f.min}
+                    max={f.max}
+                    step={f.type === 'number' ? 1 : undefined}
                     value={settings[f.key] ?? ''}
                     onChange={e => set(f.key, f.type === 'number' ? Number(e.target.value) : e.target.value)}
                     style={{ width: '100%', maxWidth: 300, padding: '10px 13px', borderRadius: 11, border: `2px solid ${T.ink}`, backgroundColor: T.card, fontSize: 13.5, fontWeight: 500, color: T.ink, fontFamily: T.fontBody, outline: 'none', marginTop: 8 }}

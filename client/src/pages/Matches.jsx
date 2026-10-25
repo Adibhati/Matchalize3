@@ -6,7 +6,6 @@ import { api } from '../utils/api';
 import { toast } from '../utils/toast';
 import { useAuth } from '../utils/AuthContext';
 import socket from '../utils/socket';
-import { SkeletonBox } from '../components/Skeleton';
 import { Heart, MoreVertical, Search, X } from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
 import { DECK_CONTENT_TOP } from '../utils/deckChrome';
@@ -44,7 +43,7 @@ const MATCHES_CSS = `
   }
 `;
 
-const Matches = ({ onOpenChat }) => {
+const Matches = ({ onOpenChat, compact = false }) => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [openMenuId, setOpenMenuId] = useState(null);
@@ -90,18 +89,6 @@ const Matches = ({ onOpenChat }) => {
     return () => socket.off('new-message', onNew);
   }, [queryClient, myId]);
 
-  // Real-time unmatch: remove the alignment from cache when the other user severs the connection
-  useEffect(() => {
-    const onUnmatch = ({ alignmentId }) => {
-      queryClient.setQueryData(['matches'], (old) => ({
-        ...(old || {}),
-        matches: (old?.matches || []).filter((m) => m._id !== alignmentId),
-      }));
-    };
-    socket.on('unmatch-notification', onUnmatch);
-    return () => socket.off('unmatch-notification', onUnmatch);
-  }, [queryClient]);
-
   const handleUnmatch = useCallback(async (alignmentId) => {
     setOpenMenuId(null);
     if (!window.confirm('Are you sure you want to unmatch? This cannot be undone.')) return;
@@ -143,27 +130,10 @@ const Matches = ({ onOpenChat }) => {
     if (!query) return matches;
     return matches.filter((m) => m.user?.name?.toLowerCase().includes(query));
   }, [matches, search]);
+  const contentPadding = compact ? '12px 14px 16px' : `calc(${DECK_CONTENT_TOP} + 8px) 14px 16px`;
 
   if (isLoading) {
-    return (
-      <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: `calc(${DECK_CONTENT_TOP} + 8px) 14px 16px` }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {[0, 1, 2].map((i) => (
-            <div key={i} style={{
-              display: 'flex', alignItems: 'center', gap: 14,
-              backgroundColor: t.paper, border: `2px solid ${t.ink}`,
-              borderRadius: 16, boxShadow: `5px 5px 0 ${t.ink}`, padding: 16,
-            }}>
-              <SkeletonBox width={56} height={56} radius={12} />
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <SkeletonBox width={120} height={14} />
-                <SkeletonBox width={180} height={11} />
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
+    return null;
   }
 
   if (matches.length === 0) {
@@ -190,7 +160,7 @@ const Matches = ({ onOpenChat }) => {
   }
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: `calc(${DECK_CONTENT_TOP} + 8px) 14px 16px`, position: 'relative' }}>
+    <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, padding: contentPadding, position: 'relative' }}>
       <style>{MATCHES_CSS}</style>
 
       <div style={{ position: 'relative' }}>
@@ -257,7 +227,7 @@ const Matches = ({ onOpenChat }) => {
               (lastMessage && lastMessage.senderId && lastMessage.senderId !== myId && !lastMessage.readAt);
             const isOpen = openMenuId === match._id;
 
-            const lastIsMedia = lastMessage && (lastMessage.type === 'image' || lastMessage.type === 'audio');
+            const lastIsMedia = lastMessage?.type === 'image';
 
             return (
               <div
@@ -317,8 +287,8 @@ const Matches = ({ onOpenChat }) => {
                   <p style={{ fontFamily: t.fontBody, fontSize: 12.5, color: unread ? t.ink : t.ink2, margin: '4px 0 0 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: unread ? 700 : 500 }}>
                     {lastMessage
                       ? lastIsMedia
-                        ? (lastMessage.type === 'image' ? '📷 Sent a photograph' : '🎙 Sent a voice note')
-                        : lastMessage.text
+                        ? '📷 Sent a photograph'
+                        : lastMessage.text || 'Message unavailable'
                       : 'Open chat'}
                   </p>
                 </div>

@@ -3,7 +3,6 @@ import { motion } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
 import { Check, CheckCheck } from 'lucide-react';
 import PolaroidCard from '../PolaroidCard';
-import CassettePlayer from '../CassettePlayer';
 import neu from '../../styles/neu';
 
 const t = neu;
@@ -49,17 +48,17 @@ const MessageBubble = ({
         </div>
       );
     }
-    if (message.type === 'audio') {
-      return (
-        <div data-no-longpress>
-          <CassettePlayer audioUrl={message.mediaUrl} themeColor={isMine ? t.yellow : t.ink2} />
-        </div>
-      );
-    }
     if (message.deleted) {
       return (
         <span style={{ fontStyle: 'italic', color: t.ink3, fontSize: '13px', fontFamily: t.fontBody }}>
           This artifact was removed.
+        </span>
+      );
+    }
+    if (message.type !== 'text' && message.type !== 'opening_letter') {
+      return (
+        <span style={{ fontStyle: 'italic', color: t.ink3, fontSize: '13px', fontFamily: t.fontBody }}>
+          This message type is no longer available.
         </span>
       );
     }
@@ -90,6 +89,7 @@ const MessageBubble = ({
       // fresh reactions to a message that had already been removed.
       onTouchStart={message.deleted ? undefined : startPress}
       onTouchEnd={message.deleted ? undefined : cancelPress}
+      onTouchCancel={message.deleted ? undefined : cancelPress}
       onTouchMove={message.deleted ? undefined : cancelPress}
       onMouseDown={message.deleted ? undefined : startPress}
       onMouseUp={message.deleted ? undefined : cancelPress}

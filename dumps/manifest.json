@@ -1,11 +1,11 @@
 {
-  "generated": "2026-10-17 21:10",
+  "generated": "2026-10-18 20:29",
   "budget": 102400,
   "chars_per_token": 3.5,
-  "file_count": 160,
-  "chunk_count": 27,
-  "total_bytes": 1723206,
-  "max_chunk_bytes": 101822,
+  "file_count": 170,
+  "chunk_count": 28,
+  "total_bytes": 1812386,
+  "max_chunk_bytes": 101792,
   "verified": true,
   "errors": [],
   "chunks": [
@@ -78,8 +78,8 @@
         "server/.npmrc",
         "server/package.json"
       ],
-      "bytes": 31986,
-      "tokens": 9138,
+      "bytes": 32462,
+      "tokens": 9274,
       "oversize": [],
       "budget": 102400
     },
@@ -132,10 +132,11 @@
         "client/src/utils/shuffle.js",
         "client/src/utils/socket.js",
         "client/src/utils/toast.js",
-        "client/src/utils/useIsDesktop.js"
+        "client/src/utils/useIsDesktop.js",
+        "client/src/utils/webrtc.js"
       ],
-      "bytes": 41845,
-      "tokens": 11955,
+      "bytes": 61005,
+      "tokens": 17430,
       "oversize": [],
       "budget": 102400
     },
@@ -148,7 +149,6 @@
         "client/src/components/AccountSuspendedScreen.jsx",
         "client/src/components/AppShell.jsx",
         "client/src/components/ArchivalToast.jsx",
-        "client/src/components/CassettePlayer.jsx",
         "client/src/components/DeckActions.jsx",
         "client/src/components/DesktopSidebar.jsx",
         "client/src/components/DiscoverRebuildOverlay.jsx",
@@ -158,8 +158,8 @@
         "client/src/components/LocationNotice.jsx",
         "client/src/components/NavBar.jsx"
       ],
-      "bytes": 94344,
-      "tokens": 26955,
+      "bytes": 90838,
+      "tokens": 25953,
       "oversize": [],
       "budget": 102400
     },
@@ -179,11 +179,10 @@
         "client/src/components/chat/EmojiPicker.jsx",
         "client/src/components/chat/MessageActionMenu.jsx",
         "client/src/components/chat/MessageBubble.jsx",
-        "client/src/components/chat/PhotoViewer.jsx",
-        "client/src/components/chat/ReplyPreview.jsx"
+        "client/src/components/chat/PhotoViewer.jsx"
       ],
-      "bytes": 101822,
-      "tokens": 29092,
+      "bytes": 99010,
+      "tokens": 28288,
       "oversize": [],
       "budget": 102400
     },
@@ -193,11 +192,12 @@
       "group": "client-components",
       "title": "Client Components",
       "files": [
+        "client/src/components/chat/ReplyPreview.jsx",
         "client/src/components/chat/ReportModal.jsx",
         "client/src/components/chat/SearchOverlay.jsx"
       ],
-      "bytes": 28270,
-      "tokens": 8077,
+      "bytes": 33300,
+      "tokens": 9514,
       "oversize": [],
       "budget": 102400
     },
@@ -209,8 +209,8 @@
       "files": [
         "client/src/pages/Admin.jsx"
       ],
-      "bytes": 61611,
-      "tokens": 17603,
+      "bytes": 62034,
+      "tokens": 17724,
       "oversize": [],
       "budget": 102400
     },
@@ -222,8 +222,8 @@
       "files": [
         "client/src/pages/Auth.jsx"
       ],
-      "bytes": 71860,
-      "tokens": 20531,
+      "bytes": 78015,
+      "tokens": 22290,
       "oversize": [],
       "budget": 102400
     },
@@ -236,8 +236,8 @@
         "client/src/pages/AuthFlow.jsx",
         "client/src/pages/Chat.jsx"
       ],
-      "bytes": 95607,
-      "tokens": 27316,
+      "bytes": 92615,
+      "tokens": 26461,
       "oversize": [],
       "budget": 102400
     },
@@ -250,8 +250,8 @@
         "client/src/pages/Discover.jsx",
         "client/src/pages/Matches.jsx"
       ],
-      "bytes": 55291,
-      "tokens": 15797,
+      "bytes": 55555,
+      "tokens": 15872,
       "oversize": [],
       "budget": 102400
     },
@@ -276,8 +276,8 @@
       "files": [
         "client/src/pages/Profile.jsx"
       ],
-      "bytes": 98128,
-      "tokens": 28036,
+      "bytes": 98051,
+      "tokens": 28014,
       "oversize": [],
       "budget": 102400
     },
@@ -290,8 +290,8 @@
         "client/src/pages/Roulette.jsx",
         "client/src/pages/Settings.jsx"
       ],
-      "bytes": 46308,
-      "tokens": 13230,
+      "bytes": 59731,
+      "tokens": 17066,
       "oversize": [],
       "budget": 102400
     },
@@ -310,19 +310,20 @@
         "server/middleware/auth.js",
         "server/middleware/blockFilter.js",
         "server/middleware/rateLimiters.js",
+        "server/middleware/sanitizeMongoInput.js",
         "server/middleware/validate.js",
         "server/models/Alignment.js",
         "server/models/Analytics.js",
         "server/models/Block.js",
         "server/models/College.js",
         "server/models/CollegeRequest.js",
+        "server/models/DailyAlignQuota.js",
         "server/models/DeckImpression.js",
         "server/models/DiscoverSession.js",
-        "server/models/Interaction.js",
-        "server/models/Message.js"
+        "server/models/Interaction.js"
       ],
-      "bytes": 100230,
-      "tokens": 28637,
+      "bytes": 100217,
+      "tokens": 28633,
       "oversize": [],
       "budget": 102400
     },
@@ -332,6 +333,8 @@
       "group": "server-core",
       "title": "Server Core",
       "files": [
+        "server/models/Message.js",
+        "server/models/ModerationLedger.js",
         "server/models/Notification.js",
         "server/models/OTP.js",
         "server/models/Report.js",
@@ -351,8 +354,8 @@
         "server/scripts/seed-iitb.mjs",
         "server/scripts/verify-deck-metrics.mjs"
       ],
-      "bytes": 97573,
-      "tokens": 27878,
+      "bytes": 101792,
+      "tokens": 29083,
       "oversize": [],
       "budget": 102400
     },
@@ -365,35 +368,34 @@
         "server/scripts/verify-location-swap.mjs",
         "server/seedRealistic.js",
         "server/socket/chat.js",
+        "server/socket/rouletteSignaling.js",
         "server/utils/AppError.js",
         "server/utils/campusGate.js",
         "server/utils/campusSeed.js",
         "server/utils/email.js",
         "server/utils/media.js",
-        "server/utils/otpHash.js",
-        "server/utils/partnerView.js",
-        "server/utils/publicCard.js",
-        "server/utils/push.js",
-        "server/utils/queue.js"
+        "server/utils/moderationLedger.js",
+        "server/utils/otpHash.js"
       ],
-      "bytes": 90064,
-      "tokens": 25732,
+      "bytes": 101255,
+      "tokens": 28930,
       "oversize": [],
       "budget": 102400
     },
     {
       "chunk": 21,
-      "file": "21-server-routes.md",
-      "group": "server-routes",
-      "title": "Server Routes",
+      "file": "21-server-core.md",
+      "group": "server-core",
+      "title": "Server Core",
       "files": [
-        "server/routes/admin.js",
-        "server/routes/alignments.js",
-        "server/routes/auth.js",
-        "server/routes/colleges.js"
+        "server/utils/partnerView.js",
+        "server/utils/publicCard.js",
+        "server/utils/push.js",
+        "server/utils/queue.js",
+        "server/utils/signalingRateLimit.js"
       ],
-      "bytes": 71913,
-      "tokens": 20546,
+      "bytes": 26046,
+      "tokens": 7441,
       "oversize": [],
       "budget": 102400
     },
@@ -403,10 +405,13 @@
       "group": "server-routes",
       "title": "Server Routes",
       "files": [
-        "server/routes/discover.js"
+        "server/routes/admin.js",
+        "server/routes/alignments.js",
+        "server/routes/auth.js",
+        "server/routes/colleges.js"
       ],
-      "bytes": 87562,
-      "tokens": 25017,
+      "bytes": 73671,
+      "tokens": 21048,
       "oversize": [],
       "budget": 102400
     },
@@ -416,20 +421,33 @@
       "group": "server-routes",
       "title": "Server Routes",
       "files": [
+        "server/routes/discover.js"
+      ],
+      "bytes": 91429,
+      "tokens": 26122,
+      "oversize": [],
+      "budget": 102400
+    },
+    {
+      "chunk": 24,
+      "file": "24-server-routes.md",
+      "group": "server-routes",
+      "title": "Server Routes",
+      "files": [
         "server/routes/messages.js",
         "server/routes/notifications.js",
         "server/routes/report.js",
         "server/routes/upload.js",
         "server/routes/users.js"
       ],
-      "bytes": 85899,
-      "tokens": 24542,
+      "bytes": 87283,
+      "tokens": 24938,
       "oversize": [],
       "budget": 102400
     },
     {
-      "chunk": 24,
-      "file": "24-server-tests.md",
+      "chunk": 25,
+      "file": "25-server-tests.md",
       "group": "server-tests",
       "title": "Server Tests",
       "files": [
@@ -442,16 +460,21 @@
         "server/tests/society/cast.mjs",
         "server/tests/society/personas.mjs",
         "server/tests/society/seedSociety.mjs",
-        "server/tests/unit/partnerView.test.js"
+        "server/tests/unit/email.test.js",
+        "server/tests/unit/moderationLedger.test.js",
+        "server/tests/unit/partnerView.test.js",
+        "server/tests/unit/profileStringLimits.test.js",
+        "server/tests/unit/reportAnalyticsIndexes.test.js",
+        "server/tests/unit/sanitizeMongoInput.test.js"
       ],
-      "bytes": 76540,
-      "tokens": 21868,
+      "bytes": 83077,
+      "tokens": 23736,
       "oversize": [],
       "budget": 102400
     },
     {
-      "chunk": 25,
-      "file": "25-docs.md",
+      "chunk": 26,
+      "file": "26-docs.md",
       "group": "docs",
       "title": "Docs",
       "files": [
@@ -464,22 +487,21 @@
       "budget": 102400
     },
     {
-      "chunk": 26,
-      "file": "26-docs.md",
+      "chunk": 27,
+      "file": "27-docs.md",
       "group": "docs",
       "title": "Docs",
       "files": [
-        "errors.md",
-        "solved.md"
+        "errors.md"
       ],
-      "bytes": 41360,
-      "tokens": 11817,
+      "bytes": 39994,
+      "tokens": 11426,
       "oversize": [],
       "budget": 102400
     },
     {
-      "chunk": 27,
-      "file": "27-tools.md",
+      "chunk": 28,
+      "file": "28-tools.md",
       "group": "tools",
       "title": "Tools",
       "files": [
@@ -488,8 +510,8 @@
         "scripts/generate-icons.mjs",
         "scripts/generate-server-dump.sh"
       ],
-      "bytes": 44050,
-      "tokens": 12585,
+      "bytes": 44063,
+      "tokens": 12589,
       "oversize": [],
       "budget": 102400
     }
@@ -545,10 +567,10 @@
         "client/src/utils/socket.js",
         "client/src/utils/toast.js",
         "client/src/utils/useIsDesktop.js",
+        "client/src/utils/webrtc.js",
         "client/src/components/AccountSuspendedScreen.jsx",
         "client/src/components/AppShell.jsx",
         "client/src/components/ArchivalToast.jsx",
-        "client/src/components/CassettePlayer.jsx",
         "client/src/components/DeckActions.jsx",
         "client/src/components/DesktopSidebar.jsx",
         "client/src/components/DiscoverRebuildOverlay.jsx",
@@ -590,16 +612,19 @@
         "server/middleware/auth.js",
         "server/middleware/blockFilter.js",
         "server/middleware/rateLimiters.js",
+        "server/middleware/sanitizeMongoInput.js",
         "server/middleware/validate.js",
         "server/models/Alignment.js",
         "server/models/Analytics.js",
         "server/models/Block.js",
         "server/models/College.js",
         "server/models/CollegeRequest.js",
+        "server/models/DailyAlignQuota.js",
         "server/models/DeckImpression.js",
         "server/models/DiscoverSession.js",
         "server/models/Interaction.js",
         "server/models/Message.js",
+        "server/models/ModerationLedger.js",
         "server/models/Notification.js",
         "server/models/OTP.js",
         "server/models/Report.js",
@@ -621,16 +646,19 @@
         "server/scripts/verify-location-swap.mjs",
         "server/seedRealistic.js",
         "server/socket/chat.js",
+        "server/socket/rouletteSignaling.js",
         "server/utils/AppError.js",
         "server/utils/campusGate.js",
         "server/utils/campusSeed.js",
         "server/utils/email.js",
         "server/utils/media.js",
+        "server/utils/moderationLedger.js",
         "server/utils/otpHash.js",
         "server/utils/partnerView.js",
         "server/utils/publicCard.js",
         "server/utils/push.js",
         "server/utils/queue.js",
+        "server/utils/signalingRateLimit.js",
         "server/routes/admin.js",
         "server/routes/alignments.js",
         "server/routes/auth.js",
@@ -650,18 +678,22 @@
         "server/tests/society/cast.mjs",
         "server/tests/society/personas.mjs",
         "server/tests/society/seedSociety.mjs",
+        "server/tests/unit/email.test.js",
+        "server/tests/unit/moderationLedger.test.js",
         "server/tests/unit/partnerView.test.js",
+        "server/tests/unit/profileStringLimits.test.js",
+        "server/tests/unit/reportAnalyticsIndexes.test.js",
+        "server/tests/unit/sanitizeMongoInput.test.js",
         "HANDOFF.md",
         "ambitions/roulette.md",
         "errors.md",
-        "solved.md",
         "regenerate_dumps.py",
         "scripts/generate-dump.sh",
         "scripts/generate-icons.mjs",
         "scripts/generate-server-dump.sh"
       ],
-      "bytes": 1712360,
-      "tokens": 489245
+      "bytes": 1800832,
+      "tokens": 514523
     },
     {
       "file": "server_dump.md",
@@ -676,16 +708,19 @@
         "server/middleware/auth.js",
         "server/middleware/blockFilter.js",
         "server/middleware/rateLimiters.js",
+        "server/middleware/sanitizeMongoInput.js",
         "server/middleware/validate.js",
         "server/models/Alignment.js",
         "server/models/Analytics.js",
         "server/models/Block.js",
         "server/models/College.js",
         "server/models/CollegeRequest.js",
+        "server/models/DailyAlignQuota.js",
         "server/models/DeckImpression.js",
         "server/models/DiscoverSession.js",
         "server/models/Interaction.js",
         "server/models/Message.js",
+        "server/models/ModerationLedger.js",
         "server/models/Notification.js",
         "server/models/OTP.js",
         "server/models/Report.js",
@@ -707,16 +742,19 @@
         "server/scripts/verify-location-swap.mjs",
         "server/seedRealistic.js",
         "server/socket/chat.js",
+        "server/socket/rouletteSignaling.js",
         "server/utils/AppError.js",
         "server/utils/campusGate.js",
         "server/utils/campusSeed.js",
         "server/utils/email.js",
         "server/utils/media.js",
+        "server/utils/moderationLedger.js",
         "server/utils/otpHash.js",
         "server/utils/partnerView.js",
         "server/utils/publicCard.js",
         "server/utils/push.js",
         "server/utils/queue.js",
+        "server/utils/signalingRateLimit.js",
         "server/routes/admin.js",
         "server/routes/alignments.js",
         "server/routes/auth.js",
@@ -736,10 +774,15 @@
         "server/tests/society/cast.mjs",
         "server/tests/society/personas.mjs",
         "server/tests/society/seedSociety.mjs",
-        "server/tests/unit/partnerView.test.js"
+        "server/tests/unit/email.test.js",
+        "server/tests/unit/moderationLedger.test.js",
+        "server/tests/unit/partnerView.test.js",
+        "server/tests/unit/profileStringLimits.test.js",
+        "server/tests/unit/reportAnalyticsIndexes.test.js",
+        "server/tests/unit/sanitizeMongoInput.test.js"
       ],
-      "bytes": 606377,
-      "tokens": 173250
+      "bytes": 660626,
+      "tokens": 188750
     }
   ]
 }

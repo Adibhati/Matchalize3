@@ -1,29 +1,36 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { api } from '../utils/api';
 import { useChromeColor } from '../utils/chrome';
 import socket from '../utils/socket';
 import { triggerHaptic } from '../utils/haptics';
-import { CheckCircle2, Search } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Search, X } from 'lucide-react';
 import AccountSuspendedScreen from '../components/AccountSuspendedScreen';
 import { useAuth } from '../utils/AuthContext';
 import neu from '../styles/neu';
-import { useIsDesktop } from '../utils/useIsDesktop';
 import campusPhoto from '../assets/college-town-aesthetic-cute-college-town.jpg';
 
-const M = neu;
+const M = neu; // canon reference — kept only for the (hidden) SVG artwork voices
 
+/* ============================================================
+   C — THE DIALECT (ProfileCard.jsx palette, project-wide winner).
+   docs/DESIGN-SYSTEM.md is the documentation twin of this object.
+   One skin for every step and every breakpoint; per-step scenes
+   were retired when the dialect was unified.
+   ============================================================ */
 const C = {
-  ink: '#111211',
-  ink2: '#383832',
-  muted: '#77766F',
-  paper: '#F1EDE2',
-  card: '#F8F5EC',
-  amber: '#E0A15E',
-  coral: '#C96F68',
-  sage: '#779477',
-  concrete: '#A3A3A1',
-  red: '#A84F4A',
+  ink: '#171414',            // all line work: borders, hard shadows, primary text
+  ink2: '#393130',           // secondary text
+  muted: '#6E6160',          // placeholders / tertiary
+  paper: '#FFF9F4',          // page canvas
+  card: '#FFFCF8',           // raised surfaces (inputs, tiles, photo frames)
+  yellow: '#FFE76A',         // THE action color: CTAs, highlights, selection
+  yellowDeep: '#FFDE45',     // pressed-CTA lemon
+  coral: '#FF7399',          // secondary accent (the tilted "?", focus pops)
+  green: '#B8F0C7',          // pastel mint — success / chosen washes
+  pink: '#C8A7FF',           // lavender — decorative tile voice
+  red: '#D9485D',            // destructive + errors only
   body: "'Space Grotesk', sans-serif",
   display: "'Barlow Condensed', sans-serif",
   mono: "'IBM Plex Mono', monospace",
@@ -43,12 +50,13 @@ export const AUTH_CSS = `
     --muted: ${C.muted};
     --paper: ${C.paper};
     --card: ${C.card};
-    --amber: ${C.amber};
+    --yellow: ${C.yellow};
+    --yellow-deep: ${C.yellowDeep};
     --coral: ${C.coral};
-    --sage: ${C.sage};
+    --mint: ${C.green};
     --red: ${C.red};
-    --accent: var(--coral);
-    --tint: rgba(201,111,104,.14);
+    --accent: ${C.coral};
+    --tint: rgba(255, 231, 106, .16);
     --body: ${C.body};
     --display: ${C.display};
     --mono: ${C.mono};
@@ -79,102 +87,55 @@ export const AUTH_CSS = `
     -webkit-tap-highlight-color: transparent;
   }
 
-  .au-root::before,
-  .au-root::after {
-    content: '';
-    position: fixed;
-    z-index: 0;
-    pointer-events: none;
-    border-radius: 50%;
-  }
-
-  .au-root::before {
-    width: min(55vw, 390px);
-    height: min(55vw, 390px);
-    top: -190px;
-    right: -100px;
-    background: var(--tint);
-    filter: blur(24px);
-    transition: background .4s ease;
-  }
-
-  .au-root::after {
-    width: 260px;
-    height: 260px;
-    bottom: -190px;
-    left: -110px;
-    background: rgba(119,148,119,.12);
-    filter: blur(20px);
-  }
+  /* The old heritage blur-circle garnish is retired with the dialect. */
 
   .au-root ::selection {
-    background: var(--accent);
+    background: var(--yellow);
     color: var(--ink);
   }
 
-  .au-root-college {
-    --paper: #F1EDE2;
-    --ink: #111211;
-    --ink2: #383832;
-    --muted: #77766F;
-    --card: #F8F5EC;
-    --accent: #C96F68;
-    --tint: rgba(201,111,104,.14);
+  /* One uniform skin. The per-step desktop scenes (coral / sage / amber /
+     dark) were retired when the app unified on the ProfileCard dialect. */
+
+  /* Desktop split: keep the photo and form in fluid columns so the form is
+     centered in the space remaining beside the image at every desktop width. */
+  .au-root {
+    --au-scene-width: 55vw;
   }
 
-  .au-root-request {
-    --paper: #E1E7D9;
-    --ink: #111211;
-    --ink2: #383832;
-    --muted: #77766F;
-    --card: #F8F5EC;
-    --accent: #779477;
-    --tint: rgba(119,148,119,.18);
-  }
-
-  .au-root-email {
-    --paper: #F1EDE2;
-    --ink: #111211;
-    --ink2: #383832;
-    --muted: #77766F;
-    --card: #F8F5EC;
-    --accent: #E0A15E;
-    --tint: rgba(224,161,94,.22);
-  }
-
-  .au-root-otp,
-  .au-root-verify {
-    --paper: #111211;
-    --ink: #F1EDE2;
-    --ink2: #D8D3C8;
-    --muted: #A3A3A1;
-    --card: #20211F;
-    --accent: #779477;
-    --tint: rgba(119,148,119,.18);
+  .au-root-college .au-searchwrap {
+    width: 115%;
+    margin-left: -7.5%;
+    margin-top: 10px;
   }
 
   .au-fit {
     position: relative;
     z-index: 1;
-    width: 100%;
+    width: calc(100% - var(--au-scene-width));
+    margin-left: var(--au-scene-width);
     min-height: 100%;
     display: flex;
     flex-direction: column;
   }
 
   .au-panel {
+    position: relative;
+    z-index: 1;
     width: 100%;
     min-height: 100vh;
     min-height: 100dvh;
     flex: 1;
     display: flex;
     flex-direction: column;
+    align-items: center;
     justify-content: center;
-    margin: 0;
+    margin: 0 auto;
     padding:
-      max(34px, env(safe-area-inset-top))
-      clamp(22px, 6vw, 88px)
-      max(30px, env(safe-area-inset-bottom));
+      max(40px, env(safe-area-inset-top))
+      clamp(28px, 4vw, 72px)
+      max(34px, env(safe-area-inset-bottom));
+    max-width: 760px;
     background: transparent;
     border: 0;
     border-radius: 0;
@@ -184,60 +145,48 @@ export const AUTH_CSS = `
   .au-step {
     position: relative;
     width: 100%;
-    max-width: 1040px;
+    max-width: 520px;
     min-width: 0;
-    margin: 0 auto;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(220px, .72fr);
-    align-content: center;
-    align-items: center;
-    gap: 19px clamp(22px, 4vw, 45px);
-  }
-
-  .au-step > .au-headline {
-    grid-column: 1;
     margin: 0;
-    max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 18px;
   }
 
-  .au-step > .au-sub {
-    grid-column: 1;
+  .au-root .au-step {
+    translate: 0 var(--au-search-shift, 0px);
+    transition: translate .46s cubic-bezier(.22, 1, .36, 1);
+    will-change: translate;
   }
 
-  .au-step > .au-art {
-    grid-column: 2;
-    grid-row: 1 / span 2;
+  .au-root.is-layout-resizing .au-step {
+    transition: none !important;
   }
 
-  .au-step > *:not(.au-headline):not(.au-sub):not(.au-art) {
-    grid-column: 1 / -1;
-    min-width: 0;
-  }
-
+  /* ONE headline voice on every breakpoint — the Space Grotesk 800 look the
+     phone uses. Desktop only scales it up; there is no second display font
+     anymore, so phone and desktop read as the same screen. */
   .au-headline {
     margin: 0;
     max-width: 100%;
     color: var(--ink);
-    font-family: var(--display);
-    font-size: clamp(55px, 7.4vw, 91px);
+    font-family: var(--body);
+    font-size: clamp(34px, 3.4vw, 48px);
     font-weight: 800;
-    letter-spacing: -.035em;
-    line-height: .87;
-    text-transform: uppercase;
+    letter-spacing: -.06em;
+    line-height: 1.04;
     overflow-wrap: anywhere;
     text-wrap: balance;
     transition: color .3s ease;
   }
 
-  .au-headline::after {
-    content: '';
-    display: block;
-    width: 62px;
-    height: 7px;
-    margin-top: 16px;
-    border-radius: 99px;
-    background: var(--accent);
-    transition: background .3s ease;
+  /* Keep "huh?" in the same type style as the surrounding headline. */
+  .au-headline .au-huh-inline {
+    font: inherit;
+    letter-spacing: inherit;
+    white-space: nowrap;
+    text-shadow: none;
   }
 
   .au-sub {
@@ -245,9 +194,9 @@ export const AUTH_CSS = `
     max-width: 570px;
     color: var(--ink2);
     font-family: var(--body);
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 400;
-    line-height: 1.8;
+    line-height: 1.6;
     overflow-wrap: anywhere;
     transition: color .3s ease;
   }
@@ -262,86 +211,11 @@ export const AUTH_CSS = `
     text-transform: lowercase;
   }
 
-  /* Each screen has a little illustration of its own. */
+  /* The little SVG step illustrations are retired: the campus photo pane
+     replaced them on desktop, the full-bleed photo replaced them on mobile.
+     The component still renders (hidden) so nothing else has to change. */
   .au-art {
-    position: relative;
-    width: 100%;
-    min-width: 0;
-    height: clamp(190px, 25vw, 280px);
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--tint);
-    border: 1px solid rgba(17,18,17,.1);
-    border-radius: 30px 30px 9px 30px;
-    transition: background .35s ease, border-color .35s ease;
-  }
-
-  .au-root-otp .au-art,
-  .au-root-verify .au-art {
-    border-color: rgba(241,237,226,.12);
-  }
-
-  .au-art::before {
-    content: '';
-    position: absolute;
-    width: 120px;
-    height: 120px;
-    top: -52px;
-    right: -42px;
-    border: 1px solid var(--accent);
-    border-radius: 50%;
-    opacity: .5;
-  }
-
-  .au-art::after {
-    content: '';
-    position: absolute;
-    bottom: -31px;
-    left: -20px;
-    width: 66px;
-    height: 66px;
-    border-radius: 22px;
-    background: var(--accent);
-    opacity: .17;
-    transform: rotate(-16deg);
-  }
-
-  .au-art svg {
-    position: relative;
-    z-index: 1;
-    width: 100%;
-    height: 100%;
-    overflow: visible;
-  }
-
-  .au-art .art-float {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: au-float 4s ease-in-out infinite;
-  }
-
-  .au-art .art-late {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: au-float 4.5s ease-in-out -1.5s infinite;
-  }
-
-  .au-art .art-pulse {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: au-pulse 3.4s ease-in-out infinite;
-  }
-
-  @keyframes au-float {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-6px); }
-  }
-
-  @keyframes au-pulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.035); }
+    display: none;
   }
 
   .au-searchwrap {
@@ -349,37 +223,114 @@ export const AUTH_CSS = `
     position: relative;
   }
 
+  .au-college-heading-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .au-college-heading-row .au-headline {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .au-request-heading-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+  }
+
+  .au-request-heading-row .au-headline {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .au-search-close {
+    flex: 0 0 32px;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 40px;
+    margin: 0;
+    padding: 0;
+    color: var(--ink2);
+    background: transparent;
+    border: 0;
+    border-radius: 50%;
+    box-shadow: none;
+    cursor: pointer;
+    transition: color .12s ease, background .12s ease;
+  }
+
+  .au-search-close:hover { color: var(--ink); }
+
+  .au-search-close:active { background: rgba(23, 20, 20, .08); }
+
+  .au-request-back {
+    position: absolute;
+    z-index: 7;
+    left: -40px;
+    top: 50%;
+    width: 32px;
+    height: 40px;
+    margin: 0;
+    color: var(--coral);
+    transform: translateY(-50%);
+  }
+
+  .au-field-label {
+    display: block;
+    color: var(--ink2);
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+  }
+
   .au-searchicon {
     width: 43px;
     height: 43px;
     position: absolute;
     z-index: 1;
-    left: 11px;
+    left: 13px;
     top: 50%;
     display: grid;
     place-items: center;
     transform: translateY(-50%);
     color: var(--ink);
-    background: var(--tint);
+    background: transparent;
     border-radius: 15px;
     pointer-events: none;
   }
 
+  .au-search-clear {
+    padding: 0;
+    border: 0;
+    box-shadow: none;
+    cursor: pointer;
+    pointer-events: auto;
+  }
+
+  /* Dialect inputs everywhere: card face, 2px ink line, hard slam shadow. */
   .au-search,
   .au-input {
     display: block;
     width: 100%;
     min-width: 0;
-    height: 68px;
+    height: 64px;
     padding: 0 20px;
     color: var(--ink);
     background: var(--card);
-    border: 1.5px solid var(--line, rgba(17,18,17,.16));
-    border-radius: 17px;
+    border: 2px solid var(--ink);
+    border-radius: 14px;
     outline: none;
-    box-shadow: 0 3px 0 rgba(17,18,17,.025);
+    box-shadow: 3px 3px 0 var(--ink);
     font-family: var(--body);
-    font-size: 18px;
+    font-size: 17px;
     font-weight: 500;
     -webkit-appearance: none;
     appearance: none;
@@ -387,7 +338,7 @@ export const AUTH_CSS = `
   }
 
   .au-search {
-    padding-left: 67px;
+    padding-left: 62px;
   }
 
   .au-search::placeholder,
@@ -398,10 +349,11 @@ export const AUTH_CSS = `
   }
 
   .au-search:focus,
-  .au-input:focus {
-    background: var(--card);
-    border-color: var(--accent);
-    box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 4px var(--tint);
+  .au-input:focus,
+  .au-field input:focus {
+    background: #FFF0F4;
+    border-color: var(--coral);
+    box-shadow: 4px 4px 0 var(--coral);
   }
 
   .au-input:disabled {
@@ -413,84 +365,115 @@ export const AUTH_CSS = `
     -webkit-text-fill-color: var(--ink);
   }
 
+  /* College results — one shared design on both breakpoints: circular logo
+     on the left, name + location on the right, hairline-separated rows. */
   .au-results {
     width: 100%;
-    max-height: max(230px, calc(100dvh - 350px));
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    align-content: start;
-    gap: 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
-    padding: 3px 4px 8px 2px;
+    padding: 0;
+    border-top: 1px solid var(--line, rgba(23,20,20,.22));
   }
 
   .au-result {
     position: relative;
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    justify-content: center;
-    gap: 7px;
-    min-height: 94px;
+    flex-direction: row;
+    align-items: center;
+    gap: 15px;
+    min-height: 76px;
     width: 100%;
-    padding: 16px 38px 16px 16px;
+    padding: 12px 44px 12px 4px;
     text-align: left;
-    background: var(--card);
+    background: transparent;
     color: var(--ink);
-    border: 1px solid rgba(17,18,17,.1);
-    border-radius: 16px;
+    border: 0;
+    border-bottom: 1px solid var(--line, rgba(23,20,20,.22));
+    border-radius: 0;
     cursor: pointer;
-    box-shadow: 0 3px 0 rgba(17,18,17,.035);
-    transition: background .18s ease, border-color .18s ease, transform .18s ease;
-  }
-
-  .au-result:nth-child(5n + 2) {
-    background: #E8EBDD;
-  }
-
-  .au-result:nth-child(5n + 4) {
-    background: #F1DFD5;
+    transition: background .15s ease;
   }
 
   .au-result::after {
-    content: '↗';
+    content: '→';
     position: absolute;
-    top: 15px;
-    right: 14px;
-    color: var(--muted);
-    font: 16px var(--body);
+    top: 50%;
+    right: 12px;
+    transform: translateY(-50%);
+    color: var(--ink);
+    font: 19px/1 var(--body);
     transition: transform .18s ease, color .18s ease;
+  }
+
+  .au-result:hover::after {
+    color: var(--coral);
+    transform: translateY(-50%) translate(2px, 0);
+  }
+
+  /* The circular college logo (uploaded logo, or an ink initials fallback). */
+  .au-logo {
+    flex-shrink: 0;
+    width: 52px;
+    height: 52px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    background: var(--card);
+    border: 2px solid var(--ink);
+    border-radius: 50%;
+    box-shadow: 2px 2px 0 var(--ink);
+    color: var(--ink2);
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: .02em;
+  }
+
+  .au-logo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .au-result-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
   }
 
   .au-result-name {
     color: var(--ink);
     font-family: var(--body);
-    font-size: 15px;
+    font-size: 15.5px;
     font-weight: 700;
-    line-height: 1.45;
+    line-height: 1.35;
     overflow-wrap: anywhere;
   }
 
   .au-result-meta {
-    color: #77766F;
+    color: var(--muted);
     font-family: var(--mono);
     font-size: 10px;
-    font-weight: 500;
+    font-weight: 600;
     line-height: 1.5;
-    letter-spacing: .025em;
+    letter-spacing: .05em;
     text-transform: uppercase;
   }
 
   .au-result.chosen {
-    background: #E6E8DA;
-    border-color: var(--sage);
+    background: rgba(184, 240, 199, .28);
   }
 
   .au-result.chosen::after {
     content: '✓';
-    color: var(--sage);
+    color: var(--ink);
+    font-weight: 700;
   }
 
   .au-empty {
@@ -511,32 +494,34 @@ export const AUTH_CSS = `
   }
 
   .au-cta {
-    min-height: 62px;
+    min-height: 58px;
     width: 100%;
     padding: 15px 22px;
     color: var(--ink);
-    background: var(--accent);
-    border: 1px solid rgba(17,18,17,.13);
-    border-radius: 17px 17px 6px 17px;
+    background: var(--yellow);
+    border: 2px solid var(--ink);
+    border-radius: 14px;
     cursor: pointer;
-    box-shadow: 0 4px 0 rgba(17,18,17,.08);
+    box-shadow: 4px 4px 0 var(--ink);
     font-family: var(--body);
     font-size: 15px;
     font-weight: 700;
     letter-spacing: 0;
-    transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
+    transition: transform .08s steps(2), box-shadow .08s steps(2), background .12s ease;
+    -webkit-tap-highlight-color: transparent;
   }
 
   .au-cta:active:not(:disabled) {
-    transform: translateY(3px);
-    box-shadow: 0 1px 0 rgba(17,18,17,.08);
+    transform: translate(4px, 4px);
+    box-shadow: 0 0 0 var(--ink);
+    background: var(--yellow-deep);
   }
 
   .au-cta:disabled {
-    background: #D6D0C3;
-    color: #77766F;
-    border-color: #77766F;
-    box-shadow: 0 3px 0 rgba(17,18,17,.06);
+    background: var(--card);
+    color: var(--muted);
+    border-color: var(--muted);
+    box-shadow: 3px 3px 0 var(--muted);
     cursor: default;
     opacity: .75;
   }
@@ -578,20 +563,21 @@ export const AUTH_CSS = `
     text-align: center;
     color: var(--ink);
     background: var(--card);
-    border: 1.5px solid var(--line, rgba(17,18,17,.16));
-    border-radius: 16px;
-    font-family: var(--display);
+    border: 2px solid var(--ink);
+    border-radius: 14px;
+    box-shadow: 3px 3px 0 var(--ink);
+    font-family: var(--body);
     font-size: 32px;
-    font-weight: 800;
+    font-weight: 500;
     outline: none;
     caret-color: var(--accent);
     transition: background .15s ease, border-color .15s ease, transform .15s ease;
   }
 
   .au-box:focus {
-    background: var(--card);
-    border-color: var(--accent);
-    box-shadow: inset 0 0 0 1px var(--accent);
+    background: #FFF0F4;
+    border-color: var(--coral);
+    box-shadow: 4px 4px 0 var(--coral);
     transform: translateY(-2px);
   }
 
@@ -605,9 +591,9 @@ export const AUTH_CSS = `
   }
 
   .au-box.ok {
-    background: #E1E9DB;
-    color: var(--ink2);
-    border-color: var(--sage);
+    background: rgba(184, 240, 199, .45);
+    color: var(--ink);
+    border-color: var(--ink);
     transform: translateY(-2px);
   }
 
@@ -617,33 +603,37 @@ export const AUTH_CSS = `
     75% { transform: translateX(4px); }
   }
 
+  /* Error banner — dialect: quiet paper, one hard red ink edge. */
   .au-banner {
     position: relative;
-    padding: 14px 16px;
-    background: #F0DCD3;
-    border: 1px solid rgba(168,79,74,.2);
-    border-radius: 14px;
-    overflow: hidden;
+    padding: 12px 16px;
+    background: transparent;
+    border: 0;
+    border-left: 3px solid var(--red);
+    border-radius: 0;
+    overflow: visible;
   }
 
   .au-banner p {
     margin: 0;
-    color: #111211;
+    color: var(--ink);
     font-family: var(--body);
     font-size: 14px;
     font-weight: 500;
     line-height: 1.65;
   }
 
+  /* Success strip — a mint "stamp": ink border, hard shadow. */
   .au-strip {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 16px 18px;
-    background: #E1E9DB;
-    color: #111211;
-    border: 1px solid rgba(119,148,119,.35);
-    border-radius: 15px;
+    padding: 14px 18px;
+    background: rgba(184, 240, 199, .45);
+    color: var(--ink);
+    border: 2px solid var(--ink);
+    border-radius: 14px;
+    box-shadow: 3px 3px 0 var(--ink);
     font-family: var(--body);
     font-size: 14px;
     font-weight: 700;
@@ -666,13 +656,14 @@ export const AUTH_CSS = `
   .au-field input {
     width: 100%;
     min-width: 0;
-    height: 60px;
+    height: 58px;
     padding: 0 16px;
     color: var(--ink);
     background: var(--card);
-    border: 1.5px solid var(--line, rgba(17,18,17,.16));
+    border: 2px solid var(--ink);
     border-radius: 14px;
     outline: none;
+    box-shadow: 3px 3px 0 var(--ink);
     font-family: var(--body);
     font-size: 16px;
     font-weight: 500;
@@ -682,8 +673,9 @@ export const AUTH_CSS = `
   }
 
   .au-field input:focus {
-    border-color: var(--accent);
-    box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 4px var(--tint);
+    background: #FFFFFF;
+    border-color: var(--ink);
+    box-shadow: 4px 4px 0 var(--ink);
   }
 
   .au-field input::-webkit-outer-spin-button,
@@ -701,59 +693,354 @@ export const AUTH_CSS = `
   }
 
   .au-search:focus-visible,
+  .au-search-close:focus-visible,
   .au-input:focus-visible,
   .au-box:focus-visible,
   .au-result:focus-visible,
   .au-cta:focus-visible,
   .au-ghost:focus-visible,
   .au-field input:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--coral);
     outline-offset: 3px;
   }
 
   @media (hover: hover) and (pointer: fine) {
     .au-result:hover:not(:disabled) {
-      border-color: rgba(17,18,17,.28);
-      transform: translateY(-2px);
-    }
-
-    .au-result:hover::after {
-      color: var(--coral);
-      transform: translate(2px, -2px);
+      background: rgba(255, 231, 106, .22);
     }
 
     .au-cta:hover:not(:disabled) {
-      filter: brightness(.96);
+      filter: brightness(.97);
+      transform: translate(-1px, -1px);
+      box-shadow: 5px 5px 0 var(--ink);
     }
 
     .au-ghost:hover:not(:disabled) {
-      color: var(--accent);
-      border-color: var(--accent);
+      color: var(--coral);
+      border-color: var(--coral);
     }
   }
 
-  @media (min-width: 1100px) {
-    .au-results {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      max-height: calc(100dvh - 360px);
+  /* ── The desktop campus-photo pane ──
+     Its width follows the desktop form column's CSS variable. A horizontal
+     wash dissolves its right edge into the paper instead of making a hard cut. */
+  .au-campus-scene {
+    display: block;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: calc(var(--au-scene-width) + 2px);
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    background: var(--paper);
+  }
+
+  .au-campus-photo {
+    display: block;
+    position: absolute;
+    z-index: 0;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 42%;
+    filter: saturate(.92) contrast(.98) brightness(.97);
+    transition: filter .5s cubic-bezier(.2,.8,.2,1), transform .6s cubic-bezier(.2,.8,.2,1);
+  }
+
+  .au-campus-wash {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      rgba(255, 249, 244, 0) 0%,
+      rgba(255, 249, 244, 0) 62%,
+      rgba(255, 249, 244, .5) 82%,
+      rgba(255, 249, 244, .9) 94%,
+      ${C.paper} 100%
+    );
+  }
+
+  .au-campus-blur { display: none; }
+
+  /* Focused-input mode is shared by college, email, and OTP on every layout.
+     The field group moves to the top while the campus scene softens. */
+  .au-root.is-auth-input-open { overflow: hidden; }
+
+  .au-root.is-auth-input-open .au-brandbar {
+    position: absolute;
+    left: var(--au-brand-left, 0px);
+    top: var(--au-brand-top, max(18px, env(safe-area-inset-top, 0px)));
+    width: var(--au-brand-width, 100%);
+    margin: 0;
+    opacity: 0;
+    transform: translateY(-6px);
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity .24s ease, transform .24s ease, visibility 0s linear .24s;
+  }
+
+  .au-campus-scene.is-auth-input-open .au-campus-photo {
+    filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
+    transform: scale(1.06);
+  }
+
+  .au-campus-scene.is-auth-input-open .au-campus-blur { opacity: 1; }
+
+  .au-root.is-auth-input-open .au-panel {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    justify-content: flex-start;
+    padding-top: max(30px, env(safe-area-inset-top, 0px));
+    padding-bottom: max(14px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .au-root.is-auth-input-open .au-step { flex: 1 1 auto; min-height: 0; }
+
+  @media (min-width: 1200px) {
+    .au-root-email .au-sub,
+    .au-root-email .au-sub b {
+      color: ${C.ink};
     }
 
-    .au-result {
-      min-height: 99px;
+    .au-root-otp .au-sub,
+    .au-root-otp .au-sub b {
+      color: #fff;
     }
 
-    .au-art {
-      height: 280px;
+    .au-root-email .au-ghost,
+    .au-root-otp .au-ghost {
+      color: ${C.coral};
+      border-bottom-color: ${C.coral};
+      font-size: 16.9px;
     }
+
+    .au-root-otp .au-banner {
+      border-left-color: ${C.coral};
+    }
+
+    .au-root-otp .au-banner p {
+      color: #fff;
+    }
+
+    .au-root.au-root-college .au-empty {
+      color: #fff;
+      font-size: 12.65px;
+    }
+
+    .au-root.au-root-college .au-result-name {
+      color: #fff;
+      font-size: 17.825px;
+    }
+
+    .au-root.au-root-college .au-result-meta {
+      color: #fff;
+      font-size: 11.5px;
+    }
+
+    .au-root.au-root-college .au-result::after {
+      color: #fff;
+      font-size: 21.85px;
+    }
+
+    .au-campus-scene {
+      transition: width .48s ease-out;
+    }
+
+    .au-campus-photo {
+      transition:
+        filter .48s ease-out,
+        transform .72s ease-out;
+    }
+
+    .au-campus-scene-college.is-auth-input-open,
+    .au-campus-scene.is-auth-flow-expanded {
+      width: 100vw;
+    }
+
+    .au-campus-scene-college.is-auth-input-open .au-campus-photo,
+    .au-campus-scene.is-auth-flow-expanded .au-campus-photo {
+      filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
+      transform: translateY(-3%) scale(1.06);
+    }
+
+    .au-campus-scene-college.is-auth-input-open .au-campus-wash,
+    .au-campus-scene.is-auth-flow-expanded .au-campus-wash {
+      background: rgba(255, 249, 244, .18);
+      -webkit-backdrop-filter: blur(12px) saturate(1.1);
+      backdrop-filter: blur(12px) saturate(1.1);
+    }
+
+    .au-campus-scene-college.is-auth-input-open .au-campus-wash::after,
+    .au-campus-scene.is-auth-flow-expanded .au-campus-wash::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        90deg,
+        transparent 68%,
+        rgba(255, 249, 244, .12) 82%,
+        rgba(255, 249, 244, .32) 100%
+      );
+      opacity: 1;
+      animation: au-campus-right-edge-in .48s ease-out both;
+    }
+
+    @keyframes au-campus-right-edge-in {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .au-root.is-auth-input-open .au-brandbar {
+      position: fixed;
+      left: max(28px, env(safe-area-inset-left, 0px));
+      top: max(22px, env(safe-area-inset-top, 0px));
+      width: auto;
+      opacity: 1;
+      transform: none;
+      visibility: visible;
+      pointer-events: auto;
+      transition: none;
+    }
+
+    .au-root .au-step {
+      transition: translate .48s ease-out;
+    }
+
+    .au-root.au-root-college:not(.is-auth-input-open) .au-step {
+      translate: calc(-50px + var(--au-college-desktop-shift, 0px)) var(--au-search-shift, 0px);
+    }
+
+    .au-root .au-campus-photo {
+      transition: filter .72s cubic-bezier(.32,.72,0,1), transform .8s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-root.au-root-college.is-auth-input-open .au-fit {
+      height: 100dvh;
+      min-height: 0;
+      overflow: visible;
+    }
+
+    .au-root.is-auth-input-open .au-panel {
+      justify-content: center;
+      height: 100dvh;
+      padding-top: max(40px, env(safe-area-inset-top));
+      padding-bottom: max(34px, env(safe-area-inset-bottom));
+      overflow: visible;
+    }
+
+    .au-root.au-root-college.is-auth-input-open .au-panel {
+      justify-content: flex-start;
+    }
+
+    .au-root.is-auth-input-open .au-step {
+      flex: 0 1 auto;
+      min-height: auto;
+      z-index: 1;
+      --au-desktop-center-shift: calc(var(--au-scene-width) / -2);
+      translate: var(--au-desktop-center-shift) calc(var(--au-search-shift, 0px) - 25vh + 70px);
+    }
+
+    .au-root.au-root-college.is-auth-input-open .au-step {
+      height: auto;
+      max-height: none;
+      flex: 1 1 auto;
+      translate: var(--au-desktop-center-shift) calc(var(--au-search-shift, 0px) + 30px);
+      overflow: visible;
+    }
+
+    .au-root.au-root-college.is-auth-input-open .au-results {
+      flex: 1 1 0;
+      min-height: 0;
+      max-height: none;
+      width: 150%;
+      margin-left: -25%;
+      overflow-y: auto;
+    }
+
+    .au-root.au-root-college.is-auth-input-open .au-no-results {
+      width: 76.6667%;
+      margin-inline: auto;
+    }
+
+    .au-root.au-root-college .au-college-heading-row {
+      transform: translateX(-7.5%);
+    }
+
+    .au-root.au-root-college.is-auth-input-open .au-search-close {
+      left: -8px;
+      top: -40px;
+      transform: translateY(-30%);
+    }
+
+    .au-root-request .au-request-heading-row {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+    }
+
+    .au-root-request .au-request-back {
+      position: static;
+      align-self: flex-start;
+      width: 26.4px;
+      flex-basis: 26.4px;
+      transform: translateY(-50%);
+    }
+
+    .au-root-request .au-request-back svg {
+      transform: translateX(-5.5px);
+    }
+
+  }
+
+  .au-root.is-auth-input-open .au-results {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    padding-top: 6px;
+    padding-bottom: calc(var(--au-kb, 0px) + 14px);
+    -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 14px);
+    mask-image: linear-gradient(180deg, transparent 0, #000 14px);
+  }
+
+  .au-brandbar {
+    position: fixed;
+    z-index: 5;
+    top: max(22px, env(safe-area-inset-top, 0px));
+    left: max(28px, env(safe-area-inset-left, 0px));
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: auto;
+    max-width: none;
+    margin: 0;
+    transition: opacity .24s ease, transform .24s ease, visibility 0s;
+  }
+
+  .au-wordmark {
+    display: inline-block;
+    color: var(--ink);
+    font-family: 'Bowlby One SC', var(--display);
+    font-size: clamp(40px, 3.6vw, 54px);
+    font-weight: 400;
+    letter-spacing: -.065em;
+    line-height: .92;
+    text-shadow: 2.5px 2.5px 0 var(--yellow);
+  }
+
+  .au-brand-question {
+    display: inline-block;
+    color: var(--coral);
+    margin-left: .015em;
+    transform: rotate(7deg) translateY(-.015em);
+    transform-origin: 60% 65%;
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .au-art .art-float,
-    .au-art .art-late,
-    .au-art .art-pulse {
-      animation: none;
-    }
-
     .au-search,
     .au-input,
     .au-result,
@@ -769,13 +1056,15 @@ export const AUTH_CSS = `
     }
   }
 
-  /* Mobile-only chrome: hidden on desktop, revealed by MOBILE_AUTH_CSS. */
-  .au-brandbar { display: none; }
-  .au-campus-scene,
-  .au-campus-blur,
-  .au-backdrop { display: none; }
-  .au-mobile-field-label,
-  .au-mobile-sub { display: none; }
+  /* Invisible tap-catcher behind the open search sheet: clicking the photo
+     pane (or any dead space) closes the search, exactly like on the phone. */
+  .au-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background: transparent;
+    -webkit-tap-highlight-color: transparent;
+  }
 `;
 
 /* ============================================================
@@ -788,23 +1077,23 @@ export const AUTH_CSS = `
    every breakpoint).
    ============================================================ */
 export const MOBILE_AUTH_CSS = `
-  @media (max-width: 700px) {
+  @media (max-width: 1199px) {
     /* ---- tokens & root ---- */
     .au-root {
-      --ink: ${M.ink};
-      --ink2: ${M.ink2};
-      --muted: ${M.ink2};
-      --paper: ${M.paper};
-      --card: ${M.card};
-      --accent: ${M.yellow};
+      --ink: ${C.ink};
+      --ink2: ${C.ink2};
+      --muted: ${C.ink2};
+      --paper: ${C.paper};
+      --card: ${C.card};
+      --accent: ${C.yellow};
       --tint: rgba(255,212,61,.14);
-      --red: ${M.red};
-      --line: ${M.ink};
-      --body: ${M.fontBody};
-      --display: ${M.fontHeavy};
-      --mono: ${M.fontMono};
-      background: ${M.paper};
-      color: ${M.ink};
+      --red: ${C.red};
+      --line: ${C.ink};
+      --body: ${C.body};
+      --display: ${C.display};
+      --mono: ${C.mono};
+      background: ${C.paper};
+      color: ${C.ink};
       font-family: var(--body);
     }
 
@@ -814,21 +1103,47 @@ export const MOBILE_AUTH_CSS = `
     .au-root.au-root-email,
     .au-root.au-root-otp,
     .au-root.au-root-verify {
-      --ink: ${M.ink};
-      --ink2: ${M.ink2};
-      --muted: ${M.ink2};
-      --paper: ${M.paper};
-      --card: ${M.card};
-      --accent: ${M.yellow};
+      --ink: ${C.ink};
+      --ink2: ${C.ink2};
+      --muted: ${C.ink2};
+      --paper: ${C.paper};
+      --card: ${C.card};
+      --accent: ${C.yellow};
       --tint: rgba(255,212,61,.14);
-      --red: ${M.red};
-      --line: ${M.ink};
-      background: ${M.paper};
-      color: ${M.ink};
+      --red: ${C.red};
+      --line: ${C.ink};
+      background: transparent;
+      color: ${C.ink};
     }
 
     .au-root::before,
     .au-root::after { display: none; content: none; }
+
+    .au-root-request {
+      height: var(--au-visible-height, 100dvh);
+      min-height: var(--au-visible-height, 100dvh);
+    }
+
+    .au-campus-scene {
+      background: ${C.paper};
+      z-index: 0;
+      width: 100vw;
+      height: 100vh;
+      height: 100lvh;
+    }
+
+    .au-root {
+      z-index: 1;
+      background: transparent;
+    }
+
+    .au-campus-scene-request {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      height: 100lvh;
+    }
 
     /* ---- layout frame ---- */
     .au-fit {
@@ -840,6 +1155,11 @@ export const MOBILE_AUTH_CSS = `
       margin: 0 auto;
       display: flex;
       flex-direction: column;
+    }
+
+    .au-root-request .au-fit,
+    .au-root-request .au-panel {
+      min-height: var(--au-visible-height, 100dvh);
     }
 
     .au-panel {
@@ -866,39 +1186,49 @@ export const MOBILE_AUTH_CSS = `
 
     /* ---- brand: the product wordmark, set directly on the canvas ---- */
     .au-brandbar {
+      position: absolute;
+      top: max(18px, env(safe-area-inset-top, 0px));
+      left: max(22px, env(safe-area-inset-left, 0px));
       display: flex;
       flex-direction: column;
       align-items: flex-start;
-      gap: 4px;
-      width: 100%;
-      max-width: 380px;
-      margin: 7px 0 0;
+      width: auto;
+      max-width: none;
+      margin: 0;
       min-height: 0;
-      transition: opacity .35s ease, transform .5s cubic-bezier(.32,.72,0,1);
+      transition: opacity .24s ease, transform .24s ease, visibility 0s linear .24s;
+    }
+
+    .au-root-request .au-brandbar {
+      display: none;
+      position: relative;
+      top: auto;
+      left: auto;
+      margin: 0 0 12px;
     }
 
     .au-wordmark {
       display: inline-block;
-      color: ${M.ink};
-      font-family: 'Bowlby One SC', ${M.fontHeavy};
+      color: ${C.ink};
+      font-family: 'Bowlby One SC', ${C.display};
       font-size: clamp(37px, 10vw, 47px);
       font-weight: 400;
       letter-spacing: -.065em;
       line-height: .92;
-      text-shadow: 2px 2px 0 ${M.yellow};
+      text-shadow: 2px 2px 0 ${C.yellow};
     }
 
     .au-brand-question {
       display: inline-block;
-      color: ${M.coral};
+      color: ${C.coral};
       margin-left: .015em;
       transform: rotate(7deg) translateY(-.015em);
       transform-origin: 60% 65%;
     }
 
     .au-brand-whisper {
-      color: ${M.ink2};
-      font-family: ${M.fontBody};
+      color: ${C.ink2};
+      font-family: ${C.body};
       font-size: 11px;
       font-weight: 600;
       letter-spacing: .015em;
@@ -920,7 +1250,7 @@ export const MOBILE_AUTH_CSS = `
       margin: auto auto max(10px, env(safe-area-inset-bottom, 0px));
       padding: 18px 0 max(8px, env(safe-area-inset-bottom, 0px));
       background: transparent;
-      color: ${M.ink};
+      color: ${C.ink};
       border: 0;
       border-radius: 0;
       box-shadow: none;
@@ -936,7 +1266,7 @@ export const MOBILE_AUTH_CSS = `
       right: -22px;
       bottom: -24px;
       left: -22px;
-      background: linear-gradient(180deg, rgba(241,237,226,0) 0%, rgba(241,237,226,.76) 18%, rgba(241,237,226,.92) 46%, ${M.paper} 100%);
+      background: linear-gradient(180deg, rgba(255,249,244,0) 0%, rgba(255,249,244,.76) 18%, rgba(255,249,244,.92) 46%, ${C.paper} 100%);
       opacity: .94;
       transition: opacity .4s cubic-bezier(.32,.72,0,1);
     }
@@ -946,63 +1276,36 @@ export const MOBILE_AUTH_CSS = `
       margin-bottom: max(28px, env(safe-area-inset-bottom, 0px));
     }
 
+    /* Headline/sub share the base voice now — phones only scale them down.
+       Same font, same weight, same tracking as desktop: one screen, two sizes. */
     .au-step .au-headline {
-      max-width: 21ch;
-      margin: 0;
-      color: ${M.ink};
-      font-family: ${M.fontBody};
-      font-size: clamp(30px, 8.3vw, 36px);
-      font-weight: 800;
-      line-height: 1.04;
-      letter-spacing: -.06em;
-      text-transform: none;
-      overflow-wrap: anywhere;
-      text-wrap: balance;
-    }
-
-    .au-headline::after { display: none; content: none; }
-
-    .au-headline .au-huh-inline {
-      font-family: 'Bowlby One SC', ${M.fontHeavy};
-      font-size: 1.02em;
-      font-weight: 400;
-      letter-spacing: -.055em;
-      white-space: nowrap;
-      text-shadow: 1.5px 1.5px 0 ${M.yellow};
+      max-width: 22ch;
+      font-size: clamp(27px, 7.8vw, 34px);
+      line-height: 1.08;
     }
 
     .au-step .au-sub {
       max-width: 31ch;
       margin: -2px 0 0;
-      color: ${M.ink2};
-      font-family: ${M.fontBody};
-      font-size: 13.5px;
-      font-weight: 400;
-      line-height: 1.48;
-      overflow-wrap: anywhere;
+      font-size: clamp(14px, 3.8vw, 16px);
+      line-height: 1.5;
     }
 
-    .au-sub b { color: ${M.ink}; font-weight: 700; }
+    .au-sub b { color: ${C.ink}; font-weight: 700; }
     .au-sub b.low { overflow-wrap: anywhere; text-transform: lowercase; }
 
     .au-mobile-sub { display: block; }
-
-    .au-mobile-field-label {
-      display: block;
-      margin: 4px 0 -3px;
-      color: ${M.ink2};
-      font-family: ${M.fontMono};
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: .09em;
-      text-transform: uppercase;
-    }
 
     /* Mobile replaces the framed illustration with the full-bleed photo. */
     .au-step > .au-art { display: none !important; }
 
     /* ---- search field ---- */
     .au-searchwrap { position: relative; z-index: 2; width: 100%; }
+
+    .au-root-college .au-searchwrap {
+      width: 100%;
+      margin-left: 0;
+    }
 
     .au-searchicon {
       position: absolute;
@@ -1014,23 +1317,30 @@ export const MOBILE_AUTH_CSS = `
       width: 22px;
       height: 22px;
       transform: translateY(-50%);
-      color: ${M.ink};
+      color: ${C.ink};
       background: transparent;
       pointer-events: none;
+    }
+
+    .au-search-clear {
+      left: 8px;
+      width: 36px;
+      height: 36px;
+      pointer-events: auto;
     }
 
     .au-search {
       display: block;
       width: 100%;
-      height: 56px;
+      height: 52px;
       padding: 0 14px 0 47px;
-      color: ${M.ink};
-      background: rgba(255,253,247,.97);
-      border: 2px solid ${M.ink};
-      border-radius: 15px;
+      color: ${C.ink};
+      background: rgba(255,252,248,.97);
+      border: 2px solid ${C.ink};
+      border-radius: 14px;
       outline: none;
-      box-shadow: 4px 4px 0 ${M.ink};
-      font-family: ${M.fontBody};
+      box-shadow: 3px 3px 0 ${C.ink};
+      font-family: ${C.body};
       font-size: 16px;
       font-weight: 500;
       -webkit-appearance: none;
@@ -1039,9 +1349,9 @@ export const MOBILE_AUTH_CSS = `
     }
 
     .au-search:focus {
-      background: #FFFEFA;
-      border-color: ${M.ink};
-      box-shadow: 4px 4px 0 ${M.ink};
+      background: #FFF0F4;
+      border-color: ${C.coral};
+      box-shadow: 3px 3px 0 ${C.coral};
       transform: none;
     }
 
@@ -1053,13 +1363,13 @@ export const MOBILE_AUTH_CSS = `
       min-width: 0;
       height: 54px;
       padding: 0 14px;
-      color: ${M.ink};
-      background: rgba(255,255,255,.94);
-      border: 2px solid ${M.ink};
+      color: ${C.ink};
+      background: rgba(255,252,248,.96);
+      border: 2px solid ${C.ink};
       border-radius: 12px;
       outline: none;
-      box-shadow: 3px 3px 0 ${M.ink};
-      font-family: ${M.fontBody};
+      box-shadow: 3px 3px 0 ${C.ink};
+      font-family: ${C.body};
       font-size: 16px;
       font-weight: 500;
       -webkit-appearance: none;
@@ -1070,16 +1380,16 @@ export const MOBILE_AUTH_CSS = `
     .au-search::placeholder,
     .au-input::placeholder,
     .au-field input::placeholder {
-      color: ${M.ink2};
+      color: ${C.ink2};
       opacity: .8;
       font-weight: 400;
     }
 
     .au-input:focus,
     .au-field input:focus {
-      background: #FFFFFF;
-      border-color: ${M.ink};
-      box-shadow: 4px 4px 0 ${M.ink};
+      background: #FFF0F4;
+      border-color: ${C.coral};
+      box-shadow: 4px 4px 0 ${C.coral};
       transform: none;
     }
 
@@ -1088,24 +1398,27 @@ export const MOBILE_AUTH_CSS = `
 
     .au-input:-webkit-autofill,
     .au-field input:-webkit-autofill {
-      -webkit-box-shadow: 0 0 0 60px ${M.card} inset, 3px 3px 0 ${M.ink};
-      -webkit-text-fill-color: ${M.ink};
+      -webkit-box-shadow: 0 0 0 60px ${C.card} inset, 3px 3px 0 ${C.ink};
+      -webkit-text-fill-color: ${C.ink};
     }
 
-    /* ---- results: calm full-width rows, not a grid of cards ---- */
+    /* ---- results: calm full-width rows; the list owns the screen height ---- */
     .au-results {
       display: flex;
       flex-direction: column;
       gap: 0;
       width: 100%;
-      max-height: min(30dvh, 250px);
       overflow-y: auto;
       overscroll-behavior: contain;
       -webkit-overflow-scrolling: touch;
       padding: 0;
       border-top: 1px solid rgba(17,18,17,.24);
       scrollbar-width: thin;
-      scrollbar-color: ${M.ink2} transparent;
+      scrollbar-color: ${C.ink2} transparent;
+    }
+
+    .au-no-results {
+      padding-right: 6px;
     }
 
     .au-result,
@@ -1113,18 +1426,17 @@ export const MOBILE_AUTH_CSS = `
     .au-result:nth-child(5n + 4) {
       position: relative;
       display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      justify-content: center;
-      gap: 3px;
+      flex-direction: row;
+      align-items: center;
+      gap: 12px;
       width: 100%;
-      min-height: 52px;
-      padding: 9px 34px 9px 2px;
+      min-height: 66px;
+      padding: 10px 36px 10px 2px;
       text-align: left;
-      color: ${M.ink};
+      color: ${C.ink};
       background: transparent;
       border: 0;
-      border-bottom: 1px solid ${M.hair};
+      border-bottom: 1px solid rgba(23, 20, 20, .22);
       border-radius: 0;
       box-shadow: none;
       cursor: pointer;
@@ -1137,37 +1449,44 @@ export const MOBILE_AUTH_CSS = `
       top: 50%;
       right: 10px;
       transform: translateY(-50%);
-      color: ${M.ink};
-      font: 20px/1 ${M.fontBody};
+      color: ${C.ink};
+      font: 20px/1 ${C.body};
     }
 
-    .au-result:active { background: #FFF1AE; }
+    .au-result:active { background: #FFF6D6; }
+
+    /* Mobile logo circle: a touch smaller than the desktop 52px. */
+    .au-logo {
+      width: 44px;
+      height: 44px;
+      font-size: 12px;
+    }
 
     .au-result-name {
-      color: ${M.ink};
-      font-family: ${M.fontBody};
-      font-size: 13.5px;
+      color: ${C.ink};
+      font-family: ${C.body};
+      font-size: clamp(13px, 3.8vw, 15px);
       font-weight: 700;
       line-height: 1.32;
       overflow-wrap: anywhere;
     }
 
     .au-result-meta {
-      color: ${M.ink2};
-      font-family: ${M.fontBody};
-      font-size: 11px;
+      color: ${C.ink2};
+      font-family: ${C.body};
+      font-size: clamp(11px, 3.2vw, 12px);
       font-weight: 400;
       line-height: 1.4;
     }
 
-    .au-result.chosen { background: #E5F3E7; }
-    .au-result.chosen::after { content: '✓'; color: ${M.ink}; font-weight: 700; }
+    .au-result.chosen { background: rgba(184, 240, 199, .35); }
+    .au-result.chosen::after { content: '✓'; color: ${C.ink}; font-weight: 700; }
 
     .au-empty {
       margin: 0;
       padding: 8px 0;
-      color: ${M.ink2};
-      font-family: ${M.fontBody};
+      color: ${C.ink2};
+      font-family: ${C.body};
       font-size: 12px;
       font-weight: 400;
       line-height: 1.6;
@@ -1183,13 +1502,13 @@ export const MOBILE_AUTH_CSS = `
       min-height: 52px;
       width: 100%;
       padding: 13px 18px;
-      color: ${M.ink};
-      background: ${M.yellow};
-      border: 2px solid ${M.ink};
+      color: ${C.ink};
+      background: ${C.yellow};
+      border: 2px solid ${C.ink};
       border-radius: 12px;
-      box-shadow: 4px 4px 0 ${M.ink};
+      box-shadow: 4px 4px 0 ${C.ink};
       cursor: pointer;
-      font-family: ${M.fontBody};
+      font-family: ${C.body};
       font-size: 14px;
       font-weight: 700;
       letter-spacing: -.01em;
@@ -1200,15 +1519,15 @@ export const MOBILE_AUTH_CSS = `
 
     .au-cta:active:not(:disabled) {
       transform: translate(4px, 4px);
-      box-shadow: 0 0 0 ${M.ink};
-      background: ${M.yellowDeep};
+      box-shadow: 0 0 0 ${C.ink};
+      background: ${C.yellowDeep};
     }
 
     .au-cta:disabled {
-      color: ${M.ink2};
-      background: ${M.hair};
-      border-color: ${M.ink2};
-      box-shadow: 3px 3px 0 ${M.ink2};
+      color: ${C.ink2};
+      background: rgba(23, 20, 20, .06);
+      border-color: rgba(23, 20, 20, .38);
+      box-shadow: 3px 3px 0 rgba(23, 20, 20, .3);
       cursor: not-allowed;
       opacity: 1;
     }
@@ -1217,20 +1536,20 @@ export const MOBILE_AUTH_CSS = `
       align-self: flex-start;
       min-height: 42px;
       padding: 9px 0;
-      color: ${M.ink2};
+      color: ${C.ink2};
       background: transparent;
       border: 0;
-      border-bottom: 1px solid ${M.ink2};
+      border-bottom: 1px solid ${C.ink2};
       border-radius: 0;
       box-shadow: none;
       cursor: pointer;
-      font-family: ${M.fontBody};
+      font-family: ${C.body};
       font-size: 13px;
       font-weight: 600;
       transition: color .12s ease;
     }
 
-    .au-ghost:active:not(:disabled) { color: ${M.ink}; }
+    .au-ghost:active:not(:disabled) { color: ${C.ink}; }
     .au-ghost:disabled { opacity: .5; cursor: not-allowed; }
 
     /* ---- OTP boxes ---- */
@@ -1249,29 +1568,29 @@ export const MOBILE_AUTH_CSS = `
       height: 50px;
       padding: 0;
       text-align: center;
-      color: ${M.ink};
-      background: rgba(255,255,255,.94);
-      border: 2px solid ${M.ink};
+      color: ${C.ink};
+      background: rgba(255,252,248,.96);
+      border: 2px solid ${C.ink};
       border-radius: 12px;
-      box-shadow: 3px 3px 0 ${M.ink};
-      font-family: ${M.fontHeavy};
-      font-size: 23px;
-      font-weight: 400;
+      box-shadow: 3px 3px 0 ${C.ink};
+      font-family: ${C.body};
+      font-size: clamp(21px, 6vw, 24px);
+      font-weight: 500;
       outline: none;
-      caret-color: ${M.ink};
+      caret-color: ${C.ink};
       transition: background .2s cubic-bezier(.32,.72,0,1), box-shadow .2s cubic-bezier(.32,.72,0,1);
     }
 
     .au-box:focus {
-      background: #FFF1AE;
-      border-color: ${M.ink};
-      box-shadow: 3px 3px 0 ${M.ink};
+      background: #FFF0F4;
+      border-color: ${C.coral};
+      box-shadow: 4px 4px 0 ${C.coral};
       transform: none;
     }
 
     .au-box:disabled:not(.ok) { opacity: .65; }
-    .au-box.err { border-color: ${M.red}; animation: au-shake .3s steps(2) 2; }
-    .au-box.ok { background: #E5F3E7; color: ${M.ink}; border-color: ${M.ink}; transform: none; }
+    .au-box.err { border-color: ${C.red}; animation: au-shake .3s steps(2) 2; }
+    .au-box.ok { background: rgba(184, 240, 199, .35); color: ${C.ink}; border-color: ${C.ink}; transform: none; }
 
     /* ---- notes, banners, misc ---- */
     .au-banner {
@@ -1279,15 +1598,15 @@ export const MOBILE_AUTH_CSS = `
       padding: 5px 0 5px 11px;
       background: transparent;
       border: 0;
-      border-left: 3px solid ${M.red};
+      border-left: 3px solid ${C.red};
       border-radius: 0;
       overflow: visible;
     }
 
     .au-banner p {
       margin: 0;
-      color: ${M.ink};
-      font-family: ${M.fontBody};
+      color: ${C.ink};
+      font-family: ${C.body};
       font-size: 13px;
       font-weight: 500;
       line-height: 1.55;
@@ -1299,27 +1618,27 @@ export const MOBILE_AUTH_CSS = `
       align-items: center;
       gap: 9px;
       padding: 6px 0;
-      color: ${M.ink};
+      color: ${C.ink};
       background: transparent;
       border: 0;
       border-radius: 0;
-      font-family: ${M.fontBody};
+      font-family: ${C.body};
       font-size: 14px;
       font-weight: 700;
     }
 
     .au-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
     .au-field label {
-      color: ${M.ink2};
-      font-family: ${M.fontBody};
+      color: ${C.ink2};
+      font-family: ${C.body};
       font-size: 12px;
       font-weight: 600;
     }
 
     .au-revnote {
       margin: 0;
-      color: ${M.ink2};
-      font-family: ${M.fontBody};
+      color: ${C.ink2};
+      font-family: ${C.body};
       font-size: 12px;
       line-height: 1.6;
     }
@@ -1331,7 +1650,7 @@ export const MOBILE_AUTH_CSS = `
     .au-cta:focus-visible,
     .au-ghost:focus-visible,
     .au-field input:focus-visible {
-      outline: 2px solid ${M.ink};
+      outline: 2px solid ${C.coral};
       outline-offset: 3px;
     }
 
@@ -1340,34 +1659,41 @@ export const MOBILE_AUTH_CSS = `
       display: block;
       position: fixed;
       inset: 0;
+      width: auto;
       z-index: 0;
       overflow: hidden;
       pointer-events: none;
-      background: ${M.paper};
+      background: ${C.paper};
       transition: opacity .35s ease;
     }
 
+    /* The photo fills the fixed scene EXACTLY — inset-0 + object-fit: cover.
+       The old 100vw / translateX(-50%) build measured wider than the visual
+       viewport on Chrome Android, which pushed the picture off-center and
+       cropped half of it out of frame. inset-0 always centers, always fits. */
     .au-campus-photo {
       display: block;
       position: absolute;
       z-index: 0;
-      top: 0;
-      left: 50%;
-      width: 100vw;
-      max-width: none;
-      height: 100dvh;
+      inset: 0;
+      width: 100%;
+      height: 100%;
       object-fit: cover;
-      object-position: center 48%;
-      transform: translateX(-50%) scale(1.01);
+      object-position: center 45%;
       filter: saturate(.92) contrast(.98) brightness(.96);
       transition: filter .42s cubic-bezier(.2,.8,.2,1), transform .55s cubic-bezier(.2,.8,.2,1);
       will-change: transform, filter;
     }
 
     /* College step runs the slower iOS curve so the search-open blur reads as depth. */
-    .au-root .au-campus-scene-college .au-campus-photo {
+    .au-campus-scene-college .au-campus-photo {
       filter: blur(0px) saturate(.92) contrast(.98) brightness(.96);
       transition: filter .6s cubic-bezier(.32,.72,0,1), transform .8s cubic-bezier(.32,.72,0,1);
+    }
+
+    .au-campus-scene-college.is-auth-input-open .au-campus-photo {
+      filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
+      transform: scale(1.06);
     }
 
     .au-campus-wash {
@@ -1376,13 +1702,13 @@ export const MOBILE_AUTH_CSS = `
       inset: 0;
       background: linear-gradient(
         180deg,
-        rgba(241,237,226,.06) 0%,
-        rgba(241,237,226,.03) 30%,
-        rgba(241,237,226,.15) 44%,
-        rgba(241,237,226,.62) 58%,
-        rgba(241,237,226,.93) 70%,
-        ${M.paper} 83%,
-        ${M.paper} 100%
+        rgba(255,249,244,.06) 0%,
+        rgba(255,249,244,.03) 30%,
+        rgba(255,249,244,.15) 44%,
+        rgba(255,249,244,.62) 58%,
+        rgba(255,249,244,.93) 70%,
+        ${C.paper} 83%,
+        ${C.paper} 100%
       );
       transition: background .55s cubic-bezier(.32,.72,0,1);
     }
@@ -1394,7 +1720,7 @@ export const MOBILE_AUTH_CSS = `
       z-index: 2;
       pointer-events: none;
       opacity: 0;
-      background: rgba(241,237,226,.5);
+      background: rgba(255,249,244,.5);
       -webkit-backdrop-filter: blur(26px) saturate(1.45);
       backdrop-filter: blur(26px) saturate(1.45);
       transition: opacity .55s cubic-bezier(.32,.72,0,1);
@@ -1410,37 +1736,71 @@ export const MOBILE_AUTH_CSS = `
       -webkit-tap-highlight-color: transparent;
     }
 
-    /* ---- search-open state ---- */
-    .au-root.is-search-open { overflow: hidden; }
-
-    .au-root.is-search-open .au-campus-blur { opacity: 1; }
-
-    .au-root.is-search-open .au-campus-scene-college .au-campus-photo {
-      filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
-      transform: translateX(-50%) scale(1.06);
+    /* Keep the active step in normal flow; its measured transform moves the
+       headline and inputs together without switching to fixed positioning. */
+    .au-root.is-auth-input-open .au-step {
+      position: relative;
+      z-index: 6;
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+      max-width: 380px;
+      margin: 0 auto;
+      padding: 0 0 max(12px, env(safe-area-inset-bottom, 0px));
+      gap: 8px;
     }
 
-    .au-root.is-search-open .au-brandbar {
-      opacity: 0;
-      transform: translateY(-10px);
-      pointer-events: none;
+    .au-root.au-root-college.is-auth-input-open .au-college-heading-row {
+      position: relative;
     }
 
-    .au-root.is-search-open .au-step {
-      margin-top: clamp(18px, 7dvh, 64px);
-      margin-bottom: 0;
+    .au-root.au-root-college.is-auth-input-open .au-search-close {
+      position: static;
+      align-self: flex-start;
+      transform: none;
+    }
+
+    .au-root-request .au-step {
       padding-top: 0;
     }
 
-    .au-root.is-search-open .au-step::before {
+    .au-root-college .au-college-heading-row,
+    .au-root-request .au-request-heading-row {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+    }
+
+    .au-root-college .au-college-heading-row .au-search-close,
+    .au-root-request .au-request-back {
+      position: static;
+      align-self: flex-start;
+      transform: none;
+    }
+
+    .au-root-college .au-college-heading-row .au-search-close,
+    .au-root-request .au-request-back {
+      width: 26.4px;
+      flex-basis: 26.4px;
+    }
+
+    .au-root-college .au-college-heading-row .au-search-close svg,
+    .au-root-request .au-request-back svg {
+      transform: translateX(-5.5px);
+    }
+
+    .au-root-email .au-ghost,
+    .au-root-otp .au-ghost {
+      color: ${C.ink};
+      border-bottom-color: ${C.ink};
+      font-weight: 700;
+    }
+
+    .au-root.is-auth-input-open .au-step::before {
       opacity: 0;
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
     }
-
-    .au-root.is-search-open .au-mobile-field-label { margin-top: 2px; }
-
-    .au-root.is-search-open .au-results { max-height: min(28dvh, 230px); }
 
     /* ---- compact screens (order matters: height first, then width) ---- */
     @media (max-height: 760px) {
@@ -1448,16 +1808,13 @@ export const MOBILE_AUTH_CSS = `
       .au-wordmark { font-size: 36px; }
       .au-brand-whisper { font-size: 10px; }
       .au-step { gap: 8px; }
-      .au-step .au-headline { font-size: 29px; }
       .au-input,
       .au-field input { height: 50px; }
     }
 
     @media (max-width: 360px) {
       .au-panel { padding-left: 18px; padding-right: 18px; }
-      .au-step .au-headline { font-size: 28px; }
-      .au-search { font-size: 15px; }
-      .au-box { height: 45px; font-size: 21px; }
+      .au-box { height: 45px; }
       .au-form { gap: 12px; }
     }
 
@@ -1478,10 +1835,6 @@ export const MOBILE_AUTH_CSS = `
       .au-ghost,
       .au-results { transition: none !important; }
       .au-box.err { animation: none !important; }
-      .au-root.is-search-open .au-campus-scene-college .au-campus-photo {
-        filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
-        transform: translateX(-50%);
-      }
     }
   }
 `;
@@ -1493,12 +1846,22 @@ export const AUTH_SCENE_CSS = '';
 export const AUTH_SMOOTH_CSS = '';
 
 const AuthBrand = () => (
-  <div className="au-brandbar" aria-label="huh?">
-    <span className="au-wordmark" aria-hidden="true">
+  <motion.div
+    className="au-brandbar"
+    aria-label="huh?"
+    layoutId="splash-auth-brand"
+    transition={{ layout: { duration: 0.5, ease: [0.22, 1, 0.36, 1] } }}
+  >
+    <motion.span
+      className="au-wordmark"
+      aria-hidden="true"
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.45, delay: 0.08, ease: [0.22, 1, 0.36, 1] }}
+    >
       huh<span className="au-brand-question">?</span>
-    </span>
-    <span className="au-brand-whisper">campus, chemistry, and a little curiosity.</span>
-  </div>
+    </motion.span>
+  </motion.div>
 );
 
 const AuthArtwork = ({ kind }) => {
@@ -1592,31 +1955,67 @@ const AuthArtwork = ({ kind }) => {
 /* Mobile campus scene: the photo is the whole canvas, with a wash that
    dissolves its lower edge into the paper color. The form stays live HTML
    above it — never baked into the image. */
-const AuthCampusScene = ({ kind = 'college', verified = false }) => (
-  <div
-    className={`au-campus-scene au-campus-scene-${kind}${verified ? ' is-verified' : ''}`}
-    aria-hidden="true"
-  >
-    <img className="au-campus-photo" src={campusPhoto} alt="" draggable="false" />
-    <div className="au-campus-wash" />
-    <div className="au-campus-blur" />
-  </div>
-);
+const AuthCampusScene = ({
+  kind = 'college',
+  verified = false,
+  inputOpen = false,
+  flowExpanded = false,
+  portal = false,
+  sceneRef,
+}) => {
+  const scene = (
+    <div
+      ref={sceneRef}
+      className={`au-campus-scene au-campus-scene-${kind}${verified ? ' is-verified' : ''}${inputOpen ? ' is-auth-input-open' : ''}${flowExpanded ? ' is-auth-flow-expanded' : ''}`}
+      aria-hidden="true"
+    >
+      <img className="au-campus-photo" src={campusPhoto} alt="" draggable="false" />
+      <div className="au-campus-wash" />
+      <div className="au-campus-blur" />
+    </div>
+  );
+
+  return portal && typeof document !== 'undefined'
+    ? createPortal(scene, document.body)
+    : scene;
+};
 
 const Auth = ({ onSuccess, reverifyOnly = false }) => {
   const reduceMotion = useReducedMotion();
-  const isDesktop = useIsDesktop();
+  const [mobileViewport, setMobileViewport] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 1199px)').matches
+  );
 
   // Auth is cream where the splash is near-black, so the browser's status bar
   // and the strip around the app must switch with it or the transition reads as
   // two different apps.
-  useChromeColor(M.paper);
+  useChromeColor(C.paper);
 
   const [step, setStep] = useState(reverifyOnly ? 'otp' : 'college');
+  const [requestLayoutActive, setRequestLayoutActive] = useState(false);
+  const rootRef = useRef(null);
+  const initialAuthStepRef = useRef(true);
+  const campusSceneRef = useRef(null);
+
+  useEffect(() => {
+    initialAuthStepRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 1199px)');
+    const updateViewportMode = () => setMobileViewport(media.matches);
+    media.addEventListener('change', updateViewportMode);
+    return () => media.removeEventListener('change', updateViewportMode);
+  }, []);
   const [colleges, setColleges] = useState([]);
   const [collegeQuery, setCollegeQuery] = useState('');
   const [collegeSearchOpen, setCollegeSearchOpen] = useState(false);
+  const [authInputOpen, setAuthInputOpen] = useState(false);
+  const [authFlowExpanded, setAuthFlowExpanded] = useState(false);
   const collegeSearchRef = useRef(null);
+  const collegeStepRef = useRef(null);
+  const searchTransitionFrameRef = useRef(0);
+  const closeAfterResultsExitRef = useRef(false);
   const [college, setCollege] = useState(null);
   const [email, setEmail] = useState('');
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
@@ -1624,19 +2023,251 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
   const [error, setError] = useState('');
   const [verified, setVerified] = useState(false);
   const [requestDone, setRequestDone] = useState(false);
-  const [graduatingYear, setGraduatingYear] = useState('');
   const inputRefs = useRef([]);
   const { login, user: authUser } = useAuth();
 
+  const transitionAuthInput = useCallback((open, targetStep = collegeStepRef.current) => {
+    const root = rootRef.current;
+
+    if (!root || !targetStep || authInputOpen === open || reduceMotion) {
+      setAuthInputOpen(open);
+      return Promise.resolve();
+    }
+
+    const previousOpen = root.classList.contains('is-auth-input-open');
+    const brand = root.querySelector('.au-brandbar');
+    const brandRect = brand?.getBoundingClientRect();
+    const rootRect = root.getBoundingClientRect();
+    if (brandRect) {
+      root.style.setProperty('--au-brand-left', `${brandRect.left - rootRect.left}px`);
+      root.style.setProperty('--au-brand-top', `${brandRect.top - rootRect.top}px`);
+      root.style.setProperty('--au-brand-width', `${brandRect.width}px`);
+    }
+    const previousTransition = targetStep.style.transition;
+    targetStep.style.transition = 'none';
+    const startRect = targetStep.getBoundingClientRect();
+    root.classList.toggle('is-auth-input-open', open);
+    void targetStep.offsetHeight;
+    const targetRect = targetStep.getBoundingClientRect();
+    root.classList.toggle('is-auth-input-open', previousOpen);
+
+    targetStep.style.setProperty('--au-search-shift', `${startRect.top - targetRect.top}px`);
+    void targetStep.offsetHeight;
+    targetStep.style.transition = previousTransition;
+
+    const transitionFinished = new Promise((resolve) => {
+      let timeoutId;
+      const finish = () => {
+        if (timeoutId) window.clearTimeout(timeoutId);
+        targetStep.removeEventListener('transitionend', onTransitionEnd);
+        resolve();
+      };
+      const onTransitionEnd = (event) => {
+        if (event.target === targetStep && event.propertyName === 'translate') finish();
+      };
+      targetStep.addEventListener('transitionend', onTransitionEnd);
+      timeoutId = window.setTimeout(finish, 900);
+    });
+
+    cancelAnimationFrame(searchTransitionFrameRef.current);
+    setAuthInputOpen(open);
+    searchTransitionFrameRef.current = requestAnimationFrame(() => {
+      targetStep.style.setProperty('--au-search-shift', '0px');
+    });
+    return transitionFinished;
+  }, [authInputOpen, reduceMotion]);
+
   const openCollegeSearch = useCallback(() => {
-    if (isDesktop) return;
+    closeAfterResultsExitRef.current = false;
     setCollegeSearchOpen(true);
-  }, [isDesktop]);
+    transitionAuthInput(true);
+  }, [transitionAuthInput]);
 
   const closeCollegeSearch = useCallback(() => {
+    const waitForResultsExit = collegeSearchOpen && collegeQuery.trim().length > 0;
+    closeAfterResultsExitRef.current = waitForResultsExit;
     setCollegeSearchOpen(false);
     collegeSearchRef.current?.blur();
+    if (waitForResultsExit) return;
+
+    setCollegeQuery('');
+    transitionAuthInput(false);
+  }, [collegeSearchOpen, collegeQuery, transitionAuthInput]);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return undefined;
+
+    const updateCollegeShift = () => {
+      const shiftProperty = '--au-college-desktop-shift';
+      const currentShift = Number.parseFloat(root.style.getPropertyValue(shiftProperty)) || 0;
+      if (
+        !window.matchMedia('(min-width: 1200px)').matches
+        || step !== 'college'
+        || root.classList.contains('is-auth-input-open')
+      ) {
+        if (!window.matchMedia('(min-width: 1200px)').matches) {
+          root.style.removeProperty(shiftProperty);
+        }
+        return;
+      }
+
+      const input = root.querySelector('#college-search');
+      if (!input) return;
+
+      const baselineRight = input.getBoundingClientRect().right - currentShift;
+      const remainingSpace = Math.max(0, root.getBoundingClientRect().right - baselineRight);
+      root.style.setProperty(shiftProperty, `${remainingSpace * 0.4}px`);
+    };
+
+    updateCollegeShift();
+    window.addEventListener('resize', updateCollegeShift);
+    return () => window.removeEventListener('resize', updateCollegeShift);
+  }, [step]);
+
+  useEffect(() => {
+    if (!closeAfterResultsExitRef.current || collegeQuery.trim()) return;
+
+    closeAfterResultsExitRef.current = false;
+    transitionAuthInput(false);
+  }, [collegeQuery, transitionAuthInput]);
+
+  const handleAuthInputFocus = (event) => {
+    transitionAuthInput(true, event.currentTarget.closest('.au-step'));
+  };
+
+  const requestFocusFrameRef = useRef(0);
+  const requestFocusTimeoutRef = useRef(0);
+  const keepRequestInputVisible = useCallback(() => {
+    const root = rootRef.current;
+    const visualViewport = window.visualViewport;
+    const activeInput = document.activeElement;
+    if (
+      !root?.classList.contains('au-root-request')
+      || !(activeInput instanceof HTMLElement)
+      || !root.contains(activeInput)
+    ) return;
+
+    const viewportTop = visualViewport?.offsetTop ?? 0;
+    const viewportHeight = visualViewport?.height ?? window.innerHeight;
+    const visibleTop = viewportTop + 16;
+    const visibleBottom = viewportTop + viewportHeight - 16;
+    const rect = activeInput.getBoundingClientRect();
+    if (rect.bottom > visibleBottom) {
+      root.scrollTop += rect.bottom - visibleBottom;
+    } else if (rect.top < visibleTop) {
+      root.scrollTop += rect.top - visibleTop;
+    }
   }, []);
+
+  const handleRequestInputFocus = () => {
+    cancelAnimationFrame(requestFocusFrameRef.current);
+    window.clearTimeout(requestFocusTimeoutRef.current);
+    requestFocusFrameRef.current = requestAnimationFrame(keepRequestInputVisible);
+    requestFocusTimeoutRef.current = window.setTimeout(keepRequestInputVisible, 300);
+  };
+
+  // Keyboard inset → --au-kb on the root, written straight to the DOM node.
+  // The background is outside the scrolling app frame; only the form tracks
+  // the keyboard's visible height.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    const root = rootRef.current;
+    if (!vv || !root) return undefined;
+    const scene = campusSceneRef.current;
+    let sceneRect = scene?.getBoundingClientRect();
+    let sceneFrozen = false;
+
+    const clearSceneFreeze = () => {
+      if (!scene) return;
+      ['position', 'inset', 'top', 'left', 'right', 'bottom', 'width', 'height']
+        .forEach((property) => scene.style.removeProperty(property));
+      sceneFrozen = false;
+    };
+
+    const syncKeyboardInset = () => {
+      const inset = window.innerHeight - vv.height - vv.offsetTop;
+      const kb = inset > 140 ? Math.round(inset) : 0;
+      const keyboardOpen = kb > 0 && window.matchMedia('(max-width: 1199px)').matches;
+      root.style.setProperty('--au-kb', `${Math.max(0, kb)}px`);
+
+      if (keyboardOpen && scene && sceneRect) {
+        scene.style.setProperty('position', 'fixed', 'important');
+        scene.style.setProperty('inset', 'auto', 'important');
+        scene.style.setProperty('top', `${vv.offsetTop}px`, 'important');
+        scene.style.setProperty('left', `${vv.offsetLeft}px`, 'important');
+        scene.style.setProperty('right', 'auto', 'important');
+        scene.style.setProperty('bottom', 'auto', 'important');
+        scene.style.setProperty('width', `${sceneRect.width}px`, 'important');
+        scene.style.setProperty('height', `${sceneRect.height}px`, 'important');
+        sceneFrozen = true;
+      } else if (!keyboardOpen) {
+        if (sceneFrozen) clearSceneFreeze();
+        if (scene) sceneRect = scene.getBoundingClientRect();
+      }
+
+      if (kb > 0 && root.classList.contains('au-root-request')) {
+        root.style.setProperty('--au-visible-height', `${Math.round(vv.height)}px`);
+        keepRequestInputVisible();
+      } else {
+        root.style.removeProperty('--au-visible-height');
+      }
+    };
+
+    syncKeyboardInset();
+    vv.addEventListener('resize', syncKeyboardInset);
+    vv.addEventListener('scroll', syncKeyboardInset);
+
+    return () => {
+      vv.removeEventListener('resize', syncKeyboardInset);
+      vv.removeEventListener('scroll', syncKeyboardInset);
+      clearSceneFreeze();
+      cancelAnimationFrame(requestFocusFrameRef.current);
+      window.clearTimeout(requestFocusTimeoutRef.current);
+    };
+  }, [keepRequestInputVisible]);
+
+  useEffect(() => {
+    let resizeTimeoutId;
+    const handleResize = () => {
+      const root = rootRef.current;
+      if (!root) return;
+
+      root.classList.add('is-layout-resizing');
+      window.clearTimeout(resizeTimeoutId);
+      resizeTimeoutId = window.setTimeout(() => {
+        root.classList.remove('is-layout-resizing');
+      }, 120);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.clearTimeout(resizeTimeoutId);
+      rootRef.current?.classList.remove('is-layout-resizing');
+    };
+  }, []);
+
+  // Swiping up on the college list dismisses the keyboard (the sheet stays
+  // open) so the full list is readable. A one-shot guard keeps the blur
+  // from refiring on every move event of the same gesture.
+  const listTouchStartY = useRef(null);
+  const listSwipeDismissed = useRef(false);
+
+  const handleResultsTouchStart = (e) => {
+    listTouchStartY.current = e.touches?.[0]?.clientY ?? null;
+    listSwipeDismissed.current = false;
+  };
+
+  const handleResultsTouchMove = (e) => {
+    if (listSwipeDismissed.current || listTouchStartY.current == null) return;
+    const y = e.touches?.[0]?.clientY;
+    if (y == null) return;
+    if (listTouchStartY.current - y > 14) {
+      listSwipeDismissed.current = true;
+      collegeSearchRef.current?.blur();
+    }
+  };
 
   const [requestForm, setRequestForm] = useState({
     collegeName: '',
@@ -1733,20 +2364,35 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     ? colleges.filter((c) => collegeMatches(c, collegeQuery))
     : colleges;
 
-  // On desktop the results are always inline under the field. On mobile they
-  // only exist while the search is open, and only once something is typed — an
-  // empty list is noise, not help.
-  const showResults = !!collegeQuery.trim() && (isDesktop || collegeSearchOpen);
-  const searchActive = collegeSearchOpen && !isDesktop;
+  // Ink initials fallback for colleges whose logo hasn't been uploaded yet.
+  // Once a logo ships on the college object it simply covers this.
+  const collegeInitials = (name = '') => {
+    const stop = new Set(['of', 'and', 'the', 'for', 'at', 'a', 'an']);
+    const words = String(name)
+      .replace(/[^A-Za-z\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w && !stop.has(w.toLowerCase()));
+    if (words.length === 0) return '??';
+    if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+    return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  };
+
+  // One identical search behavior on every breakpoint. Suggestions are
+  // intentionally withheld until the user enters a search query.
+  const searchActive = collegeSearchOpen;
+  const showResults = collegeSearchOpen && collegeQuery.trim().length > 0;
 
   const pickCollege = (c) => {
+    closeAfterResultsExitRef.current = false;
     setCollege(c);
     setCollegeQuery(c.name);
     setCollegeSearchOpen(false);
+    setAuthInputOpen(true);
+    setAuthFlowExpanded(true);
     setError('');
     collegeSearchRef.current?.blur();
     triggerHaptic('light');
-    setTimeout(() => setStep('email'), 220);
+    setStep('email');
   };
 
   const [suspendedData, setSuspendedData] = useState(() => {
@@ -1759,10 +2405,10 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
   });
 
   useEffect(() => {
-    if (step === 'otp' && inputRefs.current[0]) {
+    if (reverifyOnly && step === 'otp' && inputRefs.current[0]) {
       setTimeout(() => inputRefs.current[0].focus(), 150);
     }
-  }, [step]);
+  }, [reverifyOnly, step]);
 
   const reverifyKicked = useRef(false);
 
@@ -1778,12 +2424,6 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
 
   const reverifyCollege = authUser?.college || 'your college';
 
-  const handleInputBlur = () => {
-    // Desktop keeps its existing reset behavior. On mobile, forcing the page to
-    // the top on blur fights keyboard dismissal and causes a visible jump.
-    if (!window.matchMedia('(max-width: 700px)').matches) window.scrollTo(0, 0);
-  };
-
   const handleSendOtp = async (e) => {
     e.preventDefault();
     if (!email.trim() || !college) return;
@@ -1792,6 +2432,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     setLoading(true);
     triggerHaptic('medium');
 
+    setCollegeSearchOpen(false);
     if (document.activeElement) document.activeElement.blur();
 
     try {
@@ -1852,18 +2493,6 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
       localStorage.removeItem('matchalize_suspended');
       login(data.user);
 
-      if (graduatingYear && data.user?._id && !data.user.graduatingYear) {
-        api.put('/users/profile', {
-          graduatingYear: Number(graduatingYear),
-        })
-          .then(() => {
-            const stored = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
-            stored.graduatingYear = Number(graduatingYear);
-            localStorage.setItem('matchalize_user', JSON.stringify(stored));
-          })
-          .catch(() => {});
-      }
-
       if (socket && socket.disconnected) socket.connect();
 
       setVerified(true);
@@ -1895,7 +2524,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
       triggerHaptic('heavy');
       setLoading(false);
     }
-  }, [email, onSuccess, login, reverifyOnly, handleReverifyConfirm, graduatingYear]);
+  }, [email, onSuccess, login, reverifyOnly, handleReverifyConfirm]);
 
   const handleOtpChange = (e, index) => {
     if (error) setError('');
@@ -1955,19 +2584,18 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     </AnimatePresence>
   );
 
-  const swapProps = isDesktop ? {
-    initial: reduceMotion ? false : { opacity: 0, y: 12, scale: .985, filter: 'blur(2px)' },
-    animate: { opacity: 1, y: 0, scale: 1, filter: 'blur(0px)' },
-    exit: reduceMotion
-      ? { opacity: 0 }
-      : { opacity: 0, y: -8, scale: .99, filter: 'blur(2px)' },
-    transition: { duration: .24, ease: [0.22, 1, 0.36, 1] },
-  } : {
-    initial: reduceMotion ? false : { opacity: 0, y: 6 },
+  const swapProps = {
+    initial: reduceMotion ? false : { opacity: 0, y: 12 },
     animate: { opacity: 1, y: 0 },
-    exit: reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 },
-    transition: { duration: .18, ease: [0.22, 1, 0.36, 1] },
+    exit: reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 },
+    transition: { duration: reduceMotion ? 0 : .24, ease: [0.22, 1, 0.36, 1] },
   };
+  const collegeStepMotionProps = initialAuthStepRef.current
+    ? {
+      ...swapProps,
+      transition: { duration: reduceMotion ? 0 : .44, ease: [0.22, 1, 0.36, 1] },
+    }
+    : swapProps;
 
   if (suspendedData) {
     return (
@@ -1991,15 +2619,26 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
 
   if (reverifyOnly) {
     return (
-      <div className="au-root au-root-verify">
+      <div
+        ref={rootRef}
+        className={`au-root au-root-verify${authInputOpen ? ' is-auth-input-open' : ''}`}
+      >
         <style>{AUTH_CSS}{MOBILE_AUTH_CSS}</style>
-        <AuthCampusScene kind="verify" verified={verified} />
+        <AuthCampusScene
+          kind="verify"
+          verified={verified}
+          inputOpen={authInputOpen}
+          portal={mobileViewport}
+          sceneRef={campusSceneRef}
+        />
 
         <div className="au-fit">
           <motion.div className="au-panel" {...swapProps}>
             <AuthBrand />
             <div className="au-step">
-              <h2 className="au-headline">Confirm you're still a student.</h2>
+              <h2 className="au-headline">
+                Still you, <span className="au-huh-inline">huh?</span>
+              </h2>
 
               <p className="au-sub">
                 We check each year that your <b>{reverifyCollege}</b> email still works.
@@ -2022,6 +2661,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                     ref={(el) => { inputRefs.current[index] = el; }}
                     onChange={(e) => handleOtpChange(e, index)}
                     onKeyDown={(e) => handleOtpKeyDown(e, index)}
+                    onFocus={handleAuthInputFocus}
                     disabled={verified || loading}
                     aria-label={`Digit ${index + 1}`}
                   />
@@ -2057,9 +2697,19 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
   }
 
   return (
-    <div className={`au-root au-root-${step}${step === 'college' && collegeSearchOpen ? ' is-search-open' : ''}`}>
+    <div
+      ref={rootRef}
+      className={`au-root au-root-${step === 'request' && !requestLayoutActive ? 'college' : step}${authInputOpen ? ' is-auth-input-open' : ''}${authFlowExpanded ? ' is-auth-flow-expanded' : ''}`}
+    >
       <style>{AUTH_CSS}{MOBILE_AUTH_CSS}</style>
-      <AuthCampusScene kind={step} verified={verified} />
+      <AuthCampusScene
+        kind={step}
+        verified={verified}
+        inputOpen={authInputOpen}
+        flowExpanded={authFlowExpanded}
+        portal={mobileViewport}
+        sceneRef={campusSceneRef}
+      />
 
       <div className="au-fit">
         <motion.div className="au-panel" {...swapProps}>
@@ -2067,46 +2717,67 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
             <div className="au-backdrop" onClick={closeCollegeSearch} aria-hidden="true" />
           )}
           <AuthBrand />
-          <AnimatePresence mode="wait" initial={false}>
+          <AnimatePresence
+            mode="wait"
+            onExitComplete={() => {
+              if (step === 'request') {
+                setRequestLayoutActive(true);
+                setAuthInputOpen(false);
+              }
+            }}
+          >
             {step === 'college' ? (
               <motion.section
                 key="college"
+                ref={collegeStepRef}
                 className="au-step"
-                {...swapProps}
-                layout={isDesktop ? false : 'position'}
-                transition={{
-                  ...swapProps.transition,
-                  layout: { type: 'spring', stiffness: 300, damping: 34, mass: 0.9 },
-                }}
+                {...collegeStepMotionProps}
               >
-                <h2 className="au-headline">
-                  So, what&rsquo;s your college, <span className="au-huh-inline">huh?</span>
-                </h2>
-
-                <AnimatePresence mode="wait" initial={false}>
-                  <motion.p
-                    key={searchActive ? 'typing' : 'idle'}
-                    className="au-sub au-mobile-sub"
-                    initial={reduceMotion ? false : { opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.16 }}
-                  >
-                    {searchActive
-                      ? 'Start typing. We’ll bring your campus into view.'
-                      : 'Your campus. Your people. Your next good story.'}
-                  </motion.p>
-                </AnimatePresence>
+                <div className="au-college-heading-row">
+                  {searchActive && (
+                    <button
+                      className="au-search-close au-request-back"
+                      type="button"
+                      onClick={closeCollegeSearch}
+                      aria-label="Back to college selection"
+                    >
+                      <ArrowLeft size={26.4} strokeWidth={2.2} aria-hidden="true" />
+                    </button>
+                  )}
+                  <h2 className="au-headline">
+                    So, what&rsquo;s your college, <span className="au-huh-inline">huh?</span>
+                  </h2>
+                </div>
 
                 <AuthArtwork kind="college" />
 
                 {errorBanner}
 
-                <label className="au-mobile-field-label" htmlFor="college-search">Find your campus</label>
-                <div className="au-searchwrap">
-                  <span className="au-searchicon">
-                    <Search size={20} strokeWidth={1.9} aria-hidden="true" />
-                  </span>
+                <motion.div
+                  className="au-searchwrap"
+                  layoutId="splash-auth-search"
+                  transition={{ layout: { duration: 0.55, ease: [0.22, 1, 0.36, 1] } }}
+                >
+                  {collegeQuery.length > 0 ? (
+                    <button
+                      className="au-searchicon au-search-clear"
+                      type="button"
+                      aria-label="Clear college search"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        closeAfterResultsExitRef.current = false;
+                        setCollegeQuery('');
+                        setCollegeSearchOpen(true);
+                        collegeSearchRef.current?.focus();
+                      }}
+                    >
+                      <X size={20} strokeWidth={2} aria-hidden="true" />
+                    </button>
+                  ) : (
+                    <span className="au-searchicon">
+                      <Search size={20} strokeWidth={1.9} aria-hidden="true" />
+                    </span>
+                  )}
 
                   <input
                     id="college-search"
@@ -2137,7 +2808,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                     aria-controls="college-suggestions"
                     aria-label="Search your college"
                   />
-                </div>
+                </motion.div>
 
                 {collegeLoadState === 'error' && colleges.length === 0 && (
                   <div>
@@ -2148,7 +2819,12 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                   </div>
                 )}
 
-                <AnimatePresence>
+                <AnimatePresence
+                  onExitComplete={() => {
+                    if (!closeAfterResultsExitRef.current) return;
+                    setCollegeQuery('');
+                  }}
+                >
                   {showResults && collegeLoadState !== 'error' && (
                     <motion.div
                       key="results"
@@ -2156,13 +2832,15 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                       id="college-suggestions"
                       role="listbox"
                       aria-label="College suggestions"
+                      onTouchStart={handleResultsTouchStart}
+                      onTouchMove={handleResultsTouchMove}
                       initial={reduceMotion ? false : { opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: 4 }}
                       transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
                     >
                       {filteredColleges.length === 0 ? (
-                        <div style={{ gridColumn: '1 / -1' }}>
+                        <div className="au-no-results">
                           <p className="au-empty">
                             No college matches &ldquo;{collegeQuery.trim()}&rdquo;.
                           </p>
@@ -2175,15 +2853,20 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                             <button
                               className="au-cta"
                               type="button"
-                              onClick={() => {
+                              onClick={async () => {
                                 setRequestForm((f) => ({
                                   ...f,
                                   collegeName: collegeQuery.trim(),
                                   email,
                                 }));
                                 triggerHaptic('light');
+                                closeAfterResultsExitRef.current = false;
+                                setRequestLayoutActive(false);
                                 setCollegeSearchOpen(false);
                                 collegeSearchRef.current?.blur();
+                                if (!window.matchMedia('(max-width: 1199px)').matches) {
+                                  await transitionAuthInput(false);
+                                }
                                 setStep('request');
                               }}
                             >
@@ -2192,7 +2875,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                           )}
                         </div>
                       ) : (
-                        filteredColleges.slice(0, 12).map((c) => (
+                        filteredColleges.map((c) => (
                           <button
                             key={c.code}
                             type="button"
@@ -2201,12 +2884,19 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                             className={`au-result${college?.code === c.code ? ' chosen' : ''}`}
                             onClick={() => pickCollege(c)}
                           >
-                            <span className="au-result-name">{c.name}</span>
-                            {(c.city || c.state) && (
-                              <span className="au-result-meta">
-                                {[c.city, c.state].filter(Boolean).join(', ')}
-                              </span>
-                            )}
+                            <span className="au-logo" aria-hidden="true">
+                              {(c.logo || c.logoUrl)
+                                ? <img src={c.logo || c.logoUrl} alt="" loading="lazy" />
+                                : collegeInitials(c.name)}
+                            </span>
+                            <span className="au-result-text">
+                              <span className="au-result-name">{c.name}</span>
+                              {(c.city || c.state) && (
+                                <span className="au-result-meta">
+                                  {[c.city, c.state].filter(Boolean).join(', ')}
+                                </span>
+                              )}
+                            </span>
                           </button>
                         ))
                       )}
@@ -2214,13 +2904,24 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                   )}
                 </AnimatePresence>
 
-                {!collegeQuery.trim() && collegeLoadState === 'loading' && colleges.length === 0 && (
-                  <p className="au-empty">Loading colleges…</p>
-                )}
               </motion.section>
             ) : step === 'request' ? (
               <motion.section key="request" className="au-step" {...swapProps}>
-                <h2 className="au-headline">Tell us your campus.</h2>
+                <div className="au-request-heading-row">
+                  <button
+                    className="au-search-close au-request-back"
+                    type="button"
+                    onClick={() => {
+                      setRequestLayoutActive(false);
+                      setStep('college');
+                      setError('');
+                    }}
+                    aria-label="Back to college selection"
+                  >
+                    <ArrowLeft size={26.4} strokeWidth={2.2} aria-hidden="true" />
+                  </button>
+                  <h2 className="au-headline">Tell us your campus.</h2>
+                </div>
 
                 <p className="au-sub">
                   We add campuses ourselves so only real students get in. You&rsquo;ll hear back once yours is live.
@@ -2241,6 +2942,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                       <input
                         id="rq-name"
                         value={requestForm.collegeName}
+                        onFocus={handleRequestInputFocus}
                         onChange={(e) => setRequestForm((f) => ({ ...f, collegeName: e.target.value }))}
                         placeholder="Indian Institute of Technology Delhi"
                         required
@@ -2258,6 +2960,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                         autoCorrect="off"
                         spellCheck="false"
                         value={requestForm.email}
+                        onFocus={handleRequestInputFocus}
                         onChange={(e) => setRequestForm((f) => ({ ...f, email: e.target.value }))}
                         placeholder="you@college.ac.in"
                         required
@@ -2269,8 +2972,8 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                       <input
                         id="rq-yourname"
                         value={requestForm.name}
+                        onFocus={handleRequestInputFocus}
                         onChange={(e) => setRequestForm((f) => ({ ...f, name: e.target.value }))}
-                        placeholder="Anaya"
                       />
                     </div>
 
@@ -2280,8 +2983,8 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                         <input
                           id="rq-city"
                           value={requestForm.city}
+                          onFocus={handleRequestInputFocus}
                           onChange={(e) => setRequestForm((f) => ({ ...f, city: e.target.value }))}
-                          placeholder="Delhi"
                         />
                       </div>
 
@@ -2290,8 +2993,8 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                         <input
                           id="rq-state"
                           value={requestForm.state}
+                          onFocus={handleRequestInputFocus}
                           onChange={(e) => setRequestForm((f) => ({ ...f, state: e.target.value }))}
-                          placeholder="Delhi"
                         />
                       </div>
                     </div>
@@ -2304,22 +3007,14 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                       {loading ? 'Sending…' : 'Send request'}
                     </button>
 
-                    <button
-                      className="au-ghost"
-                      type="button"
-                      onClick={() => {
-                        setStep('college');
-                        setError('');
-                      }}
-                    >
-                      Back
-                    </button>
                   </form>
                 )}
               </motion.section>
             ) : step === 'email' ? (
               <motion.section key="email" className="au-step" {...swapProps}>
-                <h2 className="au-headline">Your college email.</h2>
+                <motion.h2 layoutId="auth-step-headline" className="au-headline">
+                  College email, <span className="au-huh-inline">huh?</span> Let&rsquo;s get you verified.
+                </motion.h2>
 
                 <p className="au-sub">
                   <b>{college?.name}</b> students use an <b>@{college?.domains?.[0]}</b> address.
@@ -2329,7 +3024,6 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
 
                 <form className="au-form" onSubmit={handleSendOtp}>
                   {errorBanner}
-                  <label className="au-mobile-field-label" htmlFor="college-email">College email</label>
                   <input
                     id="college-email"
                     className="au-input"
@@ -2342,7 +3036,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                     placeholder="you@iitb.ac.in"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    onBlur={handleInputBlur}
+                    onFocus={handleAuthInputFocus}
                     disabled={loading}
                     aria-label="College email address"
                     required
@@ -2357,6 +3051,8 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                     type="button"
                     onClick={() => {
                       setCollegeSearchOpen(false);
+                      setAuthInputOpen(false);
+                      setAuthFlowExpanded(false);
                       setStep('college');
                       setError('');
                     }}
@@ -2367,7 +3063,9 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
               </motion.section>
             ) : (
               <motion.section key="otp" className="au-step" {...swapProps}>
-                <h2 className="au-headline">Enter the code.</h2>
+                <motion.h2 layoutId="auth-step-headline" className="au-headline">
+                  Your code, <span className="au-huh-inline">huh?</span> Let&rsquo;s get you in.
+                </motion.h2>
 
                 <p className="au-sub">
                   Sent to <b className="low">{email.trim()}</b>
@@ -2390,6 +3088,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                       ref={(el) => { inputRefs.current[index] = el; }}
                       onChange={(e) => handleOtpChange(e, index)}
                       onKeyDown={(e) => handleOtpKeyDown(e, index)}
+                      onFocus={handleAuthInputFocus}
                       disabled={verified || loading}
                       aria-label={`Digit ${index + 1}`}
                     />
@@ -2415,25 +3114,6 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                     Wrong email? Go back
                   </button>
                 )}
-
-                <div className="au-field">
-                  <label htmlFor="grad-year">Graduating year (optional)</label>
-                  <input
-                    id="grad-year"
-                    type="number"
-                    inputMode="numeric"
-                    min={new Date().getFullYear()}
-                    max={new Date().getFullYear() + 10}
-                    value={graduatingYear}
-                    onChange={(e) => {
-                      const v = e.target.value.replace(/\D/g, '').slice(0, 4);
-                      setGraduatingYear(v);
-                    }}
-                    onBlur={handleInputBlur}
-                    placeholder={String(new Date().getFullYear() + 3)}
-                    disabled={loading}
-                  />
-                </div>
               </motion.section>
             )}
           </AnimatePresence>

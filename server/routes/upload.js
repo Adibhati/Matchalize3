@@ -7,17 +7,26 @@ import { protect } from '../middleware/auth.js';
 import { deleteCloudinaryFile } from '../config/cloudinary.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const getLocalUploadBaseUrl = () => {
+  const configuredUrl = process.env.API_URL ||
+    (process.env.RENDER_EXTERNAL_HOSTNAME && `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`) ||
+    (process.env.NODE_ENV !== 'production' && `http://localhost:${process.env.PORT || 5005}`);
+  if (!configuredUrl) {
+    throw new Error('API_URL must be configured to return local upload URLs in production');
+  }
+  return configuredUrl.replace(/\/+$/, '');
+};
 const isCloudinaryConfigured = process.env.CLOUDINARY_CLOUD_NAME &&
   process.env.CLOUDINARY_API_KEY &&
   process.env.CLOUDINARY_API_SECRET;
 
-const ALLOWED_MIME = /^image\/(jpeg|png|webp)$|^audio\/(mpeg|mp4|webm|ogg|x-m4a)$/;
-const ALLOWED_EXT = /\.(jpe?g|png|webp|mp3|m4a|mp4|webm|ogg)$/i;
+const ALLOWED_MIME = /^image\/(jpeg|png|webp)$/;
+const ALLOWED_EXT = /\.(jpe?g|png|webp)$/i;
 const fileFilter = (req, file, cb) => {
   if (ALLOWED_EXT.test(file.originalname) && ALLOWED_MIME.test(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error('Unsupported file type. Only jpg/png/webp images and mp3/m4a/webm/ogg audio are allowed.'), false);
+    cb(new Error('Unsupported file type. Only jpg/png/webp images are allowed.'), false);
   }
 };
 
@@ -35,21 +44,14 @@ if (isCloudinaryConfigured) {
 
   const storage = new CloudinaryStorage({
     cloudinary,
-    params: async (req, file) => {
-      const isAudio = file.mimetype.startsWith('audio/');
+    params: async (req) => {
       // Per-user folder: the URL is the only durable proof of who owns a file
       // (one Cloudinary account holds everyone's media), so the uploader's id
       // must be part of the path. See utils/media.js.
       return {
-        folder: isAudio
-          ? `matchalize/audio/${req.user._id}`
-          : `matchalize/photos/${req.user._id}`,
-        allowed_formats: isAudio
-          ? ['mp3', 'mp4', 'm4a', 'webm', 'ogg']
-          : ['jpg', 'jpeg', 'png', 'webp'],
-        ...(isAudio ? {} : {
-          transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }],
-        }),
+        folder: `matchalize/photos/${req.user._id}`,
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+        transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }],
       };
     },
   });
@@ -77,7 +79,7 @@ router.post('/', protect, upload.single('photo'), async (req, res) => {
 
     const url = isCloudinaryConfigured
       ? req.file.path
-      : `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+      : `${getLocalUploadBaseUrl()}/uploads/${req.file.filename}`;
     res.json({ url });
   } catch (error) {
     console.error('Upload error:', error);

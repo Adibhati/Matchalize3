@@ -11,6 +11,21 @@ const onlineUsers = new Map(); // userId -> Set<socketId>
 // How often to re-check suspension/deletion status from the DB per connected socket.
 const SUSPENSION_CHECK_INTERVAL = 60 * 1000;
 
+const registerSafeSocketHandler = (socket, event, handler) => {
+  socket.on(event, (...args) => {
+    try {
+      const result = handler(...args);
+      if (result && typeof result.catch === 'function') {
+        result.catch((error) => {
+          console.error(`Socket ${event} handler error:`, error);
+        });
+      }
+    } catch (error) {
+      console.error(`Socket ${event} handler error:`, error);
+    }
+  });
+};
+
 /**
  * Parse a raw cookie header string into a { name: value } map.
  */
@@ -43,6 +58,9 @@ export const socketHandler = (io) => {
       const user = await User.findById(decoded.id);
       if (!user) {
         return next(new Error('Authentication error: User not found'));
+      }
+      if (user.lastLogoutAt && decoded.iat * 1000 < user.lastLogoutAt.getTime()) {
+        return next(new Error('Authentication error: Session expired'));
       }
       socket.user = user;
       next();
@@ -124,7 +142,7 @@ export const socketHandler = (io) => {
     User.findByIdAndUpdate(userId, { lastActive: new Date() }).exec()
       .catch(err => console.error('Failed to update lastActive:', err));
 
-    socket.on('join-alignment', async (alignmentId) => {
+    registerSafeSocketHandler(socket, 'join-alignment', async (alignmentId) => {
       if (!alignmentId || typeof alignmentId !== 'string') return;
 
       try {
@@ -161,7 +179,7 @@ export const socketHandler = (io) => {
     // it with optional access, so a missing/wrong-shaped field is ignored and
     // logged instead of fatal.
 
-    socket.on('typing', (payload) => {
+    registerSafeSocketHandler(socket, 'typing', (payload) => {
       const alignmentId = payload?.alignmentId;
       if (!alignmentId || typeof alignmentId !== 'string') return;
       // Authorized at join-alignment; room membership replaces the per-keystroke DB query
@@ -169,14 +187,14 @@ export const socketHandler = (io) => {
       socket.to(alignmentId).emit('user-typing', { userName: socket.user.name });
     });
 
-    socket.on('stop-typing', (payload) => {
+    registerSafeSocketHandler(socket, 'stop-typing', (payload) => {
       const alignmentId = payload?.alignmentId;
       if (!alignmentId || typeof alignmentId !== 'string') return;
       if (!socket.rooms.has(alignmentId)) return;
       socket.to(alignmentId).emit('user-stop-typing');
     });
 
-    socket.on('check-online', async (payload) => {
+    registerSafeSocketHandler(socket, 'check-online', async (payload) => {
       // Read inside the try: destructuring used to happen in the parameter list,
       // where a missing payload threw before any guard could run.
       const alignmentId = payload?.alignmentId;
@@ -205,7 +223,7 @@ export const socketHandler = (io) => {
       }
     });
 
-    socket.on('read-messages', async (payload) => {
+    registerSafeSocketHandler(socket, 'read-messages', async (payload) => {
       const alignmentId = payload?.alignmentId;
       if (!alignmentId || typeof alignmentId !== 'string') return;
 
@@ -224,7 +242,7 @@ export const socketHandler = (io) => {
       }
     });
 
-    socket.on('disconnect', () => {
+    registerSafeSocketHandler(socket, 'disconnect', () => {
       console.log(`User disconnected: ${socket.user.name}`);
 
       // Multi-device: remove this socket, keep others

@@ -3,14 +3,13 @@
  *
  * ── THE RULES THIS FILE EXISTS TO ENFORCE ──────────────────────────────────
  *
- * 1. ONE READ, ON A USER GESTURE. `getCurrentPosition` is called from a button
- *    handler, never on mount. Browsers treat an unsolicited prompt as
- *    hostile and both Chrome and iOS degrade trust after a rejection, so asking
- *    automatically costs far more opt-ins than it ever gains.
+ * 1. EXPLICIT OPT-IN, THEN GRANTED-ONLY REFRESHES. The first `getCurrentPosition`
+ *    read follows a user choice. Later one-shot reads are allowed only when that
+ *    saved choice is current location AND the browser already reports permission
+ *    as granted, so automatic maintenance never triggers a permission prompt.
  *
- * 2. NEVER `watchPosition`. There is no tracking, no background polling and no
- *    trail. The user's position is sampled once when they choose to share it and
- *    is refreshed only when they tap again.
+ * 2. NEVER `watchPosition`. There is no continuous tracking, background polling,
+ *    or trail. The user's position is sampled once at a time.
  *
  * 3. NO HIGH ACCURACY. `enableHighAccuracy: false` — the coarse/network
  *    reading is accurate to a city block, which is all a 30km band needs, and it

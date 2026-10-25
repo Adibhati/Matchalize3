@@ -84,9 +84,10 @@ const NAV_CSS = `
   }
 
   .nb-tab.active {
-    background: ${C.yellow};
-    border-color: ${C.ink};
-    box-shadow: 2px 2px 0 ${C.ink};
+    background: #FFE76A;
+    border: 2px solid #171414;
+    border-radius: 12px;
+    box-shadow: 3px 3px 0 #171414;
   }
 
   .nb-ic {
@@ -123,6 +124,42 @@ const NAV_CSS = `
   .nb-tab.active .nb-label {
     color: ${C.ink};
     font-weight: 700;
+  }
+
+  .nb-bar.nb-profile {
+    background: #FFF9F4;
+    border-top: 2px solid #171414;
+    box-shadow: 0 -4px 0 rgba(23,20,20,.12);
+    color: #171414;
+  }
+
+  .nb-profile .nb-tab {
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: #171414;
+    box-shadow: none;
+  }
+
+  .nb-profile .nb-tab.active {
+    background: #FFE76A;
+    border: 2px solid #171414;
+    border-radius: 12px;
+    box-shadow: 3px 3px 0 #171414;
+  }
+
+  .nb-profile .nb-ic,
+  .nb-profile .nb-label,
+  .nb-profile .nb-tab.active .nb-ic,
+  .nb-profile .nb-tab.active .nb-label {
+    color: #171414;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .nb-profile .nb-tab:not(.active):hover {
+      background: rgba(255,231,106,.28);
+      border-color: transparent;
+    }
   }
 
   .nb-badge {
@@ -192,7 +229,7 @@ const NAV_CSS = `
   }
 `;
 
-const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
+const NavBar = ({ activeTab, onTabChange, matchBadge = 0, variant }) => {
   const reduceMotion = useReducedMotion();
 
   const handleTabClick = (key) => {
@@ -203,7 +240,7 @@ const NavBar = ({ activeTab, onTabChange, matchBadge = 0 }) => {
   };
 
   return (
-    <nav className="nb-bar" aria-label="Primary">
+    <nav className={`nb-bar${variant === 'profile' ? ' nb-profile' : ''}`} aria-label="Primary">
       <style>{NAV_CSS}</style>
 
       <div className="nb-row">

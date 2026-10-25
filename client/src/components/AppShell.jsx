@@ -4,10 +4,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Header from './Header';
 import NavBar from './NavBar';
 import DesktopSidebar from './DesktopSidebar';
+import DesktopPanelBackButton from './DesktopPanelBackButton';
+import { closeAllPopouts } from './PopoutItem';
 import { api } from '../utils/api';
-import { useAuth } from '../utils/AuthContext';
 import PushPrompt from './PushPrompt';
-import { SkeletonBox } from './Skeleton';
 import { useIsDesktop } from '../utils/useIsDesktop';
 import { setToastPresenceHandler } from '../utils/toast';
 import Settings from '../pages/Settings.jsx';
@@ -25,30 +25,10 @@ const Roulette = lazy(() => import('../pages/Roulette'));
 /* The shared neo-brutalist canon (src/styles/neu.js) */
 const t = neu;
 
-const ArchivalFallback = () => (
-  <motion.div
-    initial={{ opacity: 0 }}
-    animate={{ opacity: 1 }}
-    exit={{ opacity: 0 }}
-    style={{
-      position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-      backgroundColor: t.desk, zIndex: 10,
-    }}
-  >
-    <div style={{
-      width: 'min(300px, 78%)', padding: '26px 24px',
-      backgroundColor: t.paper, border: `2px solid ${t.ink}`, borderRadius: 18,
-      boxShadow: `6px 6px 0 ${t.ink}`,
-      display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'center',
-    }}>
-      <SkeletonBox width={48} height={48} radius={14} />
-      <SkeletonBox width="60%" height={22} radius={6} />
-      <SkeletonBox width="40%" height={14} radius={5} />
-    </div>
-  </motion.div>
-);
-
 const TAB_TITLES = { discover: 'Deck', matches: 'Letters', roulette: 'Roulette', profile: 'Profile' };
+const PHONE_TAB_ORDER = ['discover', 'matches', 'roulette', 'profile'];
+const TABLET_PANEL_WIDTH = 'min(640px, calc(100vw - 72px))';
+const TABLET_LAYOUT_QUERY = '(min-width: 601px) and (max-width: 1199px) and (min-height: 601px)';
 
 /**
  * 📱 CHROME COLOUR PER SCREEN — the browser's status bar and the strip above
@@ -73,8 +53,16 @@ const TAB_CHROME = {
 
 const AppShell = ({ onSignOut }) => {
   const isDesktop = useIsDesktop();
+  const [isTabletLayout, setIsTabletLayout] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia(TABLET_LAYOUT_QUERY).matches
+  );
   const [activeTab, setActiveTab] = useState('discover');
   const [activeChat, setActiveChat] = useState(null);
+  const [desktopLettersOpen, setDesktopLettersOpen] = useState(false);
+  const [desktopNotificationsOpen, setDesktopNotificationsOpen] = useState(false);
+  const [phoneNotificationsOpen, setPhoneNotificationsOpen] = useState(false);
+  const [phoneReplyKeyboardOpen, setPhoneReplyKeyboardOpen] = useState(false);
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
   /* Whether the SHEET wants the header up. Sheets are the only thing that
      drives this (the deck card and the profile sheet both report proximity).
      The header's actual visibility is derived from this AND the toast, because
@@ -86,6 +74,9 @@ const AppShell = ({ onSignOut }) => {
      read as overlapping furniture. */
   const [toastUp, setToastUp] = useState(false);
   const headerVisible = headerWanted && !toastUp;
+  const afterPopoutsClose = useCallback((action) => {
+    void closeAllPopouts().then(action);
+  }, []);
 
   // Paint the browser's status bar and overscroll gutter to match the screen
   // underneath. Falls back to the desk colour for any tab not in the map, so a
@@ -100,6 +91,92 @@ const AppShell = ({ onSignOut }) => {
   }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  useEffect(() => {
+    if (isDesktop || isTabletLayout) return undefined;
+
+    const isBlockedByOverlay = () => (
+      activeChat || settingsOpen || phoneNotificationsOpen
+      || phoneReplyKeyboardOpen
+      || document.querySelector('.po-overlay, [aria-modal="true"]')
+    );
+    const onPointerDown = (event) => {
+      phoneSwipeRef.current = null;
+      if (event.pointerType !== 'touch' || isBlockedByOverlay()) return;
+      phoneSwipeRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+      };
+    };
+    const onPointerUp = (event) => {
+      const gesture = phoneSwipeRef.current;
+      phoneSwipeRef.current = null;
+      if (!gesture || gesture.pointerId !== event.pointerId || isBlockedByOverlay()) return;
+
+      const deltaX = event.clientX - gesture.startX;
+      const deltaY = event.clientY - gesture.startY;
+      if (Math.abs(deltaX) < 64 || Math.abs(deltaX) < Math.abs(deltaY) * 1.35) return;
+
+      const currentIndex = PHONE_TAB_ORDER.indexOf(activeTab);
+      const nextIndex = currentIndex + (deltaX < 0 ? 1 : -1);
+      if (currentIndex < 0 || nextIndex < 0 || nextIndex >= PHONE_TAB_ORDER.length) return;
+
+      suppressSwipeClickRef.current = true;
+      if (suppressSwipeClickTimerRef.current) clearTimeout(suppressSwipeClickTimerRef.current);
+      suppressSwipeClickTimerRef.current = setTimeout(() => {
+        suppressSwipeClickRef.current = false;
+        suppressSwipeClickTimerRef.current = null;
+      }, 400);
+      afterPopoutsClose(() => setActiveTab(PHONE_TAB_ORDER[nextIndex]));
+    };
+    const onPointerCancel = () => { phoneSwipeRef.current = null; };
+    const onClickCapture = (event) => {
+      if (!suppressSwipeClickRef.current) return;
+      suppressSwipeClickRef.current = false;
+      if (suppressSwipeClickTimerRef.current) clearTimeout(suppressSwipeClickTimerRef.current);
+      suppressSwipeClickTimerRef.current = null;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('pointerup', onPointerUp, true);
+    window.addEventListener('pointercancel', onPointerCancel, true);
+    window.addEventListener('click', onClickCapture, true);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('pointerup', onPointerUp, true);
+      window.removeEventListener('pointercancel', onPointerCancel, true);
+      window.removeEventListener('click', onClickCapture, true);
+      if (suppressSwipeClickTimerRef.current) clearTimeout(suppressSwipeClickTimerRef.current);
+    };
+  }, [
+    isDesktop, isTabletLayout, activeChat, settingsOpen,
+    phoneNotificationsOpen, phoneReplyKeyboardOpen, activeTab, afterPopoutsClose,
+  ]);
+
+  useEffect(() => {
+    const tabletViewport = window.matchMedia(TABLET_LAYOUT_QUERY);
+    const updateTabletLayout = () => setIsTabletLayout(tabletViewport.matches);
+    updateTabletLayout();
+    tabletViewport.addEventListener('change', updateTabletLayout);
+    return () => tabletViewport.removeEventListener('change', updateTabletLayout);
+  }, []);
+
+  useEffect(() => {
+    setPhoneReplyKeyboardOpen(false);
+  }, [activeTab, isDesktop, isTabletLayout]);
+
+  useEffect(() => {
+    const closeDeckOverlays = () => {
+      setDesktopLettersOpen(false);
+      setDesktopNotificationsOpen(false);
+      setSettingsOpen(false);
+    };
+    window.addEventListener('matchalize:deck-popout-opening', closeDeckOverlays);
+    return () => window.removeEventListener('matchalize:deck-popout-opening', closeDeckOverlays);
+  }, []);
+
   /* One-shot instruction for the Profile page to scroll itself so the
      "Profile strength" bar is visible on arrival. Set by the deck's gate toast,
      consumed by Profile on mount, then cleared — a plain boolean would re-fire
@@ -111,8 +188,6 @@ const AppShell = ({ onSignOut }) => {
     setFocusProfileStrength(true);
     setActiveTab('profile');
   }, []);
-  const { user } = useAuth();
-
   // ── Push-notification deep link ────────────────────────────────────────────
   // The service worker used to navigate to `/chat/<alignmentId>`, but this app
   // has NO router — App.jsx picks a screen from component state, so that path
@@ -125,7 +200,43 @@ const AppShell = ({ onSignOut }) => {
     () => new URLSearchParams(window.location.search).get('chat')
   );
   const queryClient = useQueryClient();
-  const myId = user?._id;
+  const phoneSwipeRef = React.useRef(null);
+  const suppressSwipeClickRef = React.useRef(false);
+  const suppressSwipeClickTimerRef = React.useRef(null);
+
+  useEffect(() => {
+    if (!isDesktop) setDesktopLettersOpen(false);
+  }, [isDesktop]);
+
+  useEffect(() => {
+    if ((!desktopLettersOpen && !desktopNotificationsOpen && !settingsOpen) || (!isDesktop && !isTabletLayout)) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') {
+        setDesktopLettersOpen(false);
+        setDesktopNotificationsOpen(false);
+        setSettingsOpen(false);
+      }
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [desktopLettersOpen, desktopNotificationsOpen, settingsOpen, isDesktop, isTabletLayout]);
+
+  useEffect(() => {
+    const handleUnavailableAlignment = ({ alignmentId } = {}) => {
+      if (!alignmentId) return;
+      const id = String(alignmentId);
+
+      setActiveChat((current) => (String(current?._id || '') === id ? null : current));
+      queryClient.setQueryData(['matches'], (old) => ({
+        ...(old || {}),
+        matches: (old?.matches || []).filter((match) => String(match._id) !== id),
+      }));
+      queryClient.removeQueries({ queryKey: ['messages', id], exact: true });
+    };
+
+    socket.on('unmatch-notification', handleUnavailableAlignment);
+    return () => socket.off('unmatch-notification', handleUnavailableAlignment);
+  }, [queryClient]);
 
   const { data: matchData } = useQuery({
     queryKey: ['matches'],
@@ -157,18 +268,20 @@ const AppShell = ({ onSignOut }) => {
   }, [queryClient]);
 
   const handleOpenChat = (match) => {
-    queryClient.setQueryData(['matches'], (old) => {
-      if (!old?.matches) return old;
-      return {
-        ...old,
-        matches: old.matches.map((m) =>
-          m._id === match._id
-            ? { ...m, yourTurn: false, unreadCount: 0, lastMessage: { ...m.lastMessage, readAt: new Date().toISOString() } }
-            : m
-        ),
-      };
+    afterPopoutsClose(() => {
+      queryClient.setQueryData(['matches'], (old) => {
+        if (!old?.matches) return old;
+        return {
+          ...old,
+          matches: old.matches.map((m) =>
+            m._id === match._id
+              ? { ...m, yourTurn: false, unreadCount: 0, lastMessage: { ...m.lastMessage, readAt: new Date().toISOString() } }
+              : m
+          ),
+        };
+      });
+      setActiveChat(match);
     });
-    setActiveChat(match);
   };
 
   const handleCloseChat = () => {
@@ -183,19 +296,21 @@ const AppShell = ({ onSignOut }) => {
     const match = matchData.matches.find((m) => m._id === alignmentId);
     if (!match) return false;
 
-    setActiveTab('matches');
-    // Mark it read in the cache so the unread badge doesn't immediately re-count
-    // the conversation the user was just sent to.
-    queryClient.setQueryData(['matches'], (old) => {
-      if (!old?.matches) return old;
-      return {
-        ...old,
-        matches: old.matches.map((m) =>
-          m._id === alignmentId ? { ...m, yourTurn: false, unreadCount: 0 } : m
-        ),
-      };
+    afterPopoutsClose(() => {
+      setActiveTab('matches');
+      // Mark it read in the cache so the unread badge doesn't immediately re-count
+      // the conversation the user was just sent to.
+      queryClient.setQueryData(['matches'], (old) => {
+        if (!old?.matches) return old;
+        return {
+          ...old,
+          matches: old.matches.map((m) =>
+            m._id === alignmentId ? { ...m, yourTurn: false, unreadCount: 0 } : m
+          ),
+        };
+      });
+      setActiveChat(match);
     });
-    setActiveChat(match);
     return true;
   };
 
@@ -213,20 +328,23 @@ const AppShell = ({ onSignOut }) => {
   // postMessaged the id, so no navigation happens and the param path above
   // never runs.
   useEffect(() => {
+    const serviceWorker = navigator.serviceWorker;
+    if (!serviceWorker) return;
+
     const onMessage = (event) => {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type !== 'open-chat') return;
       openChatById(event.data.alignmentId);
     };
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
+    serviceWorker.addEventListener('message', onMessage);
+    return () => serviceWorker.removeEventListener('message', onMessage);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchData, queryClient]);
 
   const renderPage = () => {
     switch (activeTab) {
       case 'discover':
-        return <Discover key="discover" onOpenChat={handleOpenChat} onSheetNearHeader={(near) => setHeaderWanted(!near)} onGoToProfile={handleGoToProfile} />;
+        return <Discover key="discover" onOpenChat={handleOpenChat} onSheetNearHeader={(near) => setHeaderWanted(!near)} onGoToProfile={handleGoToProfile} onPhoneReplyKeyboardChange={setPhoneReplyKeyboardOpen} isTabletLayout={isTabletLayout} />;
       case 'matches':
         return <Matches key="matches" onOpenChat={handleOpenChat} />;
       case 'profile':
@@ -241,11 +359,35 @@ const AppShell = ({ onSignOut }) => {
   // DESKTOP LAYOUT
   if (isDesktop) {
     return (
-      <div style={desktopStyles.shellRoot}>
+      <div
+        style={{
+          ...desktopStyles.shellRoot,
+          ...(isDesktop
+            ? { position: 'relative', boxSizing: 'border-box', paddingLeft: 72 }
+            : {}),
+        }}
+      >
         <DesktopSidebar
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
+          activeTab={desktopLettersOpen ? 'matches' : desktopNotificationsOpen ? 'notifications' : activeTab}
+          onTabChange={(tab) => afterPopoutsClose(() => {
+            setDesktopLettersOpen(false);
+            setDesktopNotificationsOpen(false);
+            setSettingsOpen(false);
+            setActiveTab(tab);
+          })}
+          onLettersToggle={() => afterPopoutsClose(() => setDesktopLettersOpen((open) => !open))}
           matchBadge={matchCount}
+          notificationBadge={unreadNotificationsCount}
+          onOpenNotifications={() => afterPopoutsClose(() => {
+            setDesktopLettersOpen(false);
+            setSettingsOpen(false);
+            setDesktopNotificationsOpen((open) => !open);
+          })}
+          onSettingsToggle={() => afterPopoutsClose(() => {
+            setDesktopLettersOpen(false);
+            setDesktopNotificationsOpen(false);
+            setSettingsOpen((open) => !open);
+          })}
           onSignOut={onSignOut}
         />
         <PushPrompt />
@@ -253,29 +395,50 @@ const AppShell = ({ onSignOut }) => {
         <div style={desktopStyles.contentArea}>
           <Header
             onSelectMatch={handleOpenChat}
-            onNavigate={(tab) => setActiveTab(tab)}
+            onNavigate={(tab) => afterPopoutsClose(() => setActiveTab(tab))}
             title={TAB_TITLES[activeTab] || activeTab}
-            onSettingsToggle={() => setSettingsOpen(true)}
+            onSettingsToggle={() => afterPopoutsClose(() => setSettingsOpen(true))}
             visible={headerVisible}
+            hideNotificationButton={isDesktop}
+            hideHeaderChrome={isDesktop}
+            drawerOpen={isDesktop ? desktopNotificationsOpen : undefined}
+            onDrawerOpenChange={isDesktop ? setDesktopNotificationsOpen : undefined}
+            desktopNotificationPanel={isDesktop}
+            onUnreadCountChange={setUnreadNotificationsCount}
           />
 
           <div style={desktopStyles.stage}>
-            <Suspense fallback={<ArchivalFallback />}>
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.div
-                  key={activeTab}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
-                  style={desktopStyles.pageWrapper}
-                >
-                  {renderPage()}
-                </motion.div>
-              </AnimatePresence>
+            <Suspense fallback={null}>
+              <div key={activeTab} style={desktopStyles.pageWrapper}>
+                {renderPage()}
+              </div>
             </Suspense>
           </div>
         </div>
+
+        <AnimatePresence>
+          {isDesktop && desktopLettersOpen && (
+            <motion.aside
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ type: 'spring', damping: 30, stiffness: 280 }}
+              style={desktopStyles.lettersPanel}
+              aria-label="Letters"
+            >
+              <div style={desktopStyles.lettersPanelHeader}>
+                <h2 style={desktopStyles.lettersPanelTitle}>Letters</h2>
+                <DesktopPanelBackButton
+                  panelTitle="Letters"
+                  onClick={() => setDesktopLettersOpen(false)}
+                />
+              </div>
+              <Suspense fallback={null}>
+                <Matches compact onOpenChat={handleOpenChat} />
+              </Suspense>
+            </motion.aside>
+          )}
+        </AnimatePresence>
 
         <AnimatePresence>
           {activeChat && (
@@ -295,7 +458,7 @@ const AppShell = ({ onSignOut }) => {
                 style={desktopStyles.chatModal}
                 onClick={(e) => e.stopPropagation()}
               >
-                <Suspense fallback={<ArchivalFallback />}>
+                <Suspense fallback={null}>
                   <Chat match={activeChat} onBack={handleCloseChat} />
                 </Suspense>
               </motion.div>
@@ -303,7 +466,130 @@ const AppShell = ({ onSignOut }) => {
           )}
         </AnimatePresence>
 
-        {settingsOpen && <Settings onSignOut={onSignOut} onClose={() => setSettingsOpen(false)} />}
+        <AnimatePresence>
+          {settingsOpen && (
+            <Settings
+              key="desktop-settings"
+              onSignOut={onSignOut}
+              onClose={() => setSettingsOpen(false)}
+              desktopPanel={isDesktop}
+            />
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  }
+
+  // TABLET LAYOUT
+  if (isTabletLayout) {
+    return (
+      <div style={styles.tabletShellRoot}>
+        <style>{`
+          @media (orientation: landscape) and (min-width: 601px) and (max-width: 1199px) {
+            .tablet-side-panel {
+              width: min(520px, calc((100vw - 72px) * 0.7)) !important;
+            }
+          }
+        `}</style>
+        <DesktopSidebar
+          activeTab={desktopLettersOpen ? 'matches' : desktopNotificationsOpen ? 'notifications' : activeTab}
+          onTabChange={(tab) => afterPopoutsClose(() => {
+            setDesktopLettersOpen(false);
+            setDesktopNotificationsOpen(false);
+            setSettingsOpen(false);
+            setActiveTab(tab);
+          })}
+          onLettersToggle={() => afterPopoutsClose(() => setDesktopLettersOpen((open) => !open))}
+          matchBadge={matchCount}
+          notificationBadge={unreadNotificationsCount}
+          onOpenNotifications={() => afterPopoutsClose(() => {
+            setDesktopLettersOpen(false);
+            setSettingsOpen(false);
+            setDesktopNotificationsOpen((open) => !open);
+          })}
+          onSettingsToggle={() => afterPopoutsClose(() => {
+            setDesktopLettersOpen(false);
+            setDesktopNotificationsOpen(false);
+            setSettingsOpen((open) => !open);
+          })}
+          onSignOut={onSignOut}
+        />
+        <div style={styles.tabletContentArea}>
+          <Header
+            onSelectMatch={handleOpenChat}
+            onNavigate={(tab) => afterPopoutsClose(() => setActiveTab(tab))}
+            title={TAB_TITLES[activeTab] || activeTab}
+            onSettingsToggle={() => afterPopoutsClose(() => setSettingsOpen(true))}
+            visible={headerVisible}
+            hideNotificationButton
+            hideHeaderChrome
+            drawerOpen={desktopNotificationsOpen}
+            onDrawerOpenChange={setDesktopNotificationsOpen}
+            desktopNotificationPanel
+            notificationPanelWidth={TABLET_PANEL_WIDTH}
+            onUnreadCountChange={setUnreadNotificationsCount}
+          />
+
+          <div style={styles.contentStage}>
+            <Suspense fallback={null}>
+              <div key={activeTab} style={styles.pageWrapper}>
+                {renderPage()}
+              </div>
+            </Suspense>
+          </div>
+        </div>
+        <PushPrompt />
+
+        <AnimatePresence>
+          {desktopLettersOpen && (
+            <motion.aside
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ type: 'spring', damping: 30, stiffness: 280 }}
+              style={{ ...desktopStyles.lettersPanel, width: TABLET_PANEL_WIDTH, maxWidth: 'calc(100vw - 72px)' }}
+              className="tablet-side-panel"
+              aria-label="Letters"
+            >
+              <div style={desktopStyles.lettersPanelHeader}>
+                <h2 style={desktopStyles.lettersPanelTitle}>Letters</h2>
+                <DesktopPanelBackButton
+                  panelTitle="Letters"
+                  onClick={() => setDesktopLettersOpen(false)}
+                />
+              </div>
+              <Suspense fallback={null}>
+                <Matches compact onOpenChat={handleOpenChat} />
+              </Suspense>
+            </motion.aside>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {activeChat && (
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 28, stiffness: 280 }}
+              style={styles.chatOverlay}
+            >
+              <Suspense fallback={null}>
+                <Chat match={activeChat} onBack={handleCloseChat} />
+              </Suspense>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {settingsOpen && (
+          <Settings
+            onSignOut={onSignOut}
+            onClose={() => setSettingsOpen(false)}
+            desktopPanel
+            panelWidth={TABLET_PANEL_WIDTH}
+            panelClassName="tablet-side-panel"
+          />
+        )}
       </div>
     );
   }
@@ -313,34 +599,34 @@ const AppShell = ({ onSignOut }) => {
     <div style={styles.shellRoot}>
       <Header
         onSelectMatch={handleOpenChat}
-        onNavigate={(tab) => setActiveTab(tab)}
+        onNavigate={(tab) => afterPopoutsClose(() => setActiveTab(tab))}
         title={TAB_TITLES[activeTab] || activeTab}
-        onSettingsToggle={() => setSettingsOpen(true)}
+        onSettingsToggle={() => afterPopoutsClose(() => setSettingsOpen(true))}
         visible={headerVisible}
+        phoneNotificationPanel
+        drawerOpen={phoneNotificationsOpen}
+        onDrawerOpenChange={setPhoneNotificationsOpen}
       />
 
-      <div style={styles.contentStage}>
-        <Suspense fallback={<ArchivalFallback />}>
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
-              style={styles.pageWrapper}
-            >
-              {renderPage()}
-            </motion.div>
-          </AnimatePresence>
+      <div
+        className="phone-tab-swipe-surface"
+        style={styles.phoneContentStage}
+      >
+        <Suspense fallback={null}>
+          <div key={activeTab} style={styles.pageWrapper}>
+            {renderPage()}
+          </div>
         </Suspense>
       </div>
 
-      <NavBar
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        matchBadge={matchCount}
-      />
+      {!phoneReplyKeyboardOpen && (
+        <NavBar
+          activeTab={activeTab}
+          onTabChange={(tab) => afterPopoutsClose(() => setActiveTab(tab))}
+          matchBadge={matchCount}
+          variant={activeTab === 'profile' ? 'profile' : undefined}
+        />
+      )}
       <PushPrompt />
 
       <AnimatePresence>
@@ -352,7 +638,7 @@ const AppShell = ({ onSignOut }) => {
             transition={{ type: 'spring', damping: 28, stiffness: 280 }}
             style={styles.chatOverlay}
           >
-            <Suspense fallback={<ArchivalFallback />}>
+            <Suspense fallback={null}>
               <Chat match={activeChat} onBack={handleCloseChat} />
             </Suspense>
           </motion.div>
@@ -368,6 +654,29 @@ const AppShell = ({ onSignOut }) => {
    STYLES
 ================================================================== */
 const styles = {
+  tabletShellRoot: {
+    flexShrink: 0,
+    display: 'flex',
+    flexDirection: 'row',
+    height: '100dvh',
+    width: '100%',
+    backgroundColor: t.desk,
+    overflow: 'hidden',
+    position: 'relative',
+    contain: 'layout',
+    boxSizing: 'border-box',
+    paddingLeft: 72,
+  },
+  tabletContentArea: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    position: 'relative',
+    overflow: 'hidden',
+    backgroundColor: t.desk,
+  },
   shellRoot: {
     flexShrink: 0,
     display: 'flex',
@@ -389,12 +698,22 @@ const styles = {
     backgroundColor: t.desk,
     zIndex: 1,
   },
+  phoneContentStage: {
+    flex: 1,
+    minHeight: 0,
+    position: 'relative',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+    backgroundColor: t.desk,
+    touchAction: 'pan-y',
+    zIndex: 1,
+  },
   pageWrapper: {
     position: 'absolute',
     inset: 0,
     display: 'flex',
     flexDirection: 'column',
-    willChange: 'transform, opacity',
   },
   chatOverlay: {
     position: 'fixed',
@@ -441,9 +760,6 @@ const desktopStyles = {
     inset: 0,
     display: 'flex',
     flexDirection: 'column',
-    willChange: 'transform, opacity',
-    maxWidth: '1200px',
-    margin: '0 auto',
     width: '100%',
   },
   chatModal: {
@@ -466,6 +782,45 @@ const desktopStyles = {
     justifyContent: 'center',
     padding: 24,
     backgroundColor: 'rgba(12,12,14,0.62)',
+  },
+  lettersPanel: {
+    position: 'fixed',
+    top: 0,
+    left: 72,
+    bottom: 0,
+    width: '40vw',
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+    backgroundColor: t.desk,
+    borderLeft: `2px solid ${t.ink}`,
+    boxShadow: '-10px 0 28px rgba(0,0,0,.2)',
+    zIndex: 400,
+  },
+  lettersPanelHeader: {
+    position: 'relative',
+    minHeight: 64,
+    padding: '0 18px 0 22px',
+    boxSizing: 'border-box',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: t.paper,
+    borderBottom: `2px solid ${t.ink}`,
+    flexShrink: 0,
+  },
+  lettersPanelTitle: {
+    position: 'absolute',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    margin: 0,
+    color: t.ink,
+    fontFamily: t.fontHeavy,
+    fontSize: 19,
+    fontWeight: 400,
+    letterSpacing: '-.01em',
+    textTransform: 'uppercase',
   },
 };
 

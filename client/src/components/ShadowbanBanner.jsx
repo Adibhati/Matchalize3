@@ -12,19 +12,11 @@ const t = neu;
  * NEVER reveals scores, weights, tiers, or how many reports.
  *
  * Props:
- *   score: Number — user's shadowbanScore
+ *   isUnderReview: Boolean — safe status flag for the authenticated user
  *   onLearnMore: Function — callback to open Learn More sheet
- *
- * Visibility: score < 5.0 → null (don't render)
  */
-const ShadowbanBanner = ({ score = 0, onLearnMore }) => {
-  if (score < 5.0) return null;
-
-  const isHighTier = score >= 8.0;
-
-  /* high tier = red tile + red accent · low tier = coral tile + ink accent */
-  const tileBg = isHighTier ? t.red : t.coral;
-  const accent = isHighTier ? t.red : t.ink;
+const ShadowbanBanner = ({ isUnderReview = false, onLearnMore }) => {
+  if (!isUnderReview) return null;
 
   return (
     <motion.div
@@ -44,19 +36,18 @@ const ShadowbanBanner = ({ score = 0, onLearnMore }) => {
         position: 'relative',
       }}
     >
-      {/* Standard candy icon tile, colored by tier */}
       <div style={{
         width: 36,
         height: 36,
         borderRadius: 10,
-        backgroundColor: tileBg,
+        backgroundColor: t.coral,
         border: `2px solid ${t.ink}`,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,
       }}>
-        <AlertTriangle size={17} color={isHighTier ? '#fff' : t.ink} strokeWidth={2.4} />
+        <AlertTriangle size={17} color={t.ink} strokeWidth={2.4} />
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -78,9 +69,7 @@ const ShadowbanBanner = ({ score = 0, onLearnMore }) => {
           margin: '3px 0 0 0',
           lineHeight: 1.45,
         }}>
-          {isHighTier
-            ? 'Profile editing and photo uploads are temporarily limited.'
-            : 'New profile visibility may be temporarily limited.'}
+          'Profile editing may be temporarily limited.'
         </p>
       </div>
 
@@ -98,7 +87,7 @@ const ShadowbanBanner = ({ score = 0, onLearnMore }) => {
           fontWeight: 700,
           letterSpacing: '.1em',
           textTransform: 'uppercase',
-          color: accent,
+          color: t.ink,
           cursor: 'pointer',
           whiteSpace: 'nowrap',
           flexShrink: 0,

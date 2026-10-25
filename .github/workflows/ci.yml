@@ -46,6 +46,18 @@ jobs:
       - name: Build client
         run: npm run build --prefix client
 
+      # Pure-logic unit tests, no database or browser required. Both suites use
+      # the built-in node:test runner, so this adds no dependency.
+      #
+      # Roulette's camera teardown is deliberately covered here rather than left
+      # to end-of-project device testing: a leaked camera is invisible to a
+      # reviewer but is the failure that reaches users, and the guarantee lives
+      # in `stopStream`, which is testable without hardware.
+      - name: Test server
+        run: npm test --prefix server
+      - name: Test client
+        run: npm test --prefix client
+
       # dumps/ is committed and gets handed to other tools, so it must not
       # silently go stale: a stale dump means a reader gets code that no longer
       # matches the repo, and nothing in the dump tells them. --check re-parses

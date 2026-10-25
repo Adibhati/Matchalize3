@@ -14,6 +14,8 @@ const messageSchema = new mongoose.Schema(
     },
     type: {
       type: String,
+      // Keep the legacy `audio` value readable for existing records; the message
+      // route rejects new messages of that type.
       enum: ['text', 'image', 'opening_letter', 'audio'],
       default: 'text',
     },
@@ -41,8 +43,7 @@ const messageSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
-    // The single source of truth for message media. Photos and voice notes both
-    // live here; the client's type field decides which player to use.
+    // The single source of truth for message media (photos).
     mediaUrl: {
       type: String,
       default: '',
@@ -92,7 +93,7 @@ messageSchema.index({ alignmentId: 1, _id: -1 });
 // Speeds up moderation queries and global user cleanup operations
 messageSchema.index({ senderId: 1, createdAt: -1 });
 // 🔒 ONE opening letter per alignment, enforced at the DB level.
-// Partial filter → normal text/image/audio messages are NOT affected
+// Partial filter → normal text/image messages are NOT affected
 // (an alignment can still have thousands of those). This index is what makes
 // the upserts in discover.js + notifications.js truly race-safe.
 messageSchema.index(

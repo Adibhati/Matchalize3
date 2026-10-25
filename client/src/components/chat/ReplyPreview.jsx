@@ -1,7 +1,7 @@
 import React, { memo } from 'react';
 import { motion } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
-import { Image, Mic, X } from 'lucide-react';
+import { Image, X } from 'lucide-react';
 import neu from '../../styles/neu';
 
 const t = neu;
@@ -14,9 +14,9 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
     ? replyTo.text.slice(0, 60) + (replyTo.text.length > 60 ? '…' : '')
     : replyTo.type === 'image'
     ? <><Image size={14} style={{ marginRight: '6px', verticalAlign: 'text-bottom' }} /> Photograph</>
-    : replyTo.type === 'audio'
-    ? <><Mic size={14} style={{ marginRight: '6px', verticalAlign: 'text-bottom' }} /> Voice Note</>
-    : 'Letter';
+    : replyTo.type === 'text' || replyTo.type === 'opening_letter'
+    ? 'Letter'
+    : 'Message unavailable';
 
   return (
     <motion.div

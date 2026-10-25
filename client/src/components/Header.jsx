@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../utils/api';
 import socket from '../utils/socket';
 import NotificationDrawer from './NotificationDrawer';
+import { closeAllPopouts } from './PopoutItem';
 import { Bell, Settings } from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
 import { DECK_BTN, deckRowStyle } from '../utils/deckChrome';
@@ -22,6 +23,19 @@ const HEADER_CSS = `
     -webkit-tap-highlight-color: transparent; }
   .hd-btn:active { transform: translate(4px, 4px); box-shadow: 0 0 0 ${t.ink};
     background: ${t.ink}; color: ${t.paper}; }
+  .hd-bell-btn[aria-expanded="true"] {
+    background: ${t.yellow}; color: ${t.ink}; box-shadow: 2px 2px 0 ${t.ink};
+    transform: translate(2px, 2px);
+  }
+  @keyframes hd-bell-ring {
+    0%, 100% { transform: rotate(0); }
+    18% { transform: rotate(18deg); }
+    36% { transform: rotate(-15deg); }
+    54% { transform: rotate(11deg); }
+    72% { transform: rotate(-7deg); }
+  }
+  .hd-bell-icon { transform-origin: 50% 15%; }
+  .hd-bell-icon.ring { animation: hd-bell-ring .42s ease-in-out; }
 
   .hd-badge { position: absolute; top: -6px; right: -6px; z-index: 2;
     min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
@@ -96,6 +110,7 @@ const HEADER_CSS = `
   }
   @media (prefers-reduced-motion: reduce) {
     .hd-btn, .hd-wordmark, .hd-scope-chip, .hd-scope-caret { transition: none; }
+    .hd-bell-icon.ring { animation: none; }
   }
 `;
 
@@ -106,9 +121,26 @@ const styles = {
   slotRight: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, flex: 1, pointerEvents: 'auto' },
 };
 
-const Header = ({ onNavigate, onSelectMatch, title, onSettingsToggle, visible = true }) => {
+const Header = ({
+  onNavigate,
+  onSelectMatch,
+  title,
+  onSettingsToggle,
+  visible = true,
+  hideNotificationButton = false,
+  hideHeaderChrome = false,
+  desktopNotificationPanel = false,
+  phoneNotificationPanel = false,
+  notificationPanelWidth,
+  drawerOpen: controlledDrawerOpen,
+  onDrawerOpenChange,
+  onUnreadCountChange,
+}) => {
   const reduceMotion = useReducedMotion();
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [internalDrawerOpen, setInternalDrawerOpen] = useState(false);
+  const [bellClickKey, setBellClickKey] = useState(0);
+  const drawerOpen = controlledDrawerOpen ?? internalDrawerOpen;
+  const setDrawerOpen = onDrawerOpenChange ?? setInternalDrawerOpen;
   const queryClient = useQueryClient();
 
   const { data: unreadData, refetch } = useQuery({
@@ -119,8 +151,18 @@ const Header = ({ onNavigate, onSelectMatch, title, onSettingsToggle, visible = 
   const unreadCount = unreadData?.count || 0;
 
   useEffect(() => {
+    onUnreadCountChange?.(unreadCount);
+  }, [onUnreadCountChange, unreadCount]);
+
+  useEffect(() => {
     if (!drawerOpen) refetch();
   }, [drawerOpen, refetch]);
+
+  useEffect(() => {
+    const closeDrawerForPopout = () => setDrawerOpen(false);
+    window.addEventListener('matchalize:deck-popout-opening', closeDrawerForPopout);
+    return () => window.removeEventListener('matchalize:deck-popout-opening', closeDrawerForPopout);
+  }, [setDrawerOpen]);
 
   useEffect(() => {
     const handleNewAlign = (_data) => {
@@ -134,14 +176,15 @@ const Header = ({ onNavigate, onSelectMatch, title, onSettingsToggle, visible = 
   }, [queryClient]);
 
   const toggleDrawer = () => {
+    setBellClickKey((key) => key + 1);
     triggerHaptic('light');
-    setDrawerOpen((prev) => !prev);
+    void closeAllPopouts().then(() => setDrawerOpen((prev) => !prev));
   };
 
   const handleLogoClick = () => {
     if (onNavigate) {
       triggerHaptic('light');
-      onNavigate('discover');
+      void closeAllPopouts().then(() => onNavigate('discover'));
     }
   };
 
@@ -152,8 +195,8 @@ const Header = ({ onNavigate, onSelectMatch, title, onSettingsToggle, visible = 
 
   /* badge — pops once per count change (remount via key), no infinite pulse */
   const bell = (
-    <button className="hd-btn" onClick={toggleDrawer} aria-label="View notifications" title="Letters received">
-      <Bell size={18} strokeWidth={2.6} />
+    <button className="hd-btn hd-bell-btn" onClick={toggleDrawer} aria-label="View notifications" title="Letters received" aria-expanded={drawerOpen}>
+      <Bell key={bellClickKey} className={`hd-bell-icon${bellClickKey && !reduceMotion ? ' ring' : ''}`} size={18} strokeWidth={2.6} />
       <AnimatePresence>
         {unreadCount > 0 && (
           <motion.span
@@ -171,7 +214,7 @@ const Header = ({ onNavigate, onSelectMatch, title, onSettingsToggle, visible = 
     </button>
   );
 
-  /* wordmark — "matchalize", Caveat: white interior, black border. */
+  /* wordmark — "huh?", Caveat: white interior, black border. */
   const wordmark = (
     <div
       className="hd-wordmark"
@@ -179,9 +222,9 @@ const Header = ({ onNavigate, onSelectMatch, title, onSettingsToggle, visible = 
       role={onNavigate ? 'button' : undefined}
       tabIndex={onNavigate ? 0 : undefined}
       onKeyDown={onNavigate ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleLogoClick(); } } : undefined}
-      title="matchalize — home"
+      title="huh? — home"
     >
-      <span className="hd-display hd-wm">matchalize</span>
+      <span className="hd-display hd-wm">huh?</span>
     </div>
   );
 
@@ -191,42 +234,48 @@ const Header = ({ onNavigate, onSelectMatch, title, onSettingsToggle, visible = 
 
       {/* One floating row on EVERY tab. On the Deck the center column is the
           wordmark with the scope chip under it. */}
-      <motion.div
-        data-deck-header
-        animate={{ y: visible ? 0 : -110, opacity: visible ? 1 : 0 }}
-        transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 300, damping: 30 }}
-        style={{ ...styles.bar, zIndex: 500, pointerEvents: 'none' }}
-      >
-        <div style={styles.slotLeft} />
-        <div style={styles.slotCenter}>
-          {isDeck ? (
-            /* pointer-events auto re-enables the whole center column — the
-               slot itself is pass-through, and this also guarantees the
-               wordmark tap always lands. */
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, pointerEvents: 'auto' }}>
-              {wordmark}
-            </div>
-          ) : (title ? <span className="hd-display hd-heading">{title}</span> : null)}
-        </div>
-        <div style={styles.slotRight}>
-          {showSettingsButton && (
-            <button
-              className="hd-btn"
-              onClick={() => { triggerHaptic('light'); onSettingsToggle(); }}
-              aria-label="Open settings"
-              title="Settings"
-            >
-              <Settings size={18} strokeWidth={2.6} />
-            </button>
-          )}
-          {showNotificationBell && bell}
-        </div>
-      </motion.div>
+      {!hideHeaderChrome && (
+        <motion.div
+          data-deck-header
+          animate={{ y: visible ? 0 : -110, opacity: visible ? 1 : 0 }}
+          transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 300, damping: 30 }}
+          style={{ ...styles.bar, zIndex: 500, pointerEvents: 'none' }}
+        >
+          <div style={styles.slotLeft} />
+          <div style={styles.slotCenter}>
+            {isDeck ? (
+              /* pointer-events auto re-enables the whole center column — the
+                 slot itself is pass-through, and this also guarantees the
+                 wordmark tap always lands. */
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, pointerEvents: 'auto' }}>
+                {wordmark}
+              </div>
+            ) : (title ? <span className="hd-display hd-heading">{title}</span> : null)}
+          </div>
+          <div style={styles.slotRight}>
+            {showSettingsButton && (
+              <button
+                className="hd-btn"
+                onClick={() => { triggerHaptic('light'); onSettingsToggle(); }}
+                aria-label="Open settings"
+                title="Settings"
+              >
+                <Settings size={18} strokeWidth={2.6} />
+              </button>
+            )}
+            {showNotificationBell && !hideNotificationButton && bell}
+          </div>
+        </motion.div>
+      )}
 
       {/* Notification Drawer */}
       <AnimatePresence>
         {drawerOpen && (
           <NotificationDrawer
+            desktopPanel={desktopNotificationPanel}
+            slideFromRight={phoneNotificationPanel}
+            panelWidth={notificationPanelWidth}
+            panelClassName={notificationPanelWidth ? 'tablet-side-panel' : undefined}
             onClose={() => setDrawerOpen(false)}
             onSelectMatch={(match) => {
               setDrawerOpen(false);

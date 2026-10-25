@@ -3,7 +3,7 @@
  *
  * This module OWNS the scoring. The client never computes a score: it renders
  * `User.profileScore`, which is written here and recomputed on every profile
- * write. That is deliberate — the ladder is used to GATE things (under 75 the
+ * write. That is deliberate — the ladder is used to GATE things (under 45 the
  * discover deck is read-only), so a client-computed score would be a number the
  * user can edit in devtools and walk straight through the gate with.
  *
@@ -13,10 +13,10 @@
 
 /** The three named rungs. Nothing else may invent a threshold. */
 export const LADDER = {
-  /** Visible to other people; discover deck is READ-ONLY below this. */
+  /** Completeness band used to classify/rank low-content profiles in Discover. */
   publish: 45,
   /** Discover deck actions (flower / telegram / letter) unlock here. */
-  interact: 75,
+  interact: 45,
   /** Fully built profile. */
   aspirational: 100,
 };
@@ -27,50 +27,23 @@ export const MAX_PHOTOS = 4;
 export const MAX_PROMPTS = 3;
 
 /**
- * Point values per slot, in band order.
- *
- * ⚠️ THE GATE INVARIANT — read before changing any number here.
- *
- * The gate promises the user that ONE extra photo plus ONE prompt unlocks
- * their deck. That promise is only true if those two slots together equal
- * `interact - publish` (30). They currently do: photo2 (12) + prompt1 (18).
- *
- * If you re-weight photo2 or prompt1 so their sum is no longer 30, the gate
- * starts lying: the user adds a photo and a prompt exactly as told and stays
- * locked, with no way to work out why. There is no test that would catch this
- * from the UI — that is why the invariant is stated here and asserted in
- * scripts/backfill-ladder.mjs's companion assertions below.
+ * Public-content point values. Required facts and private matching preferences
+ * are deliberately excluded. The weights and caps are also sent through /config
+ * so profile guidance can show accurate opportunities without becoming a
+ * second score calculator.
  */
-const WEIGHTS = {
-  // ── 0 → 45 · publish ────────────────────────────────────────────────
-  photo1: 15, // the face; on a dating card it is effectively the whole card
-  gender: 10, // drives the mutual filter in discover.js, not just display
-  name: 8,
-  year: 6, // UG / PG
-  intent: 6, // at least one entry
-  // ── 45 → 75 · interact ──────────────────────────────────────────────
-  photo2: 12,
-  prompt1: 18, // ⚠️ see THE GATE INVARIANT above
-  // ── 75 → 100 · aspirational ─────────────────────────────────────────
-  photo3: 7,
-  photo4: 4,
-  prompt2: 9,
-  prompt3: 5,
-};
+export const SCORE_WEIGHTS = Object.freeze({
+  mainPhoto: 25,
+  additionalPhoto: 10,
+  bio: 10,
+  answeredPrompt: 10,
+  interests: 5,
+});
 
 /**
- * Deliberately UNSCORED, do not add these without changing the bands above:
- *
- *   - `dob` / `age`  — an admission requirement (18+), not card content.
- *     /users/setup enforces it. Scoring it would make a safety gate look
- *     like a progress bar.
- *   - `bio`, `interests`, `pronouns`, `interestedIn` —
- *     real fields, but scoring them rewards filling them for points rather
- *     than because they make the profile worth replying to.
- *   - `college`, `collegeCode` — set by the auth picker, not by the user.
- *
- * Age is also DRIFT PRONE: `User.age` is written once at onboarding and goes
- * stale (see utils/age.js). Scoring a stale number would make the score wrong.
+ * Required facts (name, gender, age/date of birth, and year), matching
+ * preferences (intent and interestedIn), location, pronouns, and college do
+ * not earn points. Only public profile content does.
  */
 
 /** A prompt earns its points only when it is actually answered. */
@@ -94,27 +67,20 @@ export function computeScore(user) {
 
   const photos = Array.isArray(user.photos) ? user.photos : [];
   const prompts = Array.isArray(user.prompts) ? user.prompts : [];
-  const intent = Array.isArray(user.intent)
-    ? user.intent
-    : [user.intent].filter(Boolean);
+  const interests = Array.isArray(user.interests) ? user.interests : [];
 
   let score = 0;
 
-  if (photos[0]) score += WEIGHTS.photo1;
-  if (hasText(user.gender)) score += WEIGHTS.gender;
-  if (hasText(user.name)) score += WEIGHTS.name;
-  if (hasText(user.year)) score += WEIGHTS.year;
-  if (intent.length > 0) score += WEIGHTS.intent;
+  if (photos[0]) score += SCORE_WEIGHTS.mainPhoto;
+  score += Math.min(
+    photos.slice(1, MAX_PHOTOS).filter(Boolean).length,
+    MAX_PHOTOS - 1,
+  ) * SCORE_WEIGHTS.additionalPhoto;
+  if (hasText(user.bio)) score += SCORE_WEIGHTS.bio;
+  score += prompts.slice(0, MAX_PROMPTS).filter(isAnswered).length * SCORE_WEIGHTS.answeredPrompt;
+  if (interests.length > 0) score += SCORE_WEIGHTS.interests;
 
-  if (photos[1]) score += WEIGHTS.photo2;
-  if (isAnswered(prompts[0])) score += WEIGHTS.prompt1;
-
-  if (photos[2]) score += WEIGHTS.photo3;
-  if (photos[3]) score += WEIGHTS.photo4;
-  if (isAnswered(prompts[1])) score += WEIGHTS.prompt2;
-  if (isAnswered(prompts[2])) score += WEIGHTS.prompt3;
-
-  // Clamp rather than assert: if a future edit to WEIGHTS overflows, a 103
+  // Clamp rather than assert: if a future edit to SCORE_WEIGHTS overflows, a 103
   // would break the client bar and the `>= 100` labels. Over-scoring is a bug
   // to fix, but it should degrade to "complete" rather than render nonsense.
   return Math.max(0, Math.min(LADDER.aspirational, score));

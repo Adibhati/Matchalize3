@@ -1,6 +1,7 @@
 import express from 'express';
 import { body } from '../middleware/validate.js';
 import User from '../models/User.js';
+import { preserveShadowban } from '../utils/moderationLedger.js';
 import DiscoverSession from '../models/DiscoverSession.js';
 import Alignment from '../models/Alignment.js';
 import Block from '../models/Block.js';
@@ -104,6 +105,7 @@ const normaliseIntent = (raw) => {
  */
 const FIELD_LIMITS = {
   name: 60,
+  gender: 50,
   pronouns: 30,
   year: 40,
   bio: 160,
@@ -112,6 +114,7 @@ const FIELD_LIMITS = {
 /** Human-readable field labels for the error message. */
 const FIELD_LABELS = {
   name: 'Name',
+  gender: 'Gender',
   pronouns: 'Pronouns',
   year: 'Year',
   bio: 'Bio',
@@ -371,13 +374,18 @@ await user.save();
       // 🧹 VAPORIZE ORPHANED PHOTOS: Delete any old photo that isn't in the new profile
       const newPhotos = collectUserPhotos(user);
       oldPhotos.forEach(url => {
-        if (!newPhotos.has(url)) deleteCloudinaryFile(url, req.user._id);
+        if (!newPhotos.has(url) && isOwnedMediaUrl(url, req.user._id)) {
+          deleteCloudinaryFile(url, req.user._id);
+        }
       });
 
       // ANALYTICS: Track completion
       await Analytics.create({ user: req.user._id, event: 'ONBOARDING_COMPLETE', step: 8 });
 
-      res.status(200).json(user);
+      res.status(200).json({
+        ...user.toJSON(),
+        isUnderReview: Boolean(user.shadowbannedAt || user.contentFrozen),
+      });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: 'Server error during onboarding setup' });
@@ -422,7 +430,10 @@ router.get('/profile', protect, async (req, res) => {
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
-    res.status(200).json(user);
+    res.status(200).json({
+      ...user.toJSON(),
+      isUnderReview: Boolean(user.shadowbannedAt || user.contentFrozen),
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -547,7 +558,9 @@ router.put('/profile', protect, async (req, res) => {
     // 🧹 VAPORIZE ORPHANED PHOTOS: Clean up removed/replaced images
     const newPhotos = collectUserPhotos(user);
     oldPhotos.forEach(url => {
-      if (!newPhotos.has(url)) deleteCloudinaryFile(url, req.user._id);
+      if (!newPhotos.has(url) && isOwnedMediaUrl(url, req.user._id)) {
+        deleteCloudinaryFile(url, req.user._id);
+      }
     });
 
     res.status(200).json(user);
@@ -894,12 +907,16 @@ router.delete('/account', protect, async (req, res) => {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
+    await preserveShadowban(user);
+
     // 🧹 IMMEDIATE WIPE: Public profile media from Cloudinary
     // (Profile photos, bio photo, prompt attachments — serve no purpose after deletion)
-    collectUserPhotos(user).forEach(url => deleteCloudinaryFile(url, req.user._id));
+    collectUserPhotos(user).forEach((url) => {
+      if (isOwnedMediaUrl(url, userId)) deleteCloudinaryFile(url, userId);
+    });
 
     // ⚠️ SAFETY RETENTION: Chat media is NOT wiped here.
-    // Messages (including photos/voice notes) are retained for 30-day safety window
+    // Messages (including photos) are retained for 30-day safety window
     // to allow Trust & Safety investigations if the user is reported after deletion.
     // A background cleanup job handles final Cloudinary purge after retention expires.
 

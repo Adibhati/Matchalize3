@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { setToastHandler, clearToastPresence } from '../utils/toast';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { setToastHandler, clearToastPresence, setRenderedToastHeight } from '../utils/toast';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   X, AlertCircle, CheckCircle2, Info, WifiOff, Server,
@@ -19,6 +19,7 @@ const t = neu;
 
 const ArchivalToast = () => {
   const [toast, setToast] = useState(null);
+  const toastRef = useRef(null);
   /* A REF, not state. The timer used to be state, which put it in the deps of
      the effect that owns it — so arming a timer re-ran the effect, whose cleanup
      cleared that very timer. The dismiss-after-4s only appeared to work because
@@ -53,6 +54,20 @@ const ArchivalToast = () => {
       clearToastPresence();
     };
   }, [dismiss]);
+
+  useLayoutEffect(() => {
+    if (!toast || !toastRef.current) return undefined;
+
+    const measure = () => {
+      const height = toastRef.current?.getBoundingClientRect().height || 0;
+      setRenderedToastHeight(height);
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(toastRef.current);
+    return () => observer.disconnect();
+  }, [toast]);
 
   /* ONE map for everything. Tile colour always comes from `type` (red = error,
      green = success, yellow = info); the glyph comes from an optional
@@ -106,7 +121,11 @@ const ArchivalToast = () => {
         }
       `}</style>
       <motion.div
+        ref={toastRef}
         className="archival-toast"
+        role={type === 'error' ? 'alert' : 'status'}
+        aria-live={type === 'error' ? 'assertive' : 'polite'}
+        aria-atomic="true"
         initial={{ y: -100, opacity: 0, scale: 0.95 }}
         animate={{ y: 0, opacity: 1, scale: 1 }}
         exit={{ y: -100, opacity: 0, scale: 0.95 }}
@@ -114,7 +133,7 @@ const ArchivalToast = () => {
         style={{
           position: 'fixed',
           top: 'max(16px, env(safe-area-inset-top))',
-          zIndex: 9999,
+          zIndex: 100000,
           backgroundColor: t.paper,
           border: `2px solid ${t.ink}`,
           borderRadius: 14,

@@ -1,507 +1,1383 @@
 # Chunk 26 — Docs
 
-> Matchalize · `docs` · files 26 of 27 chunks · 2 file(s) · 40 KB · ~11,729 tokens
-> Generated 2026-10-17 21:10.
+> Matchalize · `docs` · files 26 of 28 chunks · 2 file(s) · 66 KB · ~19,339 tokens
+> Generated 2026-10-18 20:29.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
-> - `./errors.md`
-> - `./solved.md`
+> - `./HANDOFF.md`
+> - `./ambitions/roulette.md`
 
 ---
-### ./errors.md
+### ./HANDOFF.md
+
+```
+# Matchalize — Handoff Status Report
+
+> **NETWORK SCOPE (canonical decision):** Matchalize is an **INTRA + INTER college network** — users connect within their own campus (intra) AND across colleges nationwide (inter). Never describe it as one or the other. Verified via each college's `.ac.in` academic email.
+
+> Updated: Sun Jul 26 2026. Reflects the actual codebase state after 55+ bug fixes and hardening passes.
+
+---
+
+## Architecture
+
+| Layer | Stack |
+|-------|-------|
+| Frontend | React 19.2, Vite 8.1, Framer Motion 12, React Router 7, TanStack Query 5 |
+| Backend | Express 4.19, Mongoose 8.4, Socket.IO 4.7, JWT (httpOnly cookies) |
+| DB | MongoDB Atlas (10 collections) |
+| Uploads | Cloudinary v2 (primary), with `deleteCloudinaryFile` cleanup helper |
+| Push | Web Push API + VAPID keys |
+| Monitoring | Sentry (client + server) |
+| Hosting | Render.com (server + static client) |
+| Style | Mobile-first PWA (430px max), dark theme (#000), orange accent (#f97316), Geist Sans 700 + Inter 400-600 |
+
+## File Count
+
+| Area | Files |
+|------|-------|
+| `client/src/pages/` | 7 (Splash, Auth, Onboarding, Discover, Matches, Chat, Profile) |
+| `client/src/components/` | 13 root + 7 chat subcomponents |
+| `client/src/utils/` | 10 (api, AuthContext, AppConfigContext, socket, theme, toast, haptics, push, useChat, dummyProfiles) |
+| `server/routes/` | 9 (auth, users, discover, matches, messages, notifications, report, upload, config) |
+| `server/models/` | 10 (User, Match, Message, Notification, OTP, Report, Block, Interaction, Analytics, Setting) |
+| `server/middleware/` | 4 (auth, blockFilter, rateLimiters, validate) |
+| `server/config/` | 4 (appData, cloudinary, compatQuestions, db) |
+| `server/socket/` | 1 (chat.js) |
+| `server/utils/` | 5 (email, push, queue, AppError, asyncHandler) |
+
+**Total: ~70 source files**
+
+## Key Patterns
+
+- **Auth:** httpOnly cookie (`matchalize_jwt`), 7-day JWT, sliding expiration at 6 days, `ProtectedRoute` in App.jsx
+- **State:** No state library — `AuthContext` + `AppConfigContext` only. React Query for server state.
+- **Sockets:** Created per-page (Discover, Matches, Chat) via shared `utils/socket.js`. Not a global context.
+- **Styles:** Inline styles only — no CSS modules, Tailwind, or styled-components.
+- **Server:** ESM (`"type": "module"`). No TypeScript.
+- **Vite:** Proxies `/api/*` and `/uploads` to `http://localhost:5005` in dev.
+- **Errors:** Inline `res.status(X).json({ message: '...' })` — no custom error utility.
+- **Rate limiters:** Per-user for messages (30/10min) and discover (100/10min). Per-IP for OTP (15/15min + 10/hr).
+
+## Dev Mode
+
+`ALLOW_ALL_EMAILS=true` bypasses `.ac.in` restriction. When `RESEND_API_KEY` is unset, OTP codes log to console only (no email sent). Both conditions print warnings at startup.
+
+---
+
+## Bug Fixes Applied (55+ issues)
+
+### Safari / WebKit (3-part fix)
+- `react-pageflip` DOM hijacking caused `NotFoundError` on Safari
+- Added `pageFlip().destroy()` cleanup in Discover.jsx useEffect
+- Swapped `<Suspense>` / `<AnimatePresence>` nesting order
+- Stabilized page keys to prevent unnecessary re-renders
+
+### Auth & Security
+- **CORS hardened:** Replaced regex wildcard `*.onrender.com` with strict Set-based whitelist (`server/index.js`)
+- **Suspended user check:** `protect` middleware returns `403 { suspended: true }`. Client catches + redirects to Auth
+- **Deleted user check:** `protect` middleware returns `403 { deleted: true }`. Login also blocked for `isDeleted` users
+- **Self-like guard:** `handleLike` returns 400 if `targetId === currentUser._id` (`discover.js`)
+- **Profile URL validation:** `isValidImageUrl` applied to both `POST /setup` and `PUT /profile` — caps at 6 photos, 3 prompts
+- **Socket membership validation:** `check-online` verifies both users share an active match before emitting
+- **Dead listener removed:** Deleted orphaned `send-message` socket listener from `chat.js`
+
+### Discover Deck
+- **Fast deck engine:** Replaced slow `$sample` aggregation with indexed `randomSeed` range query (`discover.js`)
+- **Atomic upsert:** Pass cooldowns use `findOneAndUpdate` with `upsert: true` instead of separate create/update
+- **Bidirectional deck exclusion:** Queries both `actorId` and `targetId` for archive, letter, seal_stamp, accept_letter, accept_seal
+- **Permanent archive fix:** `cooldownExpiresAt === null` now correctly always excludes (`!it.cooldownExpiresAt` check)
+- **InterestedIn filter:** `Array.isArray` guard in Onboarding.jsx prevents crash on corrupted data
+- **Gender preference UI:** Multi-select toggle on Onboarding PAGE 2 ("Show Me" filter)
+- **isActionFlip guard:** Prevents `onPageFlip` from sending duplicate Pass actions
+- **Dead code removed:** Removed `&reset=true` from Discover fetch URL; removed `.catch(console.error)` on pass
+
+### Real-Time Chat
+- **Multi-device broadcast:** Changed `io.to(recipientId)` to `io.to(matchId)` for match room broadcasting
+- **Read receipts:** `deliveryStatus: 'read'` now set alongside `readAt` in both GET messages and socket `read-messages`
+- **Typing cleanup on disconnect:** Server emits `user-stop-typing` in existing `!stillOnline` socket loop
+- **Stop-typing on unmount:** Chat.jsx cleanup emits `stop-typing` when `typingTimer.current` is set
+- **Message dedup:** `pendingMsgIdRef` generates `clientMsgId` once via useRef, prevents duplicate sends
+- **Duplicate key handling:** `Message.create` wrapped in try/catch — duplicate key returns existing message with 200
+- **Connection status banner:** Amber "Reconnecting..." banner on socket disconnect (WhatsApp pattern)
+- **Character limit:** `maxLength={5000}` on chat input
+- **iOS scroll threshold:** `scrollTop < 5` instead of `=== 0` for reliable detection
+- **Back button:** Enlarged to 44px touch target with `WebkitTapHighlightColor`
+- **Chat media upload:** Field name corrected from `'file'` to `'photo'`; `setPendingFile(null)` moved to `finally` block
+- **Message delete:** `showOnlyIfMine: true` flag, filter logic, `toast.error` on catch
+- **Emoji picker fix:** `if (a.key !== 'react') onClose()` keeps `selectedMessage` alive for emoji interactions
+
+### Socket & Presence
+- **Socket reconnect:** `socket.on('connect', onReconnect)` re-emits `join-match` after reconnect
+- **Online status:** `socket.user.name` used for typing indicator instead of client-supplied value
+- **Badge counts:** Unread match count filters for `yourTurn` or unread `lastMessage` only; clears on chat open
+
+### Profile & Onboarding
+- **Query invalidation:** `queryClient.invalidateQueries({ queryKey: ['matches'] })` after profile save
+- **Image opacity fade:** All `<img>` tags (Chat header, Profile hero, PolaroidCard, ProfileCard) use `opacity: 0` → `onLoad` → `opacity: 1`
+- **AppShell default:** `default:` case renders `<Profile>` instead of returning null
+
+### Account Lifecycle (Enterprise-Grade)
+- **Soft delete:** Account deletion sets `isDeleted: true`, `deletedAt: new Date()`, wipes PII, retains data for 30-day safety window
+- **Two-tier cleanup:** Public profile media → immediate Cloudinary wipe. Chat media + Messages + Matches + Interactions → retained 30 days for Trust & Safety
+- **Block → Unblock:** Block creates bidirectional permanent archive Interactions. Unblock removes them (allows re-encounter)
+- **Unmatch:** Creates permanent archive Interaction. Matches page listens for `unmatch-notification` socket event for real-time removal
+- **Delete dialog:** "This will immediately deactivate your profile, sever all active connections, and remove your correspondence from campus view. To maintain campus safety, archival logs are retained for 30 days before permanent destruction."
+
+### Interaction Model
+- **5 actionTypes:** `archive`, `letter`, `seal_stamp`, `accept_letter`, `accept_seal`
+- **Accept budget fix:** Accepting letters uses `accept_letter`/`accept_seal` — does NOT count against daily sending limit
+- **Indexes:** `{ actorId: 1, targetId: 1 }`, `{ actorId: 1, cooldownExpiresAt: 1 }`, `{ actorId: 1, actionType: 1, createdAt: -1 }` (daily limit), `{ targetId: 1, actionType: 1 }` (likes-you)
+
+### Database Indexes
+- **User discover:** `{ collegeCode: 1, isOnboarded: 1, isGhost: 1, isVerified: 1, suspended: 1, isDeleted: 1, randomSeed: 1 }`
+- **User randomSeed:** Individual index for fast range queries
+- **User text:** `{ name: 'text', email: 'text' }`
+- **Match:** `{ users: 1, isActive: 1 }`
+- **Message:** `{ matchId: 1, createdAt: 1 }`, `{ matchId: 1, _id: -1 }` (cursor pagination), `{ senderId: 1, createdAt: -1 }`
+- **Interaction:** `{ actorId: 1, targetId: 1 }`, `{ actorId: 1, cooldownExpiresAt: 1 }`, `{ actorId: 1, actionType: 1, createdAt: -1 }`, `{ targetId: 1, actionType: 1 }`
+
+### iPhone / iOS
+- **Keyboard layout fix:** `<main>` changed from `position: fixed` + `overflowY: hidden` to `minHeight: 100dvh` + flex layout
+- **Voice recording:** Detects `audio/webm`, falls back to `audio/mp4` with `.m4a` extension for iOS Safari
+
+### Cloudinary
+- **Cleanup engine:** `deleteCloudinaryFile` helper extracts public_id, handles audio/video detection, destroys from Cloudinary
+- **Orphaned photo cleanup:** `collectUserPhotos` helper collects all profile/bio/prompt photos, compares old vs new, deletes orphans
+- **Audio support:** Dynamic `params` function in upload route, audio folder, format list expanded
+
+---
+
+## Known Gaps (remaining)
+
+| # | Gap | Severity |
+|---|-----|----------|
+| 1 | No message editing (deletion only) | Feature gap |
+| 2 | No `delivered` status (goes `sent` → `read` directly) | Nice-to-have |
+| 3 | No empty chat placeholder for zero-message matches | Minor UX |
+| 4 | No error message on Discover fetch failure | Minor UX |
+| 5 | No rate limiting on message delete or block/unblock | Low risk |
+| 6 | Delete uses `window.confirm` instead of themed modal | Polish |
+| 7 | No admin dashboard for reports/suspensions | Feature gap |
+| 8 | No E2E or unit tests | Quality gap |
+| 9 | No CI/CD pipeline | DevOps gap |
+| 10 | Seed is destructive (`deleteMany` on run) | Dev tooling |
+
+```
+
+### ./ambitions/roulette.md
 
 ````
-<!-- Major correctness findings (ranked)
-1. HIGH — users.js:28–64, 111–118, 140, 156–158 / 268–270 / 321
-isValidImageUrl() accepts any res.cloudinary.com image URL with no folder/ownership scope (contrast with the stricter isValidMediaUrl in messages.js:17–36), and bioPhoto is written with no validation at all. Those URLs are later fed to deleteCloudinaryFile() fire-and-forget whenever a photo is replaced or the account is deleted. Concrete failure: any authenticated user can plant another user's public photo URL in their own photos/bioPhoto (URLs are visible via Discover), then remove it (or delete their account) → the victim's actual Cloudinary asset is destroyed while its URL stays in the victim's profile/messages → cross-user media wipe, permanently 404'ing photos and chat media.
-2. HIGH — socket/chat.js:91–116 + admin.js:304–331 / 320–336
-force-disconnect is only a client-cooperative event (handled in client/src/utils/socket.js:10); there is no server-side listener/disconnect. A suspended/deleted user whose client ignores the event stays in join-match rooms indefinitely — the per-event socket.use suspension cache only refreshes on the suspended user's own inbound events after the 60s TTL. Concrete failure: the "admin kick stays instant" claim in chat.js:90 is false; a non-cooperative client keeps receiving new-message/typing/presence broadcasts and stays marked online despite suspension.
-3. MEDIUM — messages.js:160–164, 192–194 + Message.js:25–29
-The idempotency lookup Message.findOne({ clientMsgId }) is unscoped (no senderId/matchId filter) against a globally unique sparse index, and the E11000 recovery path does the same. If a clientMsgId ever repeats across users/matches (UUID v4 collision, a weaker custom client, or a stale id reused after an edited retry — note the client keeps one ref until success, Chat.jsx:523/538), the route returns the other message's full text/media payload 200 and silently drops the sender's new message — cross-tenant message disclosure plus silent message loss.
-4. MEDIUM — messages.js:283–287
-Delete clears text, image, mediaUrl but not caption. A deleted photo/voice message's caption remains fully retrievable via GET /api/messages/:matchId (history) — content survives "vaporization" and shows up for both parties.
-5. MEDIUM — messages.js:122/184 + Message.js:38–41
-caption has no length cap anywhere (schema has no maxlength; body limit is 10 MB), while text is explicitly capped at 5000 chars. A user can store megabyte captions that are persisted, broadcast to the match room on every send, and echoed in every history fetch.
-6. MEDIUM — report.js:108–128
-The block route has no "already blocked" guard: Block upsert is idempotent, but Interaction.create([...]) runs unconditionally on every call. Each reload/double-tap/retry of POST /block/:userId inserts 2 more permanent archive rows forever → unbounded Interaction growth that every Discover deck query (discover.js:231–236) must load and scan.
-7. MEDIUM — matches.js:141–162
-findOne({isActive:true}) → save() → Interaction.create is a non-atomic check-then-write. Two concurrent unmatches (double-tap on a slow network) both pass the guard and create duplicate permanent archive rows + duplicate unmatch socket/push notifications — the comment at line 139–140 claims a guard that doesn't actually exist under concurrency.
-8. MEDIUM — discover.js:57–63, 81
-Daily letter/Telegram limit is countDocuments() then Interaction.create() with no guard/index — parallel requests all observe dailyCount = 6 and all insert, bypassing the 7/day and 1/day limits (plus each like also creates a Notification, so notifications multiply too).
-9. MEDIUM — discover.js:119–125
-The mutual-match check runs after inserting my own Interaction with no atomicity. When two users like each other near-simultaneously, both may read isMutual before the other's row commits → no Match is created, and since letters permanently exclude both from each other's decks (discover.js:251–252), the pair is permanently dead unless the inbox notification is manually accepted.
-10. MEDIUM — waitlist.js:133–144, 149–163
-Position assignment is countDocuments()+1 then insert — concurrent joins yield duplicate position values (no unique index on position). Referral bonus is a read-modify-write referrer.save() (lines 137–141) with no $inc/atomicity — concurrent referrals on the same code lose bonus jumps and produce overlapping shift windows in shiftPositionsUp.
-11. MEDIUM — notifications.js:29–33 + User.js:136–139
-pushSubscription is Mixed and only endpoint presence is checked; arbitrary nested objects up to the 10 MB JSON limit are persisted on the User document (and re-fetched on every push). Unbounded user-document bloat with no validation.
-12. MEDIUM — users.js:122–149, 223–261 + User.js schema
-Profile fields are written with only count caps, not size caps: gender (no maxlength in schema), intent, interests[] items, and prompts[].question/answer are unbounded strings under a 10 MB body limit. Multi-MB strings land in the User doc, then are serialized into every Discover deck and Matches response — payload amplification across the app.
-13. MEDIUM — utils/queue.js:29–31
-queue.push(task) has no max length or drop policy. If a task (e.g., webPush.sendNotification with no timeout while a worker hangs) stalls all 20 workers, the in-memory queue grows without bound under burst traffic — a memory/backpressure leak with no cap.
-14. MEDIUM — waitlist.js:205, 232, 275 and admin.js:334
-Four catch blocks return 500 with no console.error/Sentry — DB CastErrors, timeouts, and duplicates are silently dropped. Diagnosing waitlist/check-in/admin-disconnect failures requires guessing.
-15. MEDIUM — Block model (models/Block.js:9) used by blockFilter.js:10–21
-getBlockExclusionQuery runs { $or: [{blocker: id}, {blocked: id}] } on every Discover request, but only a compound {blocker:1, blocked:1} index exists — the {blocked: id} branch has no prefix and forces a collection scan on the whole blocks collection for every deck render; discover latency degrades linearly as blocks accumulate.
-Categories explicitly checked and clean (no finding)
-- Missing await / unhandled rejections: deleteCloudinaryFile never rejects (internal try/catch), queue wraps tasks with .catch, socket lastActive updates have .catch, push has a catch-all. None found.
-- N+1 loops: all loops are in-memory (admin aggregates, discover scoring, waitlist bulkWrite). None found.
-- Mass assignment: every route destructures req.body with an explicit allowlist; no ...req.body or direct req.body → DB writes exist.
-- Secret leakage: no JWT/API key/env secret is logged or serialized into responses (OTP logging is dev-only and intentional).
-Clean shave (solid files)
-- middleware/auth.js, middleware/validate.js, middleware/rateLimiters.js, middleware/blockFilter.js, middleware/admin.js
-- utils/push.js, utils/AppError.js, utils/email.js
-- config/db.js, config/cloudinary.js, config/compatQuestions.js, config/appData.js
-- routes/auth.js, routes/config.js
-- index.js (graceful shutdown, error handler, CORS/CSP reasonably hardened)
-- All models are well-built (indexes on hot paths, enums, unique constraints) except the Block missing-{blocked} index noted in finding 15.
-▣  Explore · Big Pickle · 8m 22s
+# Roulette — Canonical Design Spec
 
-by qwen:
-The codebase is **exceptionally well-architected**. You have correctly implemented advanced, production-grade patterns such as atomic upserts to prevent race conditions, partial unique indexes, idempotency keys (`clientMsgId`), cursor-based pagination, and robust socket room management. 
-
-However, after a deep scan of the provided dump, I found a few **Major Errors** and critical edge cases that could lead to security bypasses, 500 server crashes, or broken UX. 
-
-Here are the major issues and how to fix them:
-
----
-
-### 1. Critical Security: Admin "Kick" Doesn't Invalidate Session
-**Location:** `server/routes/admin.js` & `client/src/utils/socket.js`
-**The Bug:** When an admin forces a disconnect (`POST /api/admin/users/:id/disconnect`), the server emits a socket event, but **it does not invalidate the user's JWT**. 
-If the client's socket disconnects or the user refreshes the page, the `matchalize_jwt` httpOnly cookie remains valid. Because `lastLogoutAt` was never updated, the `protect` middleware will happily authenticate them, effectively bypassing the admin's kick.
-
-**The Fix:** 
-Update `lastLogoutAt` in the admin route to instantly invalidate the JWT via your existing sliding expiration/multi-device check.
-```javascript
-// server/routes/admin.js
-router.post('/users/:id/disconnect', async (req, res) => {
-  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-    return res.status(400).json({ message: 'Invalid user id' });
-  }
-  
-  // 🛡️ INVALIDATE JWT SOCKET & COOKIE
-  await User.findByIdAndUpdate(req.params.id, { lastLogoutAt: new Date() });
-
-  const io = req.app.get('io');
-  if (io) {
-    io.to(req.params.id.toString()).emit('force-disconnect', {
-      reason: 'Admin forced disconnect',
-    });
-  }
-  res.json({ message: 'Disconnect signal sent' });
-});
 ```
-*(Note: On the client side, `socket.js` should also unconditionally clear `localStorage.removeItem('matchalize_user')` upon receiving `force-disconnect`, regardless of the reason).*
+Version:       2.0  (supersedes the v1 spec of 2026-10-10 in full)
+Generated:     2026-10-16
+Status:        Design approved in principle. NOT YET IMPLEMENTED.
+Audited against: working tree on main @ 50c0095 (+ uncommitted changes present)
+Method:        read-only source inspection. No app was started, no test run,
+               no database touched, no external service contacted.
+Cloudflare docs: verified 2026-10-16 (TURN service, Generate Credentials,
+               FAQ, Analytics)
 
----
+Companion documents:
+  summary.md    app-wide engineering audit (backend, security, data, costs)
+  summary2.md   Roulette architecture & staged design (superseded by this file
+                where they differ — this file is canonical)
+  summary3.md   UI / navigation inspection (identity leak map, z-order, journeys)
 
-### 2. High Severity: Unhandled `CastError` (500 Crashes)
-**Location:** `server/socket/chat.js`, `server/routes/messages.js`, `server/routes/matches.js`, `server/routes/report.js`
-**The Bug:** Multiple routes and Socket events accept user-supplied IDs and pass them directly to Mongoose without validating them. If a malicious user or a buggy client sends an invalid string (e.g., `matchId = "abc"`), Mongoose throws a `CastError`, resulting in an unhandled **500 Internal Server Error** instead of a clean 400 Bad Request.
-
-**The Fix:**
-Add a quick validation middleware or inline checks.
-```javascript
-// Example for Socket Events (server/socket/chat.js)
-socket.on('join-match', async (matchId) => {
-  if (!matchId || !mongoose.Types.ObjectId.isValid(matchId)) return;
-  // ... rest of the code
-});
-
-socket.on('check-online', async ({ matchId, targetUserId }) => {
-  if (!mongoose.Types.ObjectId.isValid(matchId) || !mongoose.Types.ObjectId.isValid(targetUserId)) return;
-  // ...
-});
-```
-*Apply `mongoose.Types.ObjectId.isValid(req.params.id)` checks at the top of `GET/POST/DELETE /:matchId` and `/:id` routes in `messages.js`, `matches.js`, and `report.js`.*
-
----
-
-### 3. Major UX Bug: Chat Search Jump Fails on Paginated History
-**Location:** `client/src/pages/Chat.jsx`
-**The Bug:** The `handleSearchJump` function attempts to scroll to a message using `document.querySelector(\`[data-msg-id="${msgId}"]\`)`. 
-However, your chat uses **cursor-based pagination** (loading only the latest 50 messages). If a user searches for a keyword that exists in a message from 3 months ago, that message is **not in the DOM**. The `querySelector` returns `null`, and the jump silently fails, confusing the user.
-
-**The Fix:**
-You cannot rely on the DOM for search jumping in a paginated chat. When a search result is clicked, you must either:
-1. Fetch the message's `createdAt` or `_id`, reset the chat's cursor to that point, reload the messages array, and *then* scroll.
-2. Or, temporarily render a "Jump to original context" button that fetches the specific page of history containing that message.
-
----
-
-### 4. Medium Severity: Fire-and-Forget Cloudinary Cleanup
-**Location:** `server/routes/users.js` (Account Deletion)
-**The Bug:** When a user deletes their account, you wipe their Cloudinary photos using a `forEach` loop:
-```javascript
-collectUserPhotos(user).forEach(url => deleteCloudinaryFile(url));
-```
-Because `deleteCloudinaryFile` is `async`, this is a "fire-and-forget" operation. If the Cloudinary API rate-limits or fails, orphaned media remains on your cloud storage indefinitely, and you have no retry mechanism or logging for the failures.
-
-**The Fix:**
-Use `Promise.allSettled` and log failures so a background cron job can clean them up later.
-```javascript
-const deletionResults = await Promise.allSettled(
-  Array.from(collectUserPhotos(user)).map(url => deleteCloudinaryFile(url))
-);
-deletionResults.forEach((result, index) => {
-  if (result.status === 'rejected') {
-    console.error(`[Cleanup Failed] Orphaned media retained:`, result.reason);
-    // TODO: Push to a cleanup queue/cron
-  }
-});
+Legend:   [CONFIRMED] read in source · [INFERRED] reasoned · [UNKNOWN] needs runtime
 ```
 
----
-
-### 5. Edge Case: Brittle Image URL Validation
-**Location:** `server/routes/users.js` (`isValidImageUrl`)
-**The Bug:** The validation checks if the `pathname` ends with an image extension:
-```javascript
-return /\.(jpg|jpeg|png|webp)$/i.test(parsed.pathname);
-```
-If a user somehow submits an Unsplash URL with query parameters (e.g., `https://images.unsplash.com/photo-123?w=600&q=80`), `parsed.pathname` is `/photo-123`. The regex will fail, and the server will reject the profile setup with "One or more photo URLs are invalid." 
-*(Note: Your frontend upload flow mitigates this by uploading to Cloudinary first, but if the frontend ever changes or a direct URL is passed, this will break).*
-
-**The Fix:**
-Check the extension against the full URL or ignore query parameters properly.
-```javascript
-const isValidImageUrl = (url) => {
-  // ... existing trusted host checks ...
-  // Extract extension before any query parameters
-  const pathWithoutQuery = parsed.pathname.split('?')[0];
-  return /\.(jpg|jpeg|png|webp)$/i.test(pathWithoutQuery);
-};
-```
+**Plain-English note for the founder:** Section 1 is the product. Sections 4+ are
+engineering. Nothing here is built yet — this file records what we have *decided* and
+*verified*, so the next session can start from here without re-deriving anything.
 
 ---
 
-### 6. Missing Rate Limiting on Destructive Actions
-**Location:** `server/routes/messages.js` & `server/routes/report.js`
-**The Bug:** You have excellent rate limiters for `discover` and `message sending`, but there is **no rate limiting** on:
-*   `DELETE /api/messages/:matchId/:msgId` (Message deletion)
-*   `POST /api/report/block/:userId` (Blocking)
+## 1. PRODUCT MODEL
 
-A compromised client or malicious script could spam these endpoints, causing unnecessary DB write locks and Cloudinary API calls.
+huh? has two ways to meet college students:
 
-**The Fix:**
-Add a lightweight limiter for destructive actions.
-```javascript
-// server/middleware/rateLimiters.js
-export const destructiveActionLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 30, // 30 deletes/blocks per minute
-  keyGenerator: (req) => req.user?._id?.toString() || req.ip,
-  message: { message: 'Too many actions. Please slow down.' },
-});
+- **Deck** — discover people through profiles.
+- **Roulette** — meet someone through a spontaneous, nearby-first video conversation.
 
-// Apply to routes:
-router.delete('/:matchId/:msgId', protect, destructiveActionLimiter, async (req, res) => { ... });
-router.post('/block/:userId', protect, destructiveActionLimiter, async (req, res) => { ... });
+Both can lead to the same saved chat system.
+
+### 1.1 The central rule
+
+> **Align means "let's stay connected." It does NOT automatically mean dating, and it does
+> NOT automatically reveal a hidden profile.**
+
+The v1 spec conflated three independent concepts into one. Version 2 separates them:
+
+| Concept | Meaning | Triggered by |
+|---|---|---|
+| **Align** | "Let's stay connected" | Mutual accept → creates or returns a chat |
+| **Dating** | Intent / compatibility | Matchmaking rules only |
+| **Reveal** | "Show you my real profile" | Separate mutual action |
+
+A saved connection can exist with **zero** profile access.
+
+```text
+Deck ─────── Accepted/mutual Align ─────────┐
+                                           ↓
+                                      Saved chat
+                                           ↑
+Roulette ─── Accepted/mutual Align ────────┘
+                                           ↓
+                            Optional mutual profile reveal
+                            (profile-hidden connections only)
 ```
 
-### Summary
-Your implementation of the **Interaction Model** (using `archive`, `letter`, `seal_stamp` with cooldowns) and the **Discover Deck Engine** (using `randomSeed` for indexed range queries instead of `$sample`) is brilliant and highly optimized. 
+### 1.2 Visibility matrix — asymmetric by design
 
-Fixing the **Admin JWT invalidation** and the **Mongoose CastError** vulnerabilities should be your immediate priority before deploying to production.
+A visibility choice controls what **that person shares**. It never obligates the other
+party to reciprocate.
 
+| A | B | Result |
+|---|---|---|
+| Hidden | Hidden | Both use temporary names + generic avatars |
+| Visible | Hidden | **B can view A's profile. A cannot view B's.** |
+| Visible | Visible | Both profiles available |
 
-/// -->
+Before a user switches to visible mode, show:
 
-glm5.3:
-Nice, solid dump — I got through everything. Quick note before the list: **your paste cuts off mid-way through `models/Waitlist.js`** (inside `generateReferralCode`), and the `routes/`, `socket/`, and `utils/` files aren't in this share — a few findings below are marked "verify" because they depend on those.
+> "Students you meet can view your public profile, even if they keep theirs hidden."
+
+### 1.3 The privacy promise we will actually make
+
+**Use:**
+
+> "Roulette does not display your profile until you choose to share it."
+
+**Never use:**
+
+> "Nobody can identify you."
+
+Faces, voices, backgrounds, conversation content, and recognition from the Deck can all
+identify someone. See §19 — this limitation must be disclosed *before* the user chooses
+hidden mode, not buried in a policy.
 
 ---
 
-## 🔴 Critical
+## 2. NAVIGATION AND REQUEST PLACEMENT
 
-**1. `dotenv.config()` runs *after* your imports (index.js)**
-ESM imports are hoisted and executed before any module body code. `config/cloudinary.js` calls `cloudinary.config()` at module scope, so it runs **before** `.env` is loaded — `cloud_name`, `api_key`, `api_secret` are all `undefined`. It only works on Render because the platform injects real env vars; local dev with a `.env` file breaks silently.
-```js
-// first line of index.js, before all other imports:
-import 'dotenv/config';
+### 2.1 Main navigation
+
+```text
+Deck       Chats       Roulette       Profile
 ```
 
-**2. `Block` model has no index on `blocked`**
-`getBlockExclusionQuery` / `areBlocked` query `$or: [{ blocker }, { blocked }]`. The unique compound index `{blocker: 1, blocked: 1}` only serves the `blocker` branch — the `blocked` branch is a collection scan on every discover deck build.
-```js
-blockSchema.index({ blocked: 1 });
+**Rename the visible label only.** The internal `matches` tab key, the `['matches']` React
+Query key, the `/api/alignments` endpoint, the `matches` response field, the `matches`
+CSS classes, and the `matchalize_*` localStorage keys all stay as they are. Renaming them
+is not required for the visible change and would risk regressions across ~30 files.
+
+### 2.2 Inside Chats
+
+```text
+Chats
+[Conversations]  [Requests · 3]
 ```
 
-**3. `multer 1.4.5-lts.1` has known unpatched DoS vulnerabilities**
-The 1.x line has multiple CVEs (malformed multipart request crashes). Upgrade to `^2.0.2`. Also, `multer-storage-cloudinary` is barely maintained — consider streaming straight to the Cloudinary SDK.
+- **Conversations** — accepted connections from both discovery experiences.
+- **Requests** — pending incoming requests. Each carries an origin label:
+  **"From Deck"** or **"From Roulette"**.
+- Source filters only if the list becomes hard to scan. Not essential for v1.
+- An incoming Roulette Align also surfaces **inline during the active call**.
+- All entry points refer to **one** underlying request — never duplicate copies.
 
-**4. OTPs stored in plaintext (models/OTP.js)**
-A DB leak inside the 10-minute window exposes live, usable codes. Hash them (HMAC or bcrypt) and compare hashes on verify.
+### 2.3 Badge behaviour
 
-**5. Default-open environment posture (index.js)**
-- `NODE_ENV === 'development'` → **all origins allowed with `credentials: true`**
-- `NODE_ENV !== 'production'` (i.e., unset or typo'd) → private LAN origins allowed
+| Badge | Counts |
+|---|---|
+| Conversations tab | Unread message counts |
+| Requests tab | Pending incoming request counts |
 
-If `NODE_ENV` is ever mis-set on a deployment, you're silently permissive. Fail closed: hard-exit on missing `NODE_ENV`, or make the whitelist the only path in prod.
+- Accepting, declining, expiring, or blocking must update both counts consistently.
+- Pagination **must** let users reach past the first page.
 
-**6. Rate-limit drift + memory DoS surface**
-`APP_CONSTANTS.API_RATE_LIMIT` says 100 req/15 min, but the actual limiter is **2000/min (~120k/hr)** combined with a 10MB body limit. That's ~20GB/min of parseable body per IP on a small dyno. Align the constant with the implementation — and actually use the constant instead of duplicating numbers.
+**[CONFIRMED] Two current bugs this plan fixes rather than inherits:**
 
----
+1. `NotificationDrawer.jsx:47-48` calls `GET /notifications` with no params and ignores
+   the returned `{total, page, totalPages, hasMore}`. The server defaults to `limit=20`
+   (`notifications.js:81`). **A user with >20 pending requests can never reach the rest.**
+2. The bell badge is incremented by socket (`Header.jsx:125-134`) but **never decremented**
+   on accept or dismiss; the refetch only fires when the drawer closes
+   (`Header.jsx:121-123`).
 
-## 🟠 Security / Design
+Also note the two badges use **different caps** today — `9+` at `Header.jsx:167` and
+`99+` at `NavBar.jsx:254`. Unify on one cap.
 
-- **`x-new-token` header undermines httpOnly** — the entire point of the httpOnly cookie is that XSS can't read the JWT, but the sliding-refresh path hands it to JS via a readable header. Since your SPA is same-origin, socket.io can read the cookie server-side in the handshake (`socket.handshake.headers.cookie`). Unless you have native mobile clients needing it, drop the header or move token rotation to a dedicated refresh endpoint.
-- **socket.io CORS lacks `credentials: true`** — if frontend and API ever live on different domains, cookie auth silently fails on the polling transport.
-- **CORS rejections return 500s** — `callback(new Error(...))` falls into your generic handler, so blocked origins get "The archival ledger encountered an unexpected tear." Use a proper 403, and honestly that 500 message will confuse *real* users hitting *real* errors too.
-- **Malformed JSON → 500, not 400** — body-parser errors aren't `isOperational`. Add a branch for `err.type === 'entity.parse.failed'` / `'entity.too.large'`.
-- **`uncaughtException` exits without flushing Sentry** — the exception never reaches Sentry. Use `Sentry.captureException(err)` → `await Sentry.close(2000)` → exit. Same applies to the SIGTERM path.
-- **Graceful shutdown never closes Socket.IO** — `server.close()` won't fire its callback while websockets are open, so every deploy rides the 10s force-kill. Call `io.close()`.
-- **`Report` unique `{reporter, reported}`** — a user can report someone **once, ever**. Second incident or escalating behavior → E1100. For a dating app this is backwards. Use a partial unique on *pending* reports or allow multiple.
-- **Admin = single `ADMIN_EMAIL` env compare** — no role on the user, no audit trail, and anyone with env access silently becomes admin. Also duplicates token extraction from `auth.js`, and the `matchalize_jwt` cookie name is now hardcoded in **3 files**.
-- **User model leak risk** — `adminNotes`, `suspendedReason`, `shadowbanScore`, `pushSubscription`, `randomSeed` live on the same doc served to users. Unless *every* route selects fields explicitly, these leak. Safer: strip in a `toJSON` transform or split admin data into another collection. *(Will verify in your routes file.)*
-- **Per-email OTP limiter enables victim lockout** — anyone who knows a victim's `.ac.in` address can burn their 15-attempt bucket and block verification for 15 minutes.
-- **`adminProtect` hands routes a `lean()` plain object** while `protect` gives a real Mongoose doc — `req.user.save()` in admin routes will crash. Inconsistent middleware contracts.
-- **`/uploads` guard** — hardcoded cookie name, and verifies JWT but not `suspended`/`isDeleted`, so deleted users keep upload access until token expiry.
+### 2.4 Why this arrangement changes
 
----
-
-## 🟡 Performance / Reliability
-
-- All rate limiters use the **in-memory store** — they reset on every deploy and don't share state across instances. Fine on one dyno; breaks the moment you scale to 2. Plan a Redis store.
-- **Partial TTL index on Notification** — verify it actually built: Mongoose **silently logs** index-build failures, and partial TTL behavior is version-dependent. Check the Atlas index list.
-- `deleteCloudinaryFile`'s transformation regex will also strip **real folders** that look like transformations (e.g., a folder named `f_images`), silently producing a wrong `public_id`.
-- `Analytics` has no index on `user`/`event` and no TTL — funnel queries scan and the collection grows forever.
+**[CONFIRMED current state]** The Letterbox (`NotificationDrawer`, full-screen
+`fixed inset:0 z1000`) and the conversation list (`Matches.jsx`, a tab) are **separate
+surfaces**, and the requests bell renders **only on the Deck tab**
+(`Header.jsx:150`). Settings renders **only on the Profile tab** (`Header.jsx:151`).
+v2 deliberately collapses requests into Chats and leaves the bell as an optional
+shortcut to the same Requests section.
 
 ---
 
-## 🔵 Minor / Cleanliness
+## 3. VERIFIED CODE BASELINE
 
-- `Message.image` vs `mediaUrl` — two fields for the same job, drift guaranteed.
-- `User`: stores both `age` and `dob` (they'll drift); `prompts.answer` has no maxlength; `ageRange` has no min ≤ max schema validation; `reactions` unbounded; `deleted: true` keeps full message text forever (privacy concern for a dating app).
-- `Alignment`: nothing enforces exactly 2 users or `pairKey` ↔ `users` consistency.
-- `Waitlist`: hardcoded defaults `IIT Bombay`/`iitb`; `referralCode` has both `unique: true` and `index: true` (redundant).
-- `COLLEGE_MAP` has 10 IITs but your product description claims **all colleges of India** — one of these is wrong.
-- helmet CSP keeps `localhost` in `connectSrc` even in production.
-- Sentry: manually passing `expressIntegration()` **and** calling `setupExpressErrorHandler` is redundant (harmless — deduped — but noise).
-- Express 5 landmines (fine today): `app.get('*')` and `express-mongo-sanitize@2.x` both break on Express 5.
-- No tests, no linter, no CI.
+Everything below was read in source. This section exists so a future session does not have
+to re-derive it — and so no one designs against an assumption that isn't true.
 
----
+### 3.1 Navigation architecture
 
-## ✅ Genuinely good stuff
+| Fact | Evidence |
+|---|---|
+| **There is no router.** `react-router-dom` is installed with **zero imports** | `client/package.json:22`; author comments at `AppShell.jsx:118-120`, `utils/chrome.js:23-25`, `sw.js:152-154` |
+| Five screens via `useState`: `splash / auth / reverify / onboarding / home` | `App.jsx:18-30` |
+| Four tabs via `useState` inside `home`. `activeTab` defaults to `'discover'`, **never persisted** | `AppShell.jsx:51,76` |
+| **Tab switching fully unmounts the page** — `AnimatePresence mode="wait"` keyed on `activeTab` | `AppShell.jsx:266` (desktop), `:326` (mobile) |
+| **Browser Back closes nothing.** Only 3 `window.history` calls exist app-wide | `AppShell.jsx:208`; `AccountSuspendedScreen.jsx:112-113` |
+| That screen **traps** Back by re-pushing forever | `AccountSuspendedScreen.jsx:111-116` |
+| Responsive breakpoint is a single `resize` listener at **768px** — no `matchMedia`, no debounce. Crossing it remounts the tree | `utils/useIsDesktop.js:4-20` |
 
-`pairKey` uniqueness, the partial unique index enforcing one opening letter per alignment, sparse `clientMsgId` dedup, ObjectId-cursor pagination, fail-fast env validation, the `lastLogoutAt` invalidation + sliding session combo, and the reasoning behind per-email OTP limiting (NAT'd campuses) is legitimately thoughtful.
+### 3.2 The two facts that shape the call architecture
 
----
+| Fact | Evidence | Consequence |
+|---|---|---|
+| **Chat and Settings are flat SIBLINGS of the page stage, not nested inside it** | `AppShell.jsx:347` vs `:333` (mobile); `:281` vs `:273` (desktop) | ✅ Opening a chat overlay does **NOT** unmount the page beneath it. A live call can survive opening chat — *if* chat is opened from the same tab. |
+| **`Chat`'s own root claims the entire viewport unconditionally** — `position: fixed; inset: 0`, `zIndex: 50`, no width/height clamp | `Chat.jsx:1081` | ❌ Chat **cannot** be embedded in a smaller panel without a geometry change. It has no intrinsic way to be sized by a parent. |
 
-Send the second file — I especially want to see `routes/upload.js` (does it re-config Cloudinary per request?), `routes/auth.js` (OTP verify logic, `.ac.in` enforcement), and how `/me`-style endpoints select User fields. 👀
+Chat unmounts on close: draft text, scroll position, and pagination are all destroyed;
+messages survive in the React Query cache (`App.jsx:105`, 2-min staleTime).
 
+### 3.3 Socket layer
 
+| Fact | Evidence |
+|---|---|
+| One socket file only — `server/socket/chat.js` (266 lines) | `server/socket/` |
+| Auth reads cookie `matchalize_jwt` first, then `handshake.auth.token`. Identity attaches to **`socket.user`**, *not* `socket.data` | `chat.js:31-37,42-47`; `admin.js:328` depends on this |
+| Socket auth loads the **full** User document with no projection, and does **not** enforce `lastLogoutAt` | `chat.js:43` vs `middleware/auth.js:86,103-106` |
+| Per-event suspension recheck uses a **60-second cache** | `chat.js:12,93-118` |
+| **There is ZERO socket rate limiting.** `express-rate-limit` is HTTP-only, mounted at `app.use('/api/')` | `index.js:374`; socket.io listens on `/socket.io/` |
+| Only bound on socket traffic is engine.io's 1 MB `maxHttpBufferSize` | library default |
+| **No adapter configured** — default in-memory `Adapter`. Multi-instance unsafe | `index.js:221-245` |
+| **Load-bearing payload guard.** Never destructure in a handler parameter list; a destructuring throw becomes an `uncaughtException` that kills the process | `chat.js:151-162`; `index.js:568-576` |
+| `user-typing` emits **`socket.user.name`** — the client-sent `userName` is discarded | `chat.js:169` vs `Chat.jsx:506` |
 
-OPENCODE:
-Audit complete. Five parallel deep-dives over server, socket/models, client infra, and client pages, with the top findings spot-checked against source. Roughly 90 distinct issues; below are the ones worth acting on.
-Tier 0 — confirmed, breaking now
-1. server/index.js:37 — dotenv.config() runs after every import. ESM evaluates all imports before the importing module's body, so every module-scope process.env read captures undefined. Verified empirically with a two-file repro. Concretely:
-- server/middleware/auth.js:5 → isProduction is always false → auth cookie issued without Secure.
-- server/routes/upload.js:10 → isCloudinaryConfigured false → uploads silently fall to disk storage, skipping moderation: 'aws_rek'. The 38 files in server/uploads/ corroborate this.
-- server/utils/push.js:3 → setVapidDetails never runs, push throws forever.
-- server/config/cloudinary.js:3 → configures with undefined.
-Fix: move dotenv.config() into a config/loadEnv.js imported first, and fail closed at boot instead of downgrading silently.
-2. Letters tab is entirely dead. server/routes/alignments.js:121 returns { alignments }; Matches.jsx:76 and AppShell.jsx:69 read data.matches. The old matches.js was renamed and the key wasn't updated. Users see "No letters yet" permanently and the badge is always 0.
-3. Discover deck is ~95% duplicates. discover.js:287 does a randomSeed: { $gte: randomPoint } range query with no .sort(), so Mongo returns the 80 smallest seeds ≥ p — a deterministic window, not a sample. Simulated: 84/500 users ever reachable, 43 repeats of one profile across 200 pages. The client appends with no _id dedup. Also hasMore is computed from the pre-exclusion batch, so the client appends duplicate pages until the 4.5MB localStorage cap.
-4. Logged-in users see each other's data. AuthContext.jsx:30 — logout() never clears the TanStack Query cache (App.jsx:94 holds a module-level queryClient, 2-min staleTime). Sign out as A, sign in as B on a shared phone: B sees A's full message and match lists with no network request. Relatedly api.js:21 hard-redirects via window.location.href while there is no router at all (react-router-dom is installed and never imported), so the pathname !== '/auth' guard wedges the app into a permanently-401 state.
-5. socket/chat.js:149,156 — one malformed packet kills the process. Both handlers destructure { alignmentId } from the raw payload with no guard. socket.emit('typing') with no payload is a valid frame; Socket.IO dispatches listeners with no try/catch, so it throws synchronously → uncaughtException → index.js:319 process.exit(1). Reproduced against the project's own socket.io@4.8.3. Full outage, triggerable by any authenticated user.
-6. IDOR: messages.js:160 — Message.findOne({ clientMsgId }) has no senderId/alignmentId scope. clientMsgId is fully client-controlled with no format constraint. Anyone whose client emits sequential ids enumerates every message body in the system. Same unscoped read at :192.
-7. Arbitrary Cloudinary deletion. users.js:140 assigns bioPhoto with zero validation, and users.js:154-158 destroys any removed URL via deleteCloudinaryFile with no ownership check. Read a victim's photo URL from /api/discover, set it as your bioPhoto, save with it empty → their asset is destroyed. Same path via isValidImageUrl trusting any res.cloudinary.com cloud/folder.
-8. Suspended users keep receiving message previews on their lock screen. push.js:17 never checks suspended/isDeleted. Suspension nulls the subscription on delete but not on suspend, so an admin-suspended harasser's phone keeps showing sender.name + first 100 chars of private message content.
-9. Shadowban bypass: auth.js:152-161. Delete → wait 30 days → re-register. User.deleteOne destroys the only record, and the fresh account defaults every moderation field to clean.
-Tier 1 — high
-- 10. Block/unmatch push names the blocker (report.js:137) — destroys the abuse-reporting safety affordance.
-- 11. Unscoped /uploads gate (index.js:227) — any logged-in user can enumerate /uploads/<userId>-<ts>.<ext> and harvest every photo; suspended/revoked tokens still pass.
-- 12. OTP fails open — RESEND_API_KEY is absent from server/.env, so /send-otp returns 200 "sent" while logging the code. NODE_ENV is also unset, so email.js:46 logs every OTP even when configured.
-- 13. No IP tier on OTP routes — both limiters are email-keyed, so unlimited bombing of arbitrary addresses (harassment + Resend quota burn).
-- 14. CORS allows every origin with credentials when NODE_ENV === 'development', and FRONTEND_URL is a plain-HTTP LAN origin.
-- 15. /uploads URL is built from the Host header (upload.js:76) — attacker-chosen origin persisted into profiles.
-- 16. Duplicate message bubbles — socket onNew dedupes (Chat.jsx:402), the POST append doesn't (:534), and the server broadcasts to the sender's room first. Plus pendingMsgIdRef isn't reset on failure (:539), so a failed send makes the next message return the previous one server-side and your new text vanishes.
-- 17. Matched users never excluded from the deck (discover.js:231) — no branch consults Alignment, so you can re-like your own match.
-- 18. age never selected and ageRange never applied (discover.js:261) — ProfileCard.jsx:829 renders — for every card; the age preference is dead config.
-- 19. Rate limiter runs after a 10MB body parse (index.js:194-206) — unauthenticated 10MB POSTs to /api/auth/send-otp exhaust the heap before any budget is deducted.
-- 20. x-new-token header (auth.js:83) publishes the JWT to JS on every sliding refresh, defeating httpOnly. No client consumer exists.
-- 21. Room membership never revoked (chat.js:149) — after unmatch/block you keep a live typing-indicator channel into the ex-partner's chat.
-- 22. Service worker caches /uploads and 13.5MB of media forever, cache-first, no quota (sw.js:60).
-- 23. Queue is unbounded with no timeout, no retry, no drain (queue.js) — 20 stuck push calls silently stop all processing forever.
-Tier 2 — worth fixing, lower urgency
-Reaction read-modify-write loses reactions (messages.js:243); negative page → 500 (notifications.js:85, alignments.js:18); total/hasMore computed before a post-pagination filter (alignments.js:21); /pass/:id overwrites permanent unmatch archives (discover.js:355); unblock doesn't restore discoverability (report.js:161); Accept resurrects blocked alignments (notifications.js:107); contentFrozen = false at ≥5 reports reduces restrictions (report.js:67); admin shadowbanThreshold setting is stored but never read; schema maxlength violations return 500 (users.js:122); interestedIn unvalidated against GENDERS → permanently empty deck; notification pagination caps at 20 with no load-more; Profile.jsx:783 bricks on a failed fetch; stale-closure lost update on profile chips; MessageBubble long-press fires on plain tap; SearchOverlay regex crash on (; socket.off('online-status') with no handler wipes all listeners; ArchivalToast cancels its own dismiss timer; pendingMsgIdRef/discoverStore staleness; QA harness spreads all prod secrets and drops collections with no test-DB assertion; migrate-alignment.mjs has no dry-run.
-What I'd fix first
-Tier 0 in this order — items 1, 5, and 2 are each a one-to-few-line change that unblocks a large blast radius. Item 1 first, since it also determines whether the upload and push pipelines work at all.
-Two questions before I proceed: do you want me to start applying fixes, and if so, in Tier 0 →1 → 2 batches for review between each? Also worth confirming whether server/.env on this machine is the production config, since that changes whether items 12 and 15 are live exposures or latent ones.
-▣  Plan · Space Bunny Free · 15m 58s
+### 3.4 Data model facts
 
+| Fact | Evidence |
+|---|---|
+| `Alignment` has **4 fields**: `pairKey`, `users`, `isActive`, `unlockedByInteractionId`. **No `origin`** | `server/models/Alignment.js` |
+| `pairKey` is **unique per unordered pair** — a Deck align and a Roulette align for the same two people map to the **same row** | `Alignment.js:5-10` |
+| ⚠️ **`Interaction` already has an `origin` field** with `enum: ['block','unmatch','pass']` | `Interaction.js:27-31` |
+| `Notification` enum is `['new_letter','priority_telegram','new_align']` but **only `new_align` is ever written**; the other two are marked retired | `Notification.js:17-23`; sole writer `discover.js:1629-1634` |
+| `Notification.interactionRef` is **required** | `Notification.js:26-31` |
+| **No transactions anywhere.** MongoDB M0 and the local standalone mongod don't support them | verified; `render.yaml:74-75`; `MONGODB_URI` comment in `server/.env` |
+| An existing **retry-on-conflict pattern** to reuse: `DECK_RACE_RETRIES = 2` + `isConcurrentDeckRace` | `discover.js:1488-1516` |
+| `showCollege` is the **only** identity field with a working server-side strip | `publicCard.js:64-69`; `discover.js:1676-1679` |
+| `name` and `photos` are on the `CARD_FIELDS` allowlist and **always sent** | `publicCard.js:14-18` |
 
-glm5.3:
-Your AI ran a tight verification pass — I'll take both corrections, and the four Q&As close out cleanly. Quick reconciliation, then the fix plan.
+### 3.5 The accept path — the defect this design must branch around
 
----
+**[CONFIRMED]** `POST /api/notifications/:id/accept` (`notifications.js:112-272`) currently:
 
-## Corrections accepted
+1. Block check **first**, returning an indistinguishable 404 (`:144-146`)
+2. 410 `USER_UNAVAILABLE` if sender is suspended/deleted (`:149-152`)
+3. Records an `accept_letter` Interaction (`:155-175`)
+4. **Atomic** `Alignment` upsert on `pairKey` (`:177-193`)
+5. **Unconditionally creates an `opening_letter` Message** (`:195-235`), reading
+   `senderProfile.photos[idx]` (`:208-216`) and `p.question` / `p.answer` (`:217-223`)
+6. Clears the notification (`:237-238`)
+7. Socket `match-notification` + push (`:247-265`)
 
-**Port mismatch — withdrawn.** Fair cop. In my second review I explicitly hedged it ("if `run-qa.mjs` boots a separate server on 5051, fine — verify"), and then my third review's ✅ list promoted it to confirmed *without new evidence*. That was my error. The `.env.test` explanation is consistent with the repo (root `.gitignore` listing `/server/.env.test` now makes sense), so: two deliberate environments, not a bug. Nobody should "fix" it.
+**Step 5 is the leak.** Accepting a hidden Roulette request through this path would copy
+the hidden party's photo and prompt text into the chat — precisely what the feature exists
+to prevent. See §5.
 
-**`/waitlist` — agreed, landmine not crash.** That was actually my framing too ("even if it doesn't today, this is a landmine"), so we're aligned: works today because `Waitlist.jsx` uses plain `fetch`, hoist the provider as cheap insurance, not urgent.
+### 3.6 Identity leak map — 22 inline render sites, no shared component
 
-The four answers: Q1 solid, Q2 confirms both the dead `react-router-dom` dep **and** my deep-link finding, Q3 no bug, Q4 real bug. All clean.
+**[CONFIRMED] There is no shared avatar / user-chip / name-label component.** Every surface
+re-derives name and avatar inline. A temporary name introduced anywhere would not
+propagate — and conversely a real name re-renders independently in 22 places.
 
----
+**The four leaks that no UI work can fix:**
 
-## On the deduped table
+| Leak | Evidence |
+|---|---|
+| **Push lock-screen title is the sender's real name** | `messages.js:238` — `title: sender?.name` |
+| **Typing indicator re-derives the name from the DB** | `socket/chat.js:169` |
+| **`profile-updated` broadcasts real name + photos to EVERY socket** | `users.js:408-417` — `toPublicCard(user)` |
+| **No server-side strip for `name`/`photos`** — only `showCollege` has one | `publicCard.js:64-69` |
 
-It's correct as far as it goes, with two nuances worth adding:
+Additional name-embedding push call sites: `discover.js:1649`, `notifications.js:260`,
+`alignments.js:252`. (Only `report.js:142-145` is clean.)
 
-**#1 is worse than "localStorage leak."** The data crosses the wire — anyone with devtools sees `adminNotes`, `suspendedReason`, `shadowbanScore` in the network response, not just in storage. Worse for moderation integrity: **shadowbanned users can self-detect**, which defeats the entire shadowban mechanism. Also don't patch just `auth.js:265` — `users.js` (`/me`, profile updates) is 400+ lines I never saw, so other routes may return full docs too. Fix it structurally:
+Other surfaces: `Chat.jsx:745` (header), `Chat.jsx:196` (profile sheet),
+`NotificationDrawer.jsx:117,337`, `Matches.jsx:304`, and critically
+**`Matches.jsx:144` — the Chats search filters on the real name**, so a masked row is
+still findable by typing its real name. `alt` / `aria-label` attributes carry names to
+screen readers at `ProfileCard.jsx:1071`, `Matches.jsx:291`, `Chat.jsx:735,189`,
+`NotificationDrawer.jsx:153`.
+
+`_id` is **never displayed to any user** — only used as a React key, comparison, or URL
+segment.
+
+### 3.7 Three different partner-object shapes reach the same `<Chat>` component
+
+| Entry path | Object shape | `age` | `pronouns` | `branch` |
+|---|---|---|---|---|
+| Chats row | alignments `$lookup` (`alignments.js:121`) | fresh (recomputed from `dob`) | ❌ not sent | ❌ not sent |
+| Accept in Requests | notification populate (`notifications.js:93`) | **stale** — stored once at onboarding | ✅ sent | ❌ not sent |
+| Deck match modal | `targetProfile` (`discover.js:1664-1684`) | ❌ **not sent at all** | ✅ sent | ❌ not sent |
+
+Known rendering consequences: `branch` falls back to the literal `'General'`
+(`Chat.jsx:199`); `intent` falls back to **three fabricated chips**
+`['Long-term','Connection','Growth']` (`Chat.jsx:222`); `bio` is **sent but never
+rendered** anywhere in `Chat.jsx`.
+
+### 3.8 Deck eligibility — reusable, with one important omission
+
+`discover.js:254-276` defines exactly seven conditions, **inline and unexported**:
 
 ```js
-// User.js — safety net for EVERY route, forever
-userSchema.set('toJSON', {
-  transform: (_, ret) => {
-    delete ret.adminNotes; delete ret.suspendedReason;
-    delete ret.shadowbanScore; delete ret.shadowbannedAt;
-    delete ret.contentFrozen; delete ret.randomSeed;
-    delete ret.pushSubscription; delete ret.lastLogoutAt;
-    return ret;
-  },
-});
+{ isOnboarded: true, isVerified: true,
+  suspended: {$ne:true}, shadowbannedAt: null, isDeleted: {$ne:true} }
+// + conditional: gender $in interestedIn
+// + conditional: mutual interestedIn $or
 ```
-Plus an explicit `.select()` on the known offending route(s).
 
-**#2's symptom set is bigger than an empty tab.** `AppShell.jsx` computes the unread badge from the same `matchData?.matches` — so it's *empty Letters tab AND a permanently dead badge*. And when fixing, verify `lastMessage.senderId` is a plain string at the same time, or the badge stays broken even after the shape fix.
+**There is no `collegeCode` filter.** The Deck is platform-wide by deliberate decision
+(`discover.js:245-253`). `?campusOnly` was removed on purpose (`User.js:352-365`).
 
-## Suggested order within 1–4
+⚠️ **`baseFilter` must be extracted to a shared module before Roulette can use it.**
+Otherwise a shadowbanned user could pass Roulette's gate while failing the Deck's.
+Proposed: `server/utils/eligibility.js`, used by both. Acceptance gate: the Deck response
+must be byte-identical before and after extraction.
 
-1. **#2 first** — one-line fix (server returns `{ matches }` or client reads `.alignments`), un-breaks a core tab instantly.
-2. **#1** — toJSON transform + select, kills the whole class.
-3. **#3** — presence gate in `socket/chat.js` (a `Map<userId, Set<socketId>>` maintained on connect/disconnect, then skip `addToQueue(sendPush…)` when the recipient has a live socket — ideally scoped to "joined to this alignment's room" rather than merely online).
-4. **#4** — depends on intent: either stop sending a fake `targetId` from `ProfileCard.jsx:876` or give the route a `targetType`. Either way, **un-swallow the 400** — silent catches are why this survived this long.
+Also note the Deck **ignores live presence** — `_recency` uses the stale `lastActive`
+timestamp (`:308-336`). Roulette must invert this: live presence is the whole point.
 
-## One caveat before that table becomes "the list"
+### 3.9 Deployment
 
-It's filtered to user-visible runtime bugs. **None of these from my server review are superseded** and they're all still open:
+| Fact | Value | Evidence |
+|---|---|---|
+| Plan | **`free`** — 15-min spin-down | `render.yaml:19` |
+| Instances | 1 | no `numInstances` |
+| Disk | none | no `disk:` key |
+| WebSockets | supported on all Render tiers including free | Render pricing page |
+| Cheapest always-on | `0.5c-512mb` = **$7/mo** | verified 2026-10-16 |
 
-- `dotenv.config()` after imports → Cloudinary config dead in local `.env` dev
-- `Block` missing `{ blocked: 1 }` index → collection scan on every deck build
-- `multer 1.x` CVEs, with `legacy-peer-deps` actively pinning you there
-- Plaintext OTPs in the DB
-- CORS rejections *and* malformed JSON both surfacing as 500s
-- `uncaughtException` exits without flushing Sentry; shutdown never calls `io.close()`
-- `Report` unique constraint blocks second reports from the same user
-- `x-new-token` header (probably removable — socket.io can read the cookie server-side)
+⚠️ **The free plan will kill live calls.** Roulette needs always-on sockets. This is a
+Stage 0 prerequisite.
 
-Don't let the shiny table bury the dull ones — the multer CVE and dotenv ordering are five-minute fixes.
+⚠️ **Upgrading compute ≠ adding instances.** Moving to `starter` keeps one process and
+breaks nothing. `numInstances: 2+` breaks presence, deck locks, real-time message
+delivery, and every rate limiter simultaneously — there is no Redis adapter.
 
 ---
 
-**On your AI's closing question:** no need to send corrections anywhere — you just did, and they're accepted. Tell it to start on #2 and #1, and if you paste `auth.js`, `messages.js`, `push.js`, and `Matches.jsx` over here I'll review the actual patches against the real code before they ship. 🔧
+## 4. SCHEMA PROPOSAL
 
-**Verification pass done — and it's a good thing you sent the dump, because the flagship new code contains a fatal error: the service worker is currently dead.** Everything else visible is excellent. Two real bugs, both one-liners. Ledger:
+### 4.1 Naming collision — resolve first
 
-## 🔴 Bug A — `sw.js` has a syntax error → the ENTIRE service worker fails to load
+`Interaction.origin` already exists with `enum: ['block','unmatch','pass']`
+(`Interaction.js:27-31`). Putting `origin` on `Alignment` meaning `'deck'|'roulette'`
+creates two unrelated fields with the same name.
 
-In the new `notificationclick` handler:
+> **Decision: use `source` everywhere. Never `origin`.**
 
-```js
-self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {   // ← not async
-  ...
-      await client.focus();   // ← await inside a non-async function = SyntaxError
-```
-
-`await` in a non-async callback is a **parse-time SyntaxError** — the whole `sw.js` file fails to evaluate, registration rejects, and the consequence chain is ugly:
-
-- ❌ **Push notifications dead** (no SW = no push handler = no notification ever fires)
-- ❌ Offline caching dead
-- ❌ **The v2→v3 cache purge never runs** — the old caches full of users' voice notes and photos are *still sitting on devices*. The privacy purge everyone worked for is currently not happening, because the SW that would do the purging can't boot.
-
-**Fix:**
-```js
-.then(async (clients) => {          // ← add async, that's it
-```
-
-**How to see it yourself:** DevTools → Application → Service Workers → red `SyntaxError: await is only valid in async functions` — or just push a test notification and watch nothing happen.
-
-## 🔴 Bug B — the warm-app message channel points at the wrong listener
-
-`AppShell` entry point 2 listens on `window.addEventListener('message')` — but messages sent from a service worker via `client.postMessage()` arrive on the **`navigator.serviceWorker` container**, not `window`. As written: notification tapped while the app is open → tab focuses → chat never opens.
-
-**Fix:**
-```js
-useEffect(() => {
-  const onMessage = (event) => {
-    if (event.origin !== window.location.origin) return;
-    if (event.data?.type !== 'open-chat') return;
-    openChatById(event.data.alignmentId);
-  };
-  // SW→page messages land here, NOT on window:
-  navigator.serviceWorker?.addEventListener('message', onMessage);
-  return () => navigator.serviceWorker?.removeEventListener('message', onMessage);
-}, [matchData, queryClient]);
-```
-
-Ironic footnote: the deep-link was one of my *first* client findings in this whole thread — the fix finally shipped and broke its own delivery mechanism. This is exactly what verification passes are for. 🎯
-
-## ✅ Credit where due — this round's good work is genuinely good
-
-- **The webhook raw-body fix is a deep catch.** The `req._body` mechanism, the cited body-parser source line, the realization that the moderation cleanup route has *never once worked* since birth — that's excellent forensics, and the `express.raw()` before `express.json()` fix is correct.
-- **`QueryClientBridge`** beats my "move it to its own file" suggestion — context registration dodges the circular import cleanly.
-- **The AppShell deep-link design** (read-once param, `replaceState` strip, two entry points, origin check) is right — just aimed one listener at the wrong target.
-- **CSP localhost fix landed properly this time** — including the honest note that CSP `172.*` over-matches into public space and CORS is the real gate.
-- Rate-limit comment math corrected exactly as flagged ✅
-
-## 🟡 One verification item on the webhook — don't trust, test
-
-Middleware order is now: `express.raw()` (webhook path) → `express.json` → **`mongoSanitize()`** — which runs on the webhook path too, with `req.body` as a **Buffer**. If express-mongo-sanitize walks and rebuilds that Buffer into a plain object, you get `[object Object]` round two — different cause, same dead signature check. **One end-to-end test with a properly signed Cloudinary payload settles it.** If it fails, scope the sanitizer off that path:
+### 4.2 `Alignment` — additions only
 
 ```js
-app.use((req, res, next) => {
-  if (req.path === '/api/upload/moderation-status') return next();
-  mongoSanitize()(req, res, next);
-});
+// ① INITIAL CONNECTION SOURCE — provenance only. NEVER authorizes access.
+source: { type: String, enum: ['deck','roulette'], default: 'deck' }
+
+// ② DIRECTIONAL PROFILE-ACCESS PERMISSIONS — the authorization truth.
+//    Absence of a grant = no access. Fail-closed by construction.
+profileGrants: [{
+  viewerId:  { type: ObjectId, ref:'User', required:true },  // who may look
+  subjectId: { type: ObjectId, ref:'User', required:true },  // at whose profile
+  source:    { type: String,
+               enum: ['legacy','deck','roulette_visible','roulette_reveal'],
+               required:true },
+  grantedAt: { type: Date, default: Date.now }
+}]
+
+// ③ STABLE CONVERSATION NICKNAME — copied once at creation, never mutated.
+conversationAliases: [{
+  userId: { type: ObjectId, ref:'User', required:true },  // this person
+  alias:  { type: String, trim:true, maxlength:24 }      // as the OTHER party sees them
+}]
+
+// ④ REVEAL-REQUEST STATE — single-document atomic state machine.
+revealRequest: {
+  state:       { type: String,
+                 enum: ['none','pending','accepted','declined','expired'],
+                 default: 'none' },
+  requestedBy: { type: ObjectId, ref:'User' },
+  requestedAt: Date,
+  resolvedAt:  Date,
+  consents:    [{ type: ObjectId, ref:'User' }]   // accumulated atomically
+}
 ```
 
-## 🔍 Cut off from my view — confirm these landed
+**Index to add:** `{ 'profileGrants.viewerId': 1, 'profileGrants.subjectId': 1 }`
 
-AuthContext's `logout()` (clear + disconnect + **login-side `socket.connect()` reconnect**) · `chat.js` `safe()` wrapper with the async-catch · discover `$sample` · SearchOverlay escape · push.js suspended check · queue hardening · accept-path block check · `seedEdgeCases.js` (does it also assert DB name, or just the purge flag?) · ArchivalToast (cut off mid-file — still never queued?)
+### 4.3 `Notification` — additions only
 
-**Still open, visible in this dump:** `user-scalable=no` in index.html · `/waitlist` outside QueryClientProvider.
+```js
+// ⑤ INDIVIDUAL REQUEST SOURCE + call-scoped expiry
+source:        { type: String, enum: ['deck','roulette'], default: 'deck' },
+callSessionId: { type: String, default: null },   // roulette only — enables expiry sweep
+expiresAt:     { type: Date,   default: null },   // null = never expires (Deck)
+```
 
-## 👉 Do this now
+`type: 'new_align'` is reused for both origins. `interactionRef` stays required.
 
-1. Fix the two one-liners (async + listener target)
-2. Reload → DevTools → SW registers clean → **Cache Storage shows only `matchalize-v3`** (that's the purge finally happening)
-3. Test notification tap: cold start (new tab opens the chat) + warm app (open tab opens the chat)
-4. Signed webhook payload → 200
-5. Then the confirm list above
+### 4.4 `Interaction` — additions only
 
-Two words (`async`, and one event target) stand between this build and everything working. 🚀
+```js
+source: { type: String, enum: ['deck','roulette'], default: 'deck' }
+```
+
+### 4.5 The uniform resolver — one rule, no special cases
+
+```
+canViewProfile(viewerId, alignmentId):
+    partner := the other user in alignment.users
+    return exists grant { viewerId, subjectId: partner }     // ← the ONLY rule
+
+displayNameFor(viewerId, alignmentId):
+    1. partner's alias in conversationAliases  → use it
+    2. partner has a grant for viewer          → partner's real name
+    3. otherwise                               → neutral generated label (never real name)
+```
+
+| Case | Alias? | Grant? | Result |
+|---|---|---|---|
+| Legacy Deck connection | no | yes (backfilled) | **real name** — behaviour unchanged |
+| New Deck connection | no | yes | **real name** — behaviour unchanged |
+| Hidden Roulette, pre-reveal | yes | no | **call name** |
+| Revealed Roulette | yes | yes | **call name** in the list; real name in the profile sheet |
+| Any row with a missing field | — | — | **no access, neutral label** — fail-closed |
+
+**Why backfill rather than a legacy special case:** a special case keyed on
+`source == null` becomes an accidental access grant the instant a new row is written
+without `source`. A backfilled grant table has no such hole. This satisfies "missing
+fields must not accidentally grant access" **structurally**, not by convention.
+
+### 4.6 Existing-data defaults
+
+`server/scripts/` already holds 12 migration scripts — this follows the house pattern.
+
+| Field | Existing rows | New hidden Roulette rows |
+|---|---|---|
+| `Alignment.source` | `'deck'` | `'roulette'` |
+| `Alignment.profileGrants` | **2 grants backfilled**, `source:'legacy'`, one per direction | **empty** |
+| `Alignment.conversationAliases` | **absent** — real name shown, unchanged | **both parties' call names**, copied once |
+| `Alignment.revealRequest.state` | `'none'` | `'none'` |
+| `Notification.source` | `'deck'` | `'roulette'` |
+| `Notification.expiresAt` | `null` | set to the call-end deadline |
+| `Interaction.source` | `'deck'` | `'roulette'` |
+
+**Rollback:** the migration is additive — `unset` the new fields.
+
+### 4.7 Atomicity without transactions
+
+⚠️ MongoDB M0 and the local standalone `mongod` do **not** support multi-document
+transactions. Verified: none are used anywhere today.
+
+Every transition must therefore be a **single-document atomic `findOneAndUpdate`** whose
+filter includes the expected prior state. On no match → re-read and retry, bounded.
+
+This is already an established pattern: `discover.js:1488-1516`. **Reuse it rather than
+inventing a second mechanism.**
+
+---
+
+## 5. ACCEPT BRANCHING — Roulette must not copy profile content into messages
+
+| `Notification.source` | Alignment creation | Opening letter | Push |
+|---|---|---|---|
+| `deck` | existing upsert (`:177-193`) | **existing behaviour** (`:195-235`) | unchanged |
+| `roulette` | same upsert + `source:'roulette'` + `conversationAliases` + **no grants** | **NONE** | must not embed a name |
+
+The accept endpoint returns `{ success, alignmentId, origin }` so the client renders the
+correct disclosure.
+
+**[CONFIRMED] also fix while here:** the 410 `USER_UNAVAILABLE` path is currently a
+**silent no-op** — `NotificationDrawer.jsx:70-72` only `console.error`s. The client
+pre-disables Accept when the sender is suspended/deleted (`:181`), but a suspension that
+lands after the drawer loaded produces a dead button with no feedback.
+
+---
+
+## 6. PRIVACY ENFORCEMENT LEDGER
+
+Incremental enforcement: each surface is fixed **before the relevant data can reach a
+partner**. Stages 2–6 never touch the existing chat surfaces, because no hidden connection
+can exist there until Stage 7.
+
+| # | Surface | Leaks | Enforced by |
+|---|---|---|---|
+| 1 | New roulette signaling events | — | Stage 1 contract → Stage 3 code |
+| 2 | `NotificationDrawer` row (`:117-118`) | `sender.name`, `photos[0]` | **Stage 8** |
+| 3 | `GET /api/alignments` payload (`:121`) | `name`, `photos`, `interestedIn`, `intent` | **Stage 8** |
+| 4 | `Matches.jsx:304` row name | real name | **Stage 8** |
+| 5 | `Matches.jsx:144` search filter | **real-name correlation leak** | **Stage 8** |
+| 6 | `Chat.jsx:745` header | real name | **Stage 8** |
+| 7 | `ChatProfileView` (`Chat.jsx:196`) | full profile, unguarded | **Stage 8** |
+| 8 | `socket/chat.js:169` typing | name from `socket.user` | **Stage 8** |
+| 9 | Push `messages.js:238` | **name as lock-screen TITLE** | **Stage 8** |
+| 10 | Push `notifications.js:260` | name in body | **Stage 8** |
+| 11 | `profile-updated` broadcast (`users.js:408-417`) | name + photos to **every** socket | **Stage 8** |
+| 12 | Avatar `alt` texts (4 sites) | name to screen readers | **Stage 8** |
+| 13 | Accept → opening letter | photo + prompt text | **Stage 7** |
+
+**Rows 2–13 are Stage 8's acceptance gate.** A hidden connection cannot be created in the
+shared Chats list until they are all contract-compliant.
+
+---
+
+## 7. ALIGN REQUEST LIFECYCLE
+
+### 7.1 Sending
+
+```text
+Send Align?
+
+If they accept, you can keep chatting.
+Your hidden profile will stay hidden.
+
+[Send Align]   [Cancel]
+```
+
+Adapt the wording when the sender is already using a visible profile.
+
+### 7.2 Receiving
+
+```text
+Moonwalker wants to stay connected.
+[Accept]   [Not now]
+```
+
+On acceptance:
+- Creates or retrieves **one** saved connection
+- Makes its chat available
+- **Does not reveal a hidden profile**
+- **Does not end the video**
+- Shows "You're aligned. Your chat is ready."
+
+### 7.3 Precedence rules — APPROVED
+
+> **A saved connection survives only if the server completes mutual acceptance before the
+> session closes. A still-pending request expires when the call closes. Late accepts are
+> rejected as expired. Duplicate or simultaneous accepts must return one connection/chat.
+> Use server-owned state transitions and test the races.**
+
+| Rule | Implementation |
+|---|---|
+| Survival | Accept transaction must commit **before** session close |
+| Expiry | On call end, mark still-pending requests cleared + `expiresAt` passed |
+| Late accept | Accept endpoint checks `expiresAt`; past → `EXPIRED`, no Alignment created |
+| Idempotency | Accept filters on `isCleared:false`; a second call finds nothing and returns the **same** `alignmentId` rather than erroring |
+| Race resolution | Single atomic `findOneAndUpdate` on `pairKey` (`notifications.js:177-193` already does this) |
+
+### 7.4 First-version request policy
+
+- One active request per pair per current conversation
+- No repeat requests after a decline in that conversation
+- **Pending requests expire when the call ends**
+- Accepted connections persist
+- Simultaneous outgoing requests **count as mutual acceptance**, provided both send
+  actions included the disclosure
+- The server resolves accept-versus-leave races
+- Expired or declined requests **cannot** unlock chat or identity
+- No new Align request after someone skips
+
+The shared Requests section may show a pending live request, but its state must update
+**immediately** when the call ends.
+
+**Missed connections are out of scope for v1.**
+
+---
+
+## 8. REVEAL STATE MACHINE
+
+### 8.1 Before reveal
+
+The saved conversation shows:
+- Stable conversation nickname
+- Generic avatar
+- "Profile hidden."
+- Messages
+- A separate **"Share profiles"** action
+
+### 8.2 Transitions (all single-document atomic)
+
+```text
+        A requests
+none ──────────────► pending   consents=[A]
+  ▲                     │
+  │                     │ B accepts (or A+B request simultaneously)
+  │                     ▼
+  │                  accepted   consents=[A,B]  → create 2 grants atomically
+  │                     │
+  │                     ├──► declined   (B declines)
+  │                     │       └─► new request allowed once; no repeat pressure
+  │                     │
+  │                     └──► expired    (7 days)  → same
+```
+
+| Transition | Atomic predicate | Result |
+|---|---|---|
+| request (none) | `revealRequest.state ∈ {none, declined, expired}` | `pending`, `consents=[me]` |
+| request (pending, other) | `state==='pending' && requestedBy != me` | **immediately** `accepted`, `consents=[both]` |
+| accept | `state==='pending' && !consents.includes(me)` | push me to consents; if `consents` has both → `accepted` + 2 grants |
+| decline | `state==='pending'` | `declined`, `resolvedAt` |
+
+On acceptance:
+- Update the connection's reveal permissions
+- Show approved profile names/photos
+- Allow opening the public profile
+- Keep the small historical nickname label in the list
+
+On rejection or expiry:
+- Continue the hidden-profile chat
+- **Do not** repeatedly pressure the recipient
+- **Do not** automatically close the connection
+
+**For visible/hidden connections:** explain that the already-visible profile has already
+been shared; the remaining hidden participant must still explicitly consent.
+
+### 8.3 Shared fields
+
+Reveal only approved public-profile fields. **Never** email, full DOB, precise location,
+security information, or moderation history.
+
+Unmatching or blocking removes access **through the connection**, but cannot erase what
+someone has already seen or saved elsewhere. State this honestly in the UI.
+
+---
+
+## 9. CROSS-ORIGIN INTERACTIONS
+
+### 9.1 Existing connections meeting in Roulette — APPROVED
+
+| Rule | Detail |
+|---|---|
+| An existing active Deck connection **may** meet in Roulette if otherwise eligible | |
+| Do **not** duplicate its chat | `pairKey` is unique per pair, so this is automatic |
+| Do **not** send a new Align request | |
+| **Preserve existing profile permissions** — hidden mode does **not** revoke previously granted access | |
+| Show **"You're already connected"** with **Open Chat** | |
+| **Exclude previously unmatched pairs** pending a separate reconnection policy | |
+| **Blocked pairs must never be matched** | Absolute, checked at pair time |
+
+### 9.2 Hidden Roulette contact later encountered through Deck
+
+`pairKey` is unique per unordered pair, so this is the **same Alignment row**. `source`
+stays `'roulette'` (provenance, immutable), and `profileGrants` is the authorization truth
+— which is exactly why §4.5's resolver has no `source` special case.
+
+**Policy: hidden mode is scoped to Roulette conversations.** If the same person appears in
+your Deck later, you see their normal public profile — that is how Deck works, and it is
+unrelated to the connection. **This must be disclosed before the user picks hidden mode**
+(§19).
+
+**What we do NOT do:** silently upgrade permissions, or silently reveal identity through a
+second surface.
+
+**Account-ID correlation limitation, stated plainly:** the server can trivially correlate a
+hidden session to a user record — that is unavoidable and not a defect. What this design
+prevents is **the partner** learning the identity. If someone screenshots a video and
+recognises you from the Deck, **no system prevents that, and we must not claim it does.**
+
+---
+
+## 10. NEARBY-FIRST PARTNER SELECTION
+
+### 10.1 Candidate pool
+
+Only consider students who:
+
+- Explicitly pressed Start
+- Are **currently connected and ready**
+- Meet eligibility requirements (§3.8, extracted to a shared module)
+- Are **not already assigned** to another call
+- Are **not blocked in either direction**
+- Satisfy the agreed intention/preferences
+- Fall within **both** participants' accepted search scope
+
+> **Never make an online Deck user callable unless they joined Roulette.**
+
+### 10.2 Location source
+
+- Use recent, consented **coarse** location where available — the existing helpers already
+  round to 2 dp (~1.1 km) before storage (`geo.js:96-103`)
+- Otherwise offer **college-area matching**, described honestly — *not* as "your current
+  location"
+- **Never** display coordinates or precise distances. The Deck already returns a band
+  label only (`geo.js:77-82`); reuse that
+
+### 10.3 Selection order
+
+Within the eligible nearby pool:
+
+1. Give meaningful priority to **waiting time**
+2. Prefer **proximity** among reasonably comparable candidates
+3. **Randomize** selection
+4. Avoid **recently met** partners where alternatives exist
+
+Do not always choose the closest person, and do not repeatedly deprioritize someone because
+their campus is farther away.
+
+*Rationale:* strict FIFO makes one user wait for everyone in turn. Instead, take the
+longest-waiting ~30% as the candidate band, then choose randomly within it using distance
+and repeat-penalty.
+
+### 10.4 No nearby partner
+
+```text
+Nobody compatible nearby right now.
+
+[Keep waiting]   [Search farther]   [Leave]
+```
+
+**No silent nationwide expansion.** The initial distance and expansion bands are
+configurable **test settings**, not established ideal distances.
+
+### 10.5 Tiny testing pool
+
+- **Blocks are never relaxed.**
+- Recent-partner avoidance is **not** a permanent block.
+- If recent partners are the only options, explicitly offer repeat matching.
+- **Do not hardcode a 24-hour exclusion** that makes two-account testing impossible.
+
+### 10.6 Intention: Social / Dating / Either
+
+Use **one** matching mechanism with compatibility rules, not three isolated queues.
+
+| Combination | Behaviour |
+|---|---|
+| Social + Social | Social conversation |
+| Social + Either | Social conversation |
+| Dating + Dating | Allowed only if mutual dating preferences fit |
+| Dating + Either | Allowed only if mutual dating preferences fit |
+| Social + Dating-only | **Do not pair** |
+| Either + Either | Social connection possible; romantic compatibility checked separately |
+
+- For **Social**, explain there is no assumption of romantic interest.
+- For **Dating**, use explicit reciprocal preferences. **Do not** infer compatibility from
+  gender alone or from the word "Either."
+- **Do not expose** someone's private preference settings to their partner.
+- Changes to intention take effect on the **next search**, never mid-call.
+
+⚠️ **[CONFIRMED]** `interestedIn` and `intent` are **currently in the alignments payload**
+(`alignments.js:121`) — they already reach the client. They must be **stripped**, not just
+hidden in the UI.
+
+---
+
+## 11. CALL LIFECYCLE
+
+### 11.1 Required states
+
+```text
+Idle → Preview → Searching → Pairing → Connecting
+                                         ↓
+                                     Connected
+                                         ↓
+                            Ended → Ready / Search again
+```
+
+Plus recovery states for: **permission denial**, **connection failure**, **temporary
+interruption**, **already connected**, **capacity reached**.
+
+### 11.2 Call ownership
+
+> **Keep call state outside disposable tab/page components.**
+
+**[CONFIRMED reason]** tab changes unmount pages (`AppShell.jsx:266,326`) while the Chat
+overlay is a sibling that leaves the underlying page mounted (`AppShell.jsx:347` vs `:333`).
+
+So call state must live **above** `renderPage()` — alongside `activeChat` and
+`settingsOpen` in `AppShell`, or in a provider wrapping it. **Not** inside the page
+component.
+
+### 11.3 Required safeguards
+
+| Safeguard | Note |
+|---|---|
+| One active Roulette session per account | |
+| Authorized call IDs and signaling | Server-generated sessionId; room membership server-granted only |
+| **Socket-event validation and rate limits from Stage 3** | ⚠️ **none exist today** |
+| Atomic pairing — nobody assigned twice | Compare-and-set on the waiting entry |
+| Late signals from old calls rejected | Every event carries `sessionId` |
+| Camera/microphone cleanup | `track.stop()` on unmount, `pagehide`, tab close, skip, leave |
+| Disconnect, refresh, tab-close handling | Re-queue partner with **original** wait start preserved |
+| Block/ban checks at entry **and** at pairing | ⚠️ the 60 s socket suspension cache (`chat.js:12`) means a fresh check is needed at pair time |
+| In-call report / block / leave | |
+| Post-call reporting **without** granting contact or profile access | |
+
+### 11.4 Next behaviour
+
+- **Next** ends the current call and searches again **for the person pressing it**.
+- The other person returns to a clear **"Conversation ended"** state with **"Find next"**.
+- Automatic next-search can be opted into later.
+- **Reporting or blocking never automatically reconnects someone to the reported person.**
+
+### 11.5 Navigation during a call (v1)
+
+- Opening the current call's chat **does not end the call**.
+- Attempting another main tab prompts **"Leave this call?"** → confirm ends the call before
+  navigating; cancel preserves it.
+- **Back closes an open panel first**, then offers to leave the call.
+  ⚠️ **[CONFIRMED] browser Back currently does nothing app-wide** — this must be built.
+- **Do not promise background video** while the browser or phone is locked. On iOS
+  backgrounding **drops the call** — no fix.
+
+---
+
+## 12. VIDEO ARCHITECTURE AND QUALITY
+
+### 12.1 Architecture
+
+```text
+Your backend:
+  eligibility + queue + pairing + signaling + session rules
+
+Media:
+  A ↔ B directly where possible          (free)
+  or
+  A ↔ managed TURN ↔ B                  ($0.05/GB after 1,000 GB free)
+```
+
+**No SFU.** Cloudflare's own documentation: *"If your use case is one-to-one
+communication… TURN by itself is usually sufficient. Adding an SFU is unnecessary
+complexity for that topology."* (verified 2026-07-14)
+
+**Why a relay does not give moderation.** WebRTC media is DTLS-encrypted end to end.
+Cloudflare: *"Cloudflare cannot access the contents of the media being relayed… only
+relays encrypted packets and cannot decrypt or inspect the media content."* **Buying TURN
+does not buy moderation.**
+
+### 12.2 Cloudflare TURN — verified 2026-10-16
+
+| Protocol | Address | Ports |
+|---|---|---|
+| STUN/UDP | `stun.cloudflare.com` | 3478 |
+| TURN/UDP | `turn.cloudflare.com` | 3478, 443 |
+| TURN/TCP | `turn.cloudflare.com` | 3478, 80 |
+| TURN/TLS | `turn.cloudflare.com` | 5349, 443 |
+
+**Credential generation — server-side only.**
+
+```
+POST https://rtc.live.cloudflare.com/v1/turn/keys/{TURN_KEY_ID}/credentials/generate-ice-servers
+Authorization: Bearer {TURN_KEY_API_TOKEN}
+Content-Type: application/json
+
+{"ttl": 86400}
+```
+
+Returns **201** with a ready-to-use `iceServers` array, passed straight to the browser.
+
+| Requirement | Detail |
+|---|---|
+| Provider API secret | Server-side env only. **Never** `VITE_*`, never in a client bundle |
+| Credential TTL | **Short-lived.** Max 48 h; on expiry Cloudflare **stops billing immediately**, then disconnects. Refresh via `setConfiguration()` |
+| Issuance endpoint | Behind `protect` + its own rate limiter |
+| Revocation | `POST …/credentials/{USERNAME}/revoke` → 204, stops billing instantly |
+| Custom identifiers | Tag each TURN username with userId → per-user accounting + abuse detection |
+
+**Constraints that affect design:**
+
+| Constraint | Impact |
+|---|---|
+| Max TTL 48 h | Long sessions need credential refresh |
+| ">50% of issued credentials should be used" | Over-issuing may be throttled |
+| **IPv6: relay addresses are IPv4-only** | An IPv6-only peer can only achieve **one-sided** relay. Expected on some mobile networks |
+| No RFC6062 TCP relay | A browser blocking UDP entirely cannot connect via TURN |
+| Per-allocation limits: >5 new IPs/sec, >5–10 kpps, >50–100 Mbps | **Per call, not account-wide.** No single call can abuse |
+| ICE restart | Explicitly recommended for maintenance resilience |
+
+**Do not create an account or enable chargeable usage without explicit approval.**
+
+### 12.3 Peer IP exposure
+
+In a direct P2P call, WebRTC ICE typically reveals a host or STUN-reflexive IP to the peer
+unless a TURN-only policy is enforced. **The current architecture addresses this nowhere**,
+because there is no architecture yet. If peer-IP privacy matters, TURN-only for media is
+the standard answer — at full bandwidth cost (no free direct path).
+
+### 12.4 Managed vs self-hosted coturn
+
+| | Cloudflare managed | Self-hosted coturn |
+|---|---|---|
+| Setup | Zero infrastructure | Provision VPS, ports, TLS, firewall |
+| Edge latency | Anycast, ~300+ cities | Single region |
+| Ops burden | None | Patches, abuse, monitoring |
+| Cost | $0.05/GB after 1 TB free | VPS + bandwidth, region-dependent |
+| Best when | You don't want to run infrastructure | Flat predictable cost at large scale |
+
+**Recommendation: Cloudflare managed for the pilot.** One founder, free-tier
+infrastructure, zero measurement history. Revisit around ~5M relayed minutes/month.
+
+### 12.5 Quality settings to test
+
+| Setting | Value | Note |
+|---|---|---|
+| Video ideal | **480p** (640×480) | |
+| Video max | **720p** (1280×720) | |
+| Frame rate | 24 fps ideal, 30 max | 24 is plenty for faces |
+| Video bitrate ceiling | **800 kbps** @480p, **1.2 Mbps** @720p | via `maxBitrate` — resolution ≠ bitrate |
+| Audio | Opus, **mono**, 32 kbps, `useinbandfec` | Stereo is wasted for speech |
+| Adaptive ladder | drop to 360p on loss; audio-only if sustained loss >5% | hysteresis to avoid oscillation |
+| Audio-only fallback | **A feature, not a failure.** Show a clear notice | |
+
+> **No automatic quality downgrade solely because TURN was selected.** Use measured
+> conditions and an explicitly approved cost policy.
+
+**Do not present a fixed "cost per resolution" as measured fact.** Quality, duration,
+one-/two-sided TURN, audio, and overhead assumptions must be stated separately. No call has
+ever been placed, so **no bandwidth figure in this document is measured.**
+
+Illustrative arithmetic only — **GB per relayed call-minute ≈ bitrate_Mbps × 0.9 ÷ 60**,
+with the free 1,000 GB/month allowance applying before $0.05/GB overage. Two people
+talking 15 minutes is **15 call-minutes**, not 30 — do not double-count participant-hours.
+
+---
+
+## 13. TEST-SETTINGS TABLE
+
+**These are test settings. None is a commercial allowance or proven capacity.**
+
+> **Roulette stays disabled until every required value is explicitly configured.**
+
+| Setting | Env var | Test default | Rationale |
+|---|---|---|---|
+| Feature switch | `ROULETTE_ENABLED` | **`false`** | Must be explicitly `true` |
+| Test account allowlist | `ROULETTE_TEST_ACCOUNTS` | **empty = nobody may queue** | Prevents a real account reaching a live queue |
+| Max concurrent calls | `ROULETTE_MAX_CONCURRENT` | **5** | Founder-specified |
+| Max queue size | `ROULETTE_MAX_QUEUE` | 25 | Bounds memory; overflow gets "busy" |
+| Max wait | `ROULETTE_MAX_WAIT_SEC` | 300 | Then offer leave |
+| Connection timeout | `ROULETTE_CONNECT_TIMEOUT_MS` | 20000 | |
+| Pairing-offer validity | `ROULETTE_PAIR_TIMEOUT_MS` | 45000 | |
+| Long-call policy | `ROULETTE_TEST_CALL_CEILING_MS` | **7200000 (2 h)** | **Runaway guard only**, deliberately far above any plausible product cap. A separate 30-min soak test proves no leak or stall |
+| TURN credential TTL | `ROULETTE_TURN_TTL_SEC` | 3600 | Well under Cloudflare's 48 h max |
+| Credential issuance | `ROULETTE_ICE_PER_HOUR` | 10 | Per user. Farm defence |
+| Emergency disable | `ROULETTE_ENABLED=false` | — | Refuses new pairs, emits `call:terminated`, revokes TURN credentials |
+
+### 13.1 Honest limits of the kill switch
+
+- A **billing alert is not a spending cap.** Real protection is the concurrency cap +
+  duration ceiling + admission control.
+- **Stopping new pairings does not stop cost on existing calls.** Media already flowing
+  continues until both sides stop.
+- Revoking TURN credentials stops egress billing **immediately** — but the call dies.
+- ⚠️ **A signaling command cannot guarantee termination of a modified client's direct media
+  connection.** With P2P, the server cannot force a peer to stop sending. This is inherent
+  to peer-to-peer media and must be described accurately, not papered over.
+
+---
+
+## 14. MODERATION
+
+- Reports enter the existing review workflow.
+- Preserve reporting context **without revealing profiles** to the other participant.
+- **Review how the existing report-count escalation interacts with Roulette.**
+  ⚠️ **[CONFIRMED] current behaviour: 3 reports → shadowban, 5 → suspension, with no human
+  review** (`report.js:65-82`). **Do not introduce permanent sanctions solely from an
+  unreviewed threshold without an approved policy.**
+- ⚠️ **[CONFIRMED] the QA harness deliberately seeds one persona with `shadowbannedAt` and
+  `contentFrozen: true`** (`seedSociety.mjs:169-172`) — automated shadowbans already appear
+  in test data.
+- **If safety controls fail, disable Roulette — not the controls.**
+
+**No recording, face recognition, content uploads, or sampled-frame submission is
+approved.** Neither is anything that resembles them by implication.
+
+---
+
+## 15. STAGED PLAN
+
+| Stage | Build | Gate — must be **proven**, not asserted |
+|---|---|---|
+| **0** | Baseline: commit current work, regenerate dumps, record test-settings table. **Upgrade Render to always-on** | CI green; `ROULETTE_ENABLED=false`; no prod/test mixing |
+| **1** | **Schema + privacy contract + resolver + migration script** | Resolver unit tests pass; backfill reversible; **no code path reaches a partner yet** |
+| **2** | Camera preview, permission denial, track cleanup | Denial handled; `track.stop()` verified on unmount, `pagehide`, tab close |
+| **3** | Authorized two-device call, **manual pairing**, STUN only | Only paired users exchange signaling; **malformed socket events do not crash the process** |
+| **4** | TURN fallback + route measurement | Direct / forced-relay / restrictive-network all classified; secret server-side; credential endpoint auth'd + rate-limited |
+| **5** | Nearby-compatible queue | All §16 queue tests pass |
+| **6** | Skip / recovery / safety | No orphaned sessions; report/block ends the call; camera cleanup on every exit path |
+| **7** | **Roulette Align + accept branching** | No opening letter for roulette source; expiry / decline / simultaneous-accept races pass |
+| **8** | **Unified Chats/Requests + embedded panel** | **Ledger rows 2–13 all compliant**; one inbox; call survives panel; Deck flows unregressed |
+| **9** | Mutual profile reveal | No reveal before consent; asymmetric matrix correct; every identity surface updates |
+| **10** | Device / load / private pilot | Measured reliability, wait time, relay %, capacity |
+
+**Stage 1 scope clarification:** Stage 1 means *define the privacy contract, schema, and
+tests first.* It does **not** mean finishing a sweeping rewrite of all UI components before
+testing a camera preview. Privacy changes are implemented **incrementally, before the
+relevant data can reach a partner** — see §6.
+
+**Every stage:**
+- Keep the feature behind a flag
+- Use isolated testing data
+- Report tests **actually run**
+- Keep a rollback path
+- **Do not silently alter Deck behaviour**
+- **Do not proceed past a gate with failures outstanding**
+
+**Must not regress:** profile discovery, matching, messaging, login, reporting, blocking.
+
+### 15.1 Files likely touched
+
+| Stage | Server | Client |
+|---|---|---|
+| 1 | `models/Alignment.js`, `models/Notification.js`, `models/Interaction.js`, `utils/eligibility.js`, `utils/partnerView.js`, `scripts/migrate-roulette-source.mjs`, `tests/` | — |
+| 2–4 | `socket/roulette.js`, `routes/roulette.js`, `utils/cloudflareTurn.js` | `pages/Roulette.jsx`, `utils/webrtc.js`, `utils/callState.jsx` |
+| 5–6 | `socket/rouletteQueue.js` | `components/Roulette*.jsx` |
+| 7–9 | `routes/notifications.js`, `routes/alignments.js`, `socket/chat.js`, `utils/push.js`, `routes/users.js` | `pages/Matches.jsx`, `components/NotificationDrawer.jsx`, `pages/Chat.jsx`, `components/AppShell.jsx` |
+
+---
+
+## 16. ACCEPTANCE TESTS
+
+### 16.1 Race tests
+
+| ID | Setup | Action | Assertion |
+|---|---|---|---|
+| **R1** | A,B paired | Both send Align; both accept in the same tick | **Exactly 1** Alignment, **1** chat, **same** `alignmentId`; zero duplicate grants |
+| **R2** | A sends Align | Call ends, then B accepts 1 s later | Rejected `EXPIRED`; **no** Alignment created |
+| **R3** | A sends Align | B accepts and call closes simultaneously | Accept either commits before close (**survives**) or after (**expires**). Never both, never neither |
+| **R4** | Not paired | A sends Align twice | One request row; second returns the same `notificationId` |
+| **R5** | Hidden → revealed | Both send reveal simultaneously | Single `accepted` state; **exactly 2** grants, created once |
+| **R6** | Reveal declined | Same person requests reveal again in the same connection | Rejected — no repeat pressure |
+
+### 16.2 Queue tests
+
+| ID | Setup | Action | Assertion |
+|---|---|---|---|
+| **Q1** | A in queue | A double-taps Start | One queue entry, one session, one partner |
+| **Q2** | A,B compatible | Match runs | Neither assigned twice |
+| **Q3** | A blocked by B | Both wait | **Never paired** — checked at pair time, not just queue time |
+| **Q4** | Small pool | Only recent partners available | Explicit "meet X again?" offered; **not** a silent hard block |
+| **Q5** | No compatible partner | Wait | "Nobody compatible nearby right now" + 3 options; **no** automatic expansion |
+| **Q6** | A skips B | B's session ends | "Conversation ended · Find next"; **no** new Align to A |
+| **Q7** | A unmatches B | Both later in Roulette | **Never paired** |
+| **Q8** | A,B already connected | Both in Roulette | Allowed; **no duplicate**, **no new Align**, "You're already connected · Open Chat"; existing grants preserved |
+
+### 16.3 Privacy contract tests
+
+| ID | Setup | Action | Assertion |
+|---|---|---|---|
+| **P1** | Hidden A,B paired | Inspect every partner-facing payload | **Zero** occurrences of A's real `name`, `photos[]`, `college`, `email`, `dob` |
+| **P2** | Hidden connection | A opens chat | Header shows **call name**; profile control **absent**, not merely disabled |
+| **P3** | Hidden connection | A types | Remote receives **no** name in the typing event |
+| **P4** | Hidden connection, B offline | Send message | Push **title and body** contain no real name |
+| **P5** | Hidden connection | A types B's real name in Chats search | **No result** |
+| **P6** | Hidden connection | Any profile-update save | `profile-updated` payload contains no real identity for a hidden partner |
+| **P7** | Hidden request accepted | Inspect chat messages | **Zero** opening-letter rows; no copied photo/prompt text |
+| **P8** | A visible, B hidden | Each views the other | A's profile reachable by B ✅; **A cannot** view B ✅ |
+| **P9** | Mutual reveal accepted | Both open profiles | Real name + photos appear; **2** grants exist; row label stays the call name |
+| **P10** | Screen-reader sweep | Hidden connection | No `alt` / `aria-label` contains the real name |
+| **P11** | Blocked pair | Any payload path | Neither name reaches the other, **including** push |
+
+### 16.4 Call-safety tests
+
+| ID | Action | Assertion |
+|---|---|---|
+| **C1** | Malformed / empty payload on every roulette socket event | Server survives; handler returns silently (pattern `chat.js:151-162`) |
+| **C2** | Late ICE candidate from a prior `sessionId` | Rejected |
+| **C3** | Socket dies without clean disconnect | Reaped within the reaper interval; partner re-queued with **original** wait start |
+| **C4** | Refresh mid-call | Camera stops; partner returned to READY |
+| **C5** | Network change mid-call | ICE restart; recover or cleanly end |
+| **C6** | Report during call | Call ends immediately; reported user **never** re-paired |
+| **C7** | Block during call | Call ends immediately; removed from any queue |
+| **C8** | Open chat panel during call | **Call continues** — verified: Chat is a sibling (`AppShell.jsx:347` vs `:333`) |
+| **C9** | Switch tab during call | "Leave this call?" → confirm ends, cancel preserves |
+| **C10** | Back with panel open | Closes panel first, then offers to leave |
+
+### 16.5 How to verify
+
+| Type | Covers | How |
+|---|---|---|
+| Unit / integration | R1–R6, Q1–Q8, P1, P7, P8 | `node:test` files in `server/tests/` |
+| Two devices | Q2, Q8, C2–C10 | Two real phones/laptops |
+| Network | C5, TURN path | One device campus Wi-Fi, one on mobile data |
+| Payload inspection | P1, P3–P6, P10, P11 | `curl` + socket client + devtools Network tab |
+| Comprehension | §19 | Fresh testers |
+
+⚠️ **P1 and P3–P6 cannot be verified from the client alone** — they require inspecting raw
+server responses and push payloads.
+
+---
+
+## 17. UNRESOLVED DECISIONS
+
+| # | Question | Recommendation |
+|---|---|---|
+| **1** | **Hidden-Roulette pair later aligns on the Deck.** Same `pairKey` → same row. Does a Deck align grant access, overwriting hidden state? | **No silent upgrade.** Keep `source` immutable; require the hidden party to explicitly accept a "share profiles" request. Otherwise "Profile hidden" breaks by using the app normally |
+| **2** | Should a Roulette Align permanently suppress that person's Deck card? | **Yes** — reuse the permanent-`archive` Interaction |
+| **3** | Conversation nickname: one shared, or one per viewer? | **One shared for v1.** Decision 9.1 removes the rename hazard |
+| **4** | Reveal-request expiry window? | **7 days**, then `expired`. One request per recipient per connection after |
+| **5** | Does hidden mode apply when meeting an existing connection? | **Scoped to Roulette.** Grants persist. Label the call: "You're already connected — profiles visible to each other" |
+| **6** | Intention (Social/Dating/Either): per-session or persistent? | **Per-session**, defaulting to last choice, visible and editable |
+| **7** | Does "Search farther" persist across sessions? | **No.** Re-consent every time |
+| **8** | Do any gender/orientation preferences apply to Roulette matching? | **None unless specified.** Social/Dating/Either is the only compatibility input |
+
+---
+
+## 18. EXPLICITLY OUT OF SCOPE
+
+- Group finder and double dates
+- Missed-connections contact after a skip
+- Payments and premium packages
+- Automatic recording / content inspection / NSFW detection
+- Full rebranding or internal-key renaming
+- Multi-server architecture without demonstrated need
+- Unlimited-use promises
+- App-wide background calling
+- Multiple independent request/chat systems
+- Call-duration and daily-session **commercial** caps — deliberately undecided
+
+**In scope** because the feature depends on them: authentication gaps, identity exposure,
+request handling, and call safety.
+
+---
+
+## 19. WHAT MUST BE DISCLOSED IN THE UI
+
+The honest full version of the privacy promise:
+
+> "Roulette does not display your profile until you choose to share it — **within Roulette
+> conversations.** If the same person appears in your Deck later, you will see their normal
+> public profile. That is how Deck works."
+
+**This must appear before the user chooses hidden mode**, not buried in a policy. It is the
+single most likely source of the "I thought my profile was hidden" failure in §20.
+
+**Also remove from the v1 placeholder screen** `[CONFIRMED]`:
+- `"Each session is anonymous until you choose to reveal yourself."` — false; the camera
+  is on (`Roulette.jsx:102`)
+- `"...that flows straight into your Matches."` — implies post-call matching that does not
+  exist (`Roulette.jsx:94`)
+- `Splash.jsx:1475` — `"The preview cards can be swiped horizontally."` — **no swipe
+  handler exists anywhere in the codebase**
+
+---
+
+## 20. COMPREHENSIBILITY CHECKS
+
+Before a broader student launch, ask fresh testers to:
+
+1. Start without revealing their profile
+2. Explain what their partner can see
+3. Send / accept Align
+4. Find the saved conversation afterward
+5. Share profiles mutually
+6. Decline, leave, block, and report
+7. Open and close chat without ending the call
+
+**Watch especially for these — they are design failures to correct, not user mistakes:**
+
+- "I thought Align revealed my profile."
+- "I thought accepting meant agreeing to dating."
+- "I couldn't find the request."
+- "I accidentally left while opening chat."
+- "I thought anonymous meant nobody could identify me."
+
+Note: "I couldn't find the request" is **already a live bug** — the bell is Deck-only today
+(`Header.jsx:150`), so requests are unreachable from three of four tabs.
+
+---
+
+## 21. THE ROUNDETTE ENTRY SCREEN
+
+One compact setup screen — **not** multiple compulsory onboarding pages.
+
+```text
+ROULETTE
+
+Meet college students around your area.
+
+So, what are you here for, huh?
+[Social]  [Dating]  [Either]
+
+Your call name
+[Moonwalker                    Edit]
+
+Profile hidden
+Your face is visible. Your profile is not displayed.
+
+[Preview & start]
+
+Preferences
+```
+
+**Defaults and rules:**
+
+- **Profile hidden is the initial default.**
+- Generate a temporary name; editing is optional.
+- Require a deliberate **intention** selection on first use.
+- Remember approved preferences for future visits, but keep them **visible and editable**.
+- "Show my profile" lives under **Preferences**, not another mandatory setup screen.
+- Temporary names must **not** impersonate official staff or contain abusive content.
+- Changing a name must **not** reset account restrictions, blocks, or report history.
+- Real-user access requires genuine account eligibility. Development login arrangements
+  must remain isolated — **[CONFIRMED] today the only isolation is the hard-asserted
+  `matchalize_test` database name** (`tests/lib/mongo.mjs:5,29-37`), with **no
+  `isSeed`/`isTest` flag anywhere**. Do not add one.
+
+### 21.1 Mobile call layout (starting point)
+
+```text
+┌─────────────────────────────┐
+│ Temporary name     Safety ⋮ │
+├─────────────────────────────┤
+│                             │
+│        Partner video        │
+│                             │
+├─────────────────────────────┤
+│       Smaller self-preview  │
+├─────────────────────────────┤
+│ Mic   Camera   Align   Chat │
+│        Next       Leave     │
+└─────────────────────────────┘
+```
+
+Prototype the stacked arrangement first. **Test relative tile sizes rather than assuming
+equal halves are best.**
+
+**Controls:** tap video to hide secondary controls; keep Leave and an obvious safety entry
+reachable; retain understandable camera/mic status; **no swipe-to-next in v1**; prevent
+hidden controls from receiving accidental taps.
+
+**Desktop:** keep video and chat side by side where space allows.
+
+⚠️ **[CONFIRMED] Chat cannot be embedded without a geometry change** — `Chat.jsx:1081` is
+`position: fixed; inset: 0` with no size clamp. This is a real Stage 8 task.
+
+---
+
+## 22. WHAT THIS PLAN DELIBERATELY CORRECTS FROM v1
+
+| v1 said | v2 says | Why |
+|---|---|---|
+| `Alignment.origin = 'discover' \| 'roulette'` | **`source`** | `Interaction.origin` already exists with a different enum |
+| "Skip = permanent (no re-queue)" | **Next re-searches** for the presser; other person gets "Conversation ended · Find next" | Matches the actual product flow |
+| Self-hosted coturn, ₹400–500/mo VPS | **Cloudflare managed TURN**, 1,000 GB free | Verified free tier; kills the coturn ops burden |
+| "free = 10 connections/day" as a monetization seam | **No invented caps.** Pilot limits are test settings | A 10/day cap is a commercial decision, not an engineering default |
+| Mandatory gender-ratio rails | **None unless specified** (§17 #8) | Not invented |
+| "anonymous until you reveal" | **Never say anonymous** — the camera is on | False promise |
+| No hidden-profile concept | **First-class**, with a directional grant model | The core of v2 |
+| Requests in a Deck-only bell | **Requests inside Chats** | Reachability |
+| A fixed cost-per-resolution table | **Assumptions stated separately; nothing labelled measured** | v1's table had arithmetic errors |
+
+---
+
+**Design documented. Not implemented. Stage 0 is the next action.**
+
 ````
-
-### ./solved.md
-
-```
-Here's the full picture 📋
-
-## ✅ SOLVED — 5 fixes, all verified with proof
-
-| # | Fix | Proof it works |
-|---|-----|----------------|
-| 1 | **Settings loading** — app read its config file too late before anything ran | Real Cloudinary URLs now come back from uploads |
-| 2 | **Photo upload blocker** — removed the paid-plan feature (`aws_rek`) that was rejecting every upload | Test upload → `res.cloudinary.com/...` ✅ |
-| 3 | **Freeze attack** — one crafted request could lock up the whole server forever | multer upgraded 1.4.5 → 2.4.0, audit warnings down |
-| 4 | **Block lookup speed** — "who blocked me" used to read the entire blocks table | New index confirmed **live in the database** |
-| 5 | **Login code scrambling** — 6-digit codes sat readable in the DB | DB row now shows only a fingerprint; mixed-case login test passed |
-
-## 🔄 IN FLIGHT — patches written, not yet applied
-
-| # | Fix | Waiting on |
-|---|-----|-----------|
-| **#5** | **Admin notes leak** — private staff notes sent to every user's browser | Your AI's lone-`+` projection test (report.js) |
-| **#6** | **Environment posture** — server refuses to boot without a valid `NODE_ENV` | Apply + the 3 side steps (`.env`, `.env.test`, Render) |
-| **#7** | **Rate-limit drift** — honest limit (500/5min), body size 10MB → 1MB | Apply + the 2 quick verify tests |
-
-
-```
 

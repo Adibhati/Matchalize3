@@ -10,8 +10,9 @@ import PopoutItem from './PopoutItem';
 import ReportModal from './chat/ReportModal';
 import { triggerHaptic } from '../utils/haptics';
 import { toast } from '../utils/toast';
-import { Sparkle, MoreVertical, Calendar, Flag } from 'lucide-react';
+import { Sparkle, MoreVertical, Calendar, Flag, Heart } from 'lucide-react';
 import neu from '../styles/neu';
+import { useIsDesktop } from '../utils/useIsDesktop';
 
 /* Neubrutalist palette inspired by the supplied reference; existing neu tokens keep their names. */
 const F = {
@@ -32,6 +33,10 @@ const C = {
   coral: '#FF7399',
   green: '#B8F0C7',
   pink: '#C8A7FF',
+  sky: '#8ED8F5',
+  lavender: '#C8B6F2',
+  intent: '#F5B7C8',
+  amber: '#F5B942',
   red: '#D9485D',
   hair: '#171414',
   line: 'rgba(23, 20, 20, .22)',
@@ -45,14 +50,14 @@ const MOMENTUM_MS = 240;
 const SIDE_MARGIN = 12;
 const TOP_GAP = 16;
 const BOTTOM_GAP = 16;
-const PEEK_PAD = 10;
+const PEEK_PAD = -6;
 const PEEK_FALLBACK = 148;
+const HANDLE_PEEK_HEIGHT = 20;
 const HEADER_LEAD = 12;
 const HEADER_RELEASE = 8;
 const HEADER_FALLBACK_BOTTOM = 54;
 const MENU_RAISE = 84;
 
-const TILE = ['coral', 'yellow', 'green', 'pink'];
 const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
 
 /* Design-only stylesheet. Gesture geometry and React behavior remain intact. */
@@ -73,6 +78,14 @@ const PROFILE_CARD_CSS = `
     --coral: ${C.coral};
     --green: ${C.green};
     --pink: ${C.pink};
+    --topic-name: ${C.coral};
+    --topic-gender: ${C.green};
+    --topic-meeting: ${C.sky};
+    --topic-year: ${C.lavender};
+    --topic-intent: ${C.intent};
+    --topic-location: ${C.amber};
+    --topic-photo: ${C.ink};
+    --topic-birthday: ${C.yellow};
     --red: ${C.red};
     --bw: 2px;
     --r: 16px;
@@ -86,6 +99,118 @@ const PROFILE_CARD_CSS = `
     font-family: ${F.body};
     color: var(--ink);
     -webkit-font-smoothing: antialiased;
+  }
+
+  .pc-root.pc-desktop .pc-heroWrap {
+    position: relative;
+    inset: auto;
+    grid-column: 1;
+    width: auto;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    border: 2px solid var(--ink);
+    border-radius: 24px;
+    box-shadow: 6px 6px 0 var(--ink);
+  }
+
+  .pc-root.pc-tablet .pc-heroWrap {
+    inset: 0;
+    overflow: hidden;
+    border-radius: inherit;
+  }
+
+  .pc-root.pc-tablet {
+    box-sizing: border-box;
+    border: 2px solid var(--ink);
+    border-radius: 24px;
+    box-shadow: 6px 6px 0 var(--ink);
+  }
+
+  .pc-root.pc-desktop .pc-shade {
+    background: linear-gradient(90deg, rgba(23,20,20,.12) 55%, rgba(23,20,20,.36) 100%);
+  }
+
+  .pc-root.pc-desktop {
+    display: grid;
+    grid-template-columns: minmax(0, 43fr) minmax(0, 57fr);
+    gap: 18px;
+    padding: 16px;
+    box-sizing: border-box;
+    background: transparent;
+  }
+
+  .pc-root.pc-desktop .pc-sheet {
+    position: relative;
+    inset: auto;
+    grid-column: 2;
+    box-sizing: border-box;
+    width: auto;
+    height: 100%;
+    min-height: 0;
+    max-height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    cursor: default;
+    border: 2px solid var(--ink);
+    border-radius: 24px;
+    box-shadow: 6px 6px 0 var(--ink);
+    padding: 24px 28px 32px;
+    gap: 22px;
+    user-select: text;
+    -webkit-user-select: text;
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  .pc-root.pc-desktop .pc-sheet::-webkit-scrollbar {
+    display: block;
+    width: 12px;
+  }
+
+  .pc-root.pc-desktop .pc-sheet::-webkit-scrollbar-track {
+    margin: 24px 4px;
+    background: transparent;
+  }
+
+  .pc-root.pc-desktop .pc-sheet::-webkit-scrollbar-thumb {
+    border: 4px solid var(--paper);
+    border-radius: 999px;
+    background: var(--ink-3);
+    background-clip: padding-box;
+  }
+
+  .pc-root.pc-desktop .pc-grabber {
+    display: none;
+  }
+
+  .pc-root.pc-desktop .pc-sheet:active {
+    cursor: default;
+  }
+
+  .pc-root.pc-desktop .pc-name {
+    font-size: clamp(28px, 3vw, 39px);
+    line-height: 1.05;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  @media (min-width: 768px) and (max-width: 1100px) {
+    .pc-root.pc-desktop {
+      grid-template-columns: minmax(0, 40fr) minmax(0, 60fr);
+      gap: 12px;
+      padding: 12px;
+    }
+
+    .pc-root.pc-desktop .pc-sheet {
+      padding-right: 18px;
+      padding-left: 18px;
+    }
   }
 
   .pc-root::before {
@@ -114,12 +239,9 @@ const PROFILE_CARD_CSS = `
     height: 100%;
     object-fit: cover;
     display: block;
-    opacity: 0;
-    transition: opacity .35s ease-out;
+    opacity: 1;
     -webkit-user-drag: none;
   }
-
-  .pc-hero.is-loaded { opacity: 1; }
 
   .pc-shade {
     position: absolute;
@@ -186,7 +308,6 @@ const PROFILE_CARD_CSS = `
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    background-image: linear-gradient(180deg, transparent 78%, var(--yellow) 78%);
     padding: 0 6px 5px 0;
   }
 
@@ -195,7 +316,7 @@ const PROFILE_CARD_CSS = `
     font-weight: 700;
     font-size: .65em;
     letter-spacing: 0;
-    color: var(--ink-2);
+    color: var(--topic-birthday);
   }
 
   .pc-college {
@@ -206,6 +327,8 @@ const PROFILE_CARD_CSS = `
     text-transform: uppercase;
     color: var(--ink-2);
     margin: 10px 0 0;
+    border-left: 3px solid var(--topic-location);
+    padding-left: 7px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -240,6 +363,15 @@ const PROFILE_CARD_CSS = `
   .pc-iconbtn.pressed {
     background: var(--yellow);
     color: var(--ink);
+    box-shadow: 1px 1px 0 var(--ink);
+    transform: translate(2px, 2px);
+  }
+
+  .pc-idrow > .pc-iconbtn.pressed,
+  .pc-idrow > .pc-iconbtn.pressed:hover,
+  .pc-idrow > .pc-iconbtn:active {
+    background: var(--yellow);
+    filter: brightness(.94);
     box-shadow: 1px 1px 0 var(--ink);
     transform: translate(2px, 2px);
   }
@@ -296,6 +428,12 @@ const PROFILE_CARD_CSS = `
   .pc-mark.coral { background: var(--coral); }
   .pc-mark.green { background: var(--green); }
   .pc-mark.pink { background: var(--pink); }
+  .pc-mark.sky { background: var(--topic-meeting); }
+  .pc-mark.lavender { background: var(--topic-year); }
+  .pc-mark.intent { background: var(--topic-intent); }
+  .pc-mark.amber { background: var(--topic-location); }
+  .pc-mark.ink { background: var(--topic-photo); }
+  .pc-mark.neutral { background: var(--ink-3); }
 
   .pc-stitle {
     font-family: ${F.mono};
@@ -346,6 +484,8 @@ const PROFILE_CARD_CSS = `
   .pc-tile.coral { background: var(--coral); }
   .pc-tile.green { background: var(--green); }
   .pc-tile.pink { background: var(--pink); }
+  .pc-tile.lavender { background: var(--topic-year); }
+  .pc-tile.sky { background: var(--topic-meeting); }
 
   .pc-cellinfo { min-width: 0; }
 
@@ -397,10 +537,11 @@ const PROFILE_CARD_CSS = `
     transition: background .14s ease, color .14s ease, box-shadow .14s ease, transform .14s ease;
   }
 
-  .pc-chip.acc { background: var(--yellow); }
+  .pc-chip.acc { background: var(--topic-intent); }
+  .pc-chip.meeting { background: var(--topic-meeting); }
 
   .pc-chip:active {
-    background: var(--pink);
+    filter: brightness(.94);
     color: var(--ink);
     border-color: var(--ink);
     box-shadow: 1px 1px 0 var(--ink);
@@ -408,10 +549,47 @@ const PROFILE_CARD_CSS = `
   }
 
   .pc-prompt {
+    position: relative;
     padding: 15px;
     cursor: pointer;
     background: var(--card);
     transition: background .14s ease, box-shadow .14s ease, transform .14s ease;
+  }
+
+  .pc-exhibit-heart {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18.779px;
+    height: 18.779px;
+    border: 2px solid var(--ink);
+    border-radius: 7.303px;
+    background: #5BD98A;
+    color: #fff;
+    pointer-events: none;
+  }
+
+  .pc-exhibit-heart svg {
+    display: block;
+    width: 8.868px;
+    height: 8.868px;
+    flex-shrink: 0;
+  }
+
+  @media (min-width: 1200px) {
+    .pc-exhibit-heart {
+      width: 24.495px;
+      height: 24.495px;
+    }
+
+    .pc-exhibit-heart svg {
+      width: 9.389px;
+      height: 9.389px;
+    }
   }
 
   .pc-promptq {
@@ -444,6 +622,7 @@ const PROFILE_CARD_CSS = `
   }
 
   .pc-ph {
+    position: relative;
     background: var(--card);
     border: 2px solid var(--ink);
     border-radius: 15px;
@@ -475,6 +654,146 @@ const PROFILE_CARD_CSS = `
 
   .pc-ph-in img.is-loaded { opacity: 1; }
 
+  @media (min-width: 1200px) {
+    .pc-root.pc-desktop .pc-sheet {
+      padding: clamp(26px, 2.4vw, 40px) clamp(24px, 2.2vw, 38px) 36px;
+      gap: clamp(24px, 2vw, 34px);
+    }
+
+    .pc-root.pc-desktop .pc-name {
+      font-size: clamp(36px, 3vw, 52px);
+    }
+
+    .pc-root.pc-desktop .pc-age {
+      font-size: .68em;
+    }
+
+    .pc-root.pc-desktop .pc-college {
+      font-size: clamp(10px, .85vw, 13px);
+      padding-left: 9px;
+    }
+
+    .pc-root.pc-desktop .pc-iconbtn {
+      width: 46px;
+      height: 46px;
+    }
+
+    .pc-root.pc-desktop .pc-sec {
+      gap: 2px;
+    }
+
+    .pc-root.pc-desktop .pc-shead {
+      gap: 11px;
+      margin-bottom: 14px;
+      padding-bottom: 10px;
+    }
+
+    .pc-root.pc-desktop .pc-mark {
+      width: 12px;
+      height: 12px;
+    }
+
+    .pc-root.pc-desktop .pc-stitle {
+      font-size: clamp(11px, .9vw, 14px);
+    }
+
+    .pc-root.pc-desktop .pc-scount {
+      font-size: clamp(10px, .8vw, 12px);
+    }
+
+    .pc-root.pc-desktop .pc-card {
+      border-radius: 18px;
+      box-shadow: 5px 5px 0 var(--ink);
+    }
+
+    .pc-root.pc-desktop .pc-sec > .pc-card {
+      padding: 18px !important;
+    }
+
+    .pc-root.pc-desktop .pc-grid {
+      gap: 18px 16px;
+    }
+
+    .pc-root.pc-desktop .pc-cell {
+      gap: 11px;
+    }
+
+    .pc-root.pc-desktop .pc-tile {
+      width: 38px;
+      height: 38px;
+      border-radius: 11px;
+    }
+
+    .pc-root.pc-desktop .pc-tile svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .pc-root.pc-desktop .pc-clabel {
+      font-size: clamp(9px, .72vw, 11px);
+    }
+
+    .pc-root.pc-desktop .pc-cval {
+      font-size: clamp(15px, 1.15vw, 18px);
+    }
+
+    .pc-root.pc-desktop .pc-bio {
+      font-size: clamp(16px, 1.25vw, 19px);
+      line-height: 1.65;
+    }
+
+    .pc-root.pc-desktop .pc-pills {
+      gap: 11px;
+    }
+
+    .pc-root.pc-desktop .pc-chip {
+      padding: 9px 13px;
+      border-radius: 12px;
+      font-size: clamp(10px, .78vw, 12px);
+    }
+
+    .pc-root.pc-desktop .pc-prompt {
+      padding: 19px;
+      border-radius: 18px;
+    }
+
+    .pc-root.pc-desktop .pc-promptq {
+      font-size: clamp(11px, .82vw, 13px);
+    }
+
+    .pc-root.pc-desktop .pc-prompta {
+      font-size: clamp(18px, 1.3vw, 21px);
+    }
+
+    .pc-root.pc-desktop .pc-ph {
+      padding: 7px;
+      border-radius: 17px;
+    }
+
+    .pc-root.pc-desktop .pc-ph-in {
+      border-radius: 12px;
+    }
+  }
+
+  @media (min-width: 1024px) and (max-width: 1100px) {
+    .pc-root.pc-desktop .pc-sheet {
+      padding: 24px 18px 30px;
+      gap: 22px;
+    }
+
+    .pc-root.pc-desktop .pc-name {
+      font-size: 36px;
+    }
+
+    .pc-root.pc-desktop .pc-sec > .pc-card {
+      padding: 15px !important;
+    }
+
+    .pc-root.pc-desktop .pc-grid {
+      gap: 14px 10px;
+    }
+  }
+
   @media (hover: hover) and (pointer: fine) {
     .pc-iconbtn:hover {
       background: var(--pink);
@@ -483,11 +802,75 @@ const PROFILE_CARD_CSS = `
     }
 
     .pc-iconbtn.pressed:hover { background: var(--yellow); }
+    .pc-root.pc-desktop .pc-idrow > .pc-iconbtn:hover,
+    .pc-root.pc-desktop .pc-idrow > .pc-iconbtn.pressed:hover {
+      background: var(--card);
+      filter: brightness(.96);
+      box-shadow: 3px 3px 0 var(--ink);
+      transform: none;
+    }
+    .pc-root.pc-desktop .pc-idrow > .pc-iconbtn.pressed,
+    .pc-root.pc-desktop .pc-idrow > .pc-iconbtn.pressed:hover {
+      background: var(--yellow);
+      filter: brightness(.94);
+      box-shadow: 1px 1px 0 var(--ink);
+      transform: translate(2px, 2px);
+    }
+    .pc-root.pc-desktop .pc-idrow > .pc-iconbtn:not(.pressed):active,
+    .pc-root.pc-desktop .pc-idrow > .pc-iconbtn.pressed:active {
+      background: var(--yellow);
+      filter: brightness(.94);
+      box-shadow: 1px 1px 0 var(--ink);
+      transform: translate(2px, 2px);
+    }
+    .pc-root:not(.pc-desktop) .pc-idrow > .pc-iconbtn:not(.pressed):hover {
+      background: var(--card);
+      box-shadow: 3px 3px 0 var(--ink);
+      transform: none;
+    }
+    .pc-root:not(.pc-desktop) .pc-idrow > .pc-iconbtn.pressed:hover {
+      background: var(--yellow);
+      filter: brightness(.94);
+      box-shadow: 1px 1px 0 var(--ink);
+      transform: translate(2px, 2px);
+    }
     .pc-menubtn:hover { background: #FFE4E5; padding-left: 12px; }
-    .pc-chip:hover { background: var(--pink); }
-    .pc-chip.acc:hover { background: var(--yellow); }
+    .pc-chip:hover { filter: brightness(.96); }
     .pc-prompt:hover { background: #FFF0C0; box-shadow: 6px 6px 0 var(--ink); transform: translate(-2px, -2px); }
     .pc-ph:hover { box-shadow: 6px 6px 0 var(--ink); transform: translate(-2px, -2px); }
+    .pc-root.pc-desktop .pc-prompt:hover {
+      background: #5BD98A;
+      box-shadow: 5px 5px 0 var(--ink);
+      transform: none;
+    }
+    .pc-root.pc-desktop .pc-ph:hover {
+      background: #5BD98A;
+      box-shadow: 4px 4px 0 var(--ink);
+      transform: none;
+    }
+    .pc-root.pc-desktop .pc-prompt:active {
+      background: #5BD98A;
+      box-shadow: 1px 1px 0 var(--ink);
+      transform: translate(2px, 2px);
+    }
+    .pc-root.pc-desktop .pc-ph:active {
+      background: #5BD98A;
+      box-shadow: 1px 1px 0 var(--ink);
+      transform: translate(2px, 2px);
+    }
+    .pc-root:not(.pc-desktop) .pc-prompt:hover,
+    .pc-root:not(.pc-desktop) .pc-ph:hover {
+      background: #5BD98A;
+      box-shadow: 4px 4px 0 var(--ink);
+      transform: none;
+    }
+  }
+
+  .pc-root:not(.pc-desktop) .pc-prompt:active,
+  .pc-root:not(.pc-desktop) .pc-ph:active {
+    background: #5BD98A;
+    box-shadow: 1px 1px 0 var(--ink);
+    transform: translate(2px, 2px);
   }
 
   .pc-sheet:focus-visible,
@@ -555,7 +938,14 @@ const PhotoTile = ({ src, wide = false }) => (
         }}
       />
     </div>
+    <ExhibitHeartBadge />
   </div>
+);
+
+const ExhibitHeartBadge = () => (
+  <span className="pc-exhibit-heart" aria-hidden="true">
+    <Heart aria-hidden="true" fill="currentColor" strokeWidth={3.2} />
+  </span>
 );
 
 const ProfileCard = ({
@@ -563,7 +953,14 @@ const ProfileCard = ({
   onAction,
   onSheetNearHeader,
   isGated = false,
+  isDesktop = false,
+  isTabletLayout = false,
+  readOnly = false,
+  onPhoneReplyKeyboardChange,
 }) => {
+  const desktopLayout = useIsDesktop() || isDesktop;
+  const desktopLayoutRef = useRef(desktopLayout);
+  desktopLayoutRef.current = desktopLayout;
   const rootRef = useRef(null);
   const sheetRef = useRef(null);
   const menuBtnRef = useRef(null);
@@ -579,33 +976,32 @@ const ProfileCard = ({
     () => (Array.isArray(profile.intent) ? profile.intent : [profile.intent].filter(Boolean)),
     [profile],
   );
+  const interestedIn = Array.isArray(profile.interestedIn) ? profile.interestedIn : [];
 
   const [rootH, setRootH] = useState(0);
   const [sheetH, setSheetH] = useState(0);
   const rootHRef = useRef(0);
   const sheetHRef = useRef(0);
-  const entranceTimer = useRef(null);
-  const entranceUntil = useRef(0);
-  const entranceDoneFor = useRef(null);
+  const sheetPositionedFor = useRef(null);
+  const sheetEntranceInProgress = useRef(false);
   const peekHRef = useRef(0);
+  const lastMeasuredGeometryRef = useRef({ h: 0, w: 0, peek: 0 });
 
-  const cancelEntrance = useCallback(() => {
-    if (entranceTimer.current) {
-      clearTimeout(entranceTimer.current);
-      entranceTimer.current = null;
-    }
-    entranceUntil.current = 0;
-  }, []);
-
-  const computeBounds = (h, w) => {
+  const computeBounds = (h, w, peekOverride) => {
     if (!h || !w) return { lo: 0, hi: 0, ready: false, short: true };
+    if (desktopLayoutRef.current) {
+      return { lo: 0, hi: 0, collapsedHi: 0, ready: true, short: true };
+    }
 
-    const lo = Math.min(TOP_GAP, h - BOTTOM_GAP - w);
-    const peek = peekHRef.current || PEEK_FALLBACK;
-    const short = w <= peek;
-    const hi = Math.max(lo, h - BOTTOM_GAP - (short ? w : peek));
+    const peek = peekOverride || peekHRef.current || PEEK_FALLBACK;
+    const short = w < h - TOP_GAP - BOTTOM_GAP;
+    const bottomAnchoredTop = h - BOTTOM_GAP - w;
+    const rest = Math.max(TOP_GAP, h - BOTTOM_GAP - peek);
+    const lo = short ? rest : Math.min(TOP_GAP, bottomAnchoredTop);
+    const hi = rest;
+    const collapsedHi = Math.max(hi, h - BOTTOM_GAP - HANDLE_PEEK_HEIGHT);
 
-    return { lo, hi, ready: true, short };
+    return { lo, hi, collapsedHi, ready: true, short };
   };
 
   const boundsRef = useRef({ lo: 0, hi: 0, ready: false });
@@ -626,19 +1022,6 @@ const ProfileCard = ({
     const p = clamp((hi - y) / (hi - lo), 0, 1);
     return 1 - 0.4 * p;
   });
-
-  const entranceOpacity = useMotionValue(0);
-  const entranceScale = useTransform(entranceOpacity, [0, 1], [0.92, 1]);
-
-  const combinedPhotoOpacity = useTransform(
-    [entranceOpacity, photoOpacity],
-    ([entrance, drag]) => entrance * drag,
-  );
-
-  const combinedPhotoScale = useTransform(
-    [entranceScale, photoScale],
-    ([entrance, drag]) => entrance * drag,
-  );
 
   const reduceMotion = useReducedMotion();
   const SPRING = useRef(null);
@@ -675,7 +1058,6 @@ const ProfileCard = ({
 
   const [showMenu, setShowMenu] = useState(false);
   const [showReport, setShowReport] = useState(false);
-  const [heroLoaded, setHeroLoaded] = useState(false);
 
   const showReportRef = useRef(false);
   useEffect(() => {
@@ -703,42 +1085,71 @@ const ProfileCard = ({
     if (!el) return;
 
     const measure = () => {
+      const h = rootHRef.current;
       const w = el.offsetHeight;
+      const previousGeometry = lastMeasuredGeometryRef.current;
+      const previousBounds = computeBounds(
+        previousGeometry.h,
+        previousGeometry.w,
+        previousGeometry.peek,
+      );
       sheetHRef.current = w;
       setSheetH(w);
 
       const idEl = idRef.current;
       if (idEl) {
-        peekHRef.current = idEl.offsetTop + idEl.offsetHeight + PEEK_PAD;
+        const nearYouEl = idEl.querySelector('.pc-distance');
+        const peekEnd = nearYouEl
+          ? nearYouEl.offsetTop + nearYouEl.offsetHeight
+          : idEl.offsetHeight;
+        peekHRef.current = idEl.offsetTop + peekEnd + PEEK_PAD;
       }
 
-      const h = rootHRef.current;
-      if (!h || !w) return;
-
-      if (entranceDoneFor.current !== profile._id) {
-        entranceDoneFor.current = profile._id;
-        const rest = computeBounds(h, w).hi;
-        cancelEntrance();
-        entranceUntil.current = performance.now() + 900;
-        yMV.set(h);
-
-        entranceTimer.current = setTimeout(() => {
-          entranceTimer.current = null;
-          const hh = rootHRef.current;
-          const ww = sheetHRef.current;
-          const restNow = (hh && ww) ? computeBounds(hh, ww).hi : rest;
-          entranceUntil.current = 0;
-          glideTo(restNow, 'glide');
-        }, 300);
-
+      if (!h || !w) {
+        lastMeasuredGeometryRef.current = {
+          h,
+          w,
+          peek: peekHRef.current,
+        };
         return;
       }
 
-      if (performance.now() < entranceUntil.current) return;
+      if (sheetPositionedFor.current !== profile._id) {
+        sheetPositionedFor.current = profile._id;
+        const rest = computeBounds(h, w, peekHRef.current).hi;
+        lastMeasuredGeometryRef.current = {
+          h,
+          w,
+          peek: peekHRef.current,
+        };
+        yMV.set(rest + h + w);
+        sheetEntranceInProgress.current = true;
+        stopGlide();
+        glideControls.current = animate(yMV, rest, {
+          ...SPRING.current.glide,
+          onComplete: () => {
+            sheetEntranceInProgress.current = false;
+            glideControls.current = null;
+            measure();
+          },
+        });
+        return;
+      }
 
-      const { lo, hi } = computeBounds(h, w);
+      if (sheetEntranceInProgress.current) return;
+
+      const nextBounds = computeBounds(h, w, peekHRef.current);
       const cur = yMV.get();
-      const target = clamp(cur, lo, hi);
+      const wasAtRest =
+        previousBounds.ready && Math.abs(cur - previousBounds.hi) <= 0.5;
+      const target = wasAtRest
+        ? nextBounds.hi
+        : clamp(cur, nextBounds.lo, nextBounds.collapsedHi);
+      lastMeasuredGeometryRef.current = {
+        h,
+        w,
+        peek: peekHRef.current,
+      };
 
       if (Math.abs(target - cur) > 0.5) {
         stopGlide();
@@ -753,8 +1164,9 @@ const ProfileCard = ({
 
     return () => {
       ro.disconnect();
-      cancelEntrance();
-      entranceDoneFor.current = null;
+      stopGlide();
+      sheetEntranceInProgress.current = false;
+      sheetPositionedFor.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -762,29 +1174,8 @@ const ProfileCard = ({
   useEffect(() => {
     setShowMenu(false);
     setShowReport(false);
-    setHeroLoaded(false);
-    entranceOpacity.set(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile._id]);
-
-  useEffect(() => {
-    if (reduceMotion) {
-      entranceOpacity.set(1);
-      return;
-    }
-
-    const controls = animate(entranceOpacity, 1, {
-      duration: 0.5,
-      ease: 'easeOut',
-    });
-
-    return () => controls.stop();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reduceMotion]);
-
-  useEffect(() => {
-    if (heroImgRef.current?.complete) setHeroLoaded(true);
-  }, [profile.photos]);
 
   useEffect(() => {
     if (!showMenu) return;
@@ -852,6 +1243,10 @@ const ProfileCard = ({
   }, []);
 
   useMotionValueEvent(yMV, 'change', (y) => {
+    if (desktopLayoutRef.current) {
+      onSheetNearRef.current?.(false);
+      return;
+    }
     const trigger = headerTriggerRef.current;
     if (trigger == null) return;
 
@@ -891,6 +1286,7 @@ const ProfileCard = ({
     if (!sheet) return;
 
     const onDown = (e) => {
+      if (desktopLayoutRef.current) return;
       if (showReportRef.current) return;
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       if (drag.current) return;
@@ -919,7 +1315,7 @@ const ProfileCard = ({
         return;
       }
 
-      const { lo, hi, ready } = boundsRef.current;
+      const { lo, collapsedHi, ready } = boundsRef.current;
       if (!ready) return;
 
       const dy = e.clientY - d.lastY;
@@ -936,9 +1332,9 @@ const ProfileCard = ({
       if (raw < lo) {
         const over = lo - raw;
         yMV.set(lo - over * RUBBER);
-      } else if (raw > hi) {
-        const over = raw - hi;
-        yMV.set(hi + over * RUBBER);
+      } else if (raw > collapsedHi) {
+        const over = raw - collapsedHi;
+        yMV.set(collapsedHi + over * RUBBER);
       } else {
         yMV.set(raw);
       }
@@ -952,18 +1348,22 @@ const ProfileCard = ({
       const vel = withMomentum ? d.vel : 0;
       drag.current = null;
 
-      const { lo, hi, ready } = boundsRef.current;
+      const { lo, hi, collapsedHi, ready } = boundsRef.current;
       if (!ready) return;
 
       const y = yMV.get();
 
-      if (y < lo || y > hi) {
-        glideTo(clamp(y, lo, hi), 'bounce');
+      if (y < lo || y > collapsedHi) {
+        glideTo(clamp(y, lo, collapsedHi), 'bounce');
         return;
       }
 
-      const projected = clamp(y + vel * MOMENTUM_MS, lo, hi);
-      if (Math.abs(projected - y) > 1) glideTo(projected, 'glide');
+      const projected = clamp(y + vel * MOMENTUM_MS, lo, collapsedHi);
+      const collapseThreshold = hi + (collapsedHi - hi) / 2;
+      const target = projected > hi
+        ? (projected >= collapseThreshold ? collapsedHi : hi)
+        : projected;
+      if (Math.abs(target - y) > 1) glideTo(target, 'glide');
     };
 
     const onUp = (e) => finish(e, true);
@@ -996,13 +1396,13 @@ const ProfileCard = ({
   useEffect(() => {
     if (!watchdogArmedRef.current || drag.current) return;
 
-    const { lo, hi, ready } = boundsRef.current;
+    const { lo, collapsedHi, ready } = boundsRef.current;
     if (!ready) return;
 
     const cur = yMV.get();
 
-    if (cur > hi + 1 || cur < lo - 1) {
-      glideTo(clamp(cur, lo, hi), 'bounce');
+    if (cur > collapsedHi + 1 || cur < lo - 1) {
+      glideTo(clamp(cur, lo, collapsedHi), 'bounce');
     }
   });
 
@@ -1014,11 +1414,21 @@ const ProfileCard = ({
     }
   };
 
+  const onPhotoClick = () => {
+    if (desktopLayout) return;
+
+    const { hi, collapsedHi, ready } = boundsRef.current;
+    if (!ready || yMV.get() < hi + (collapsedHi - hi) / 2) return;
+
+    glideTo(hi, 'glide');
+  };
+
   useEffect(() => {
     const sheet = sheetRef.current;
     if (!sheet) return;
 
     const onWheel = (e) => {
+      if (desktopLayoutRef.current) return;
       const { lo, hi, ready } = boundsRef.current;
       if (!ready) return;
       e.preventDefault();
@@ -1032,6 +1442,7 @@ const ProfileCard = ({
   }, []);
 
   const onSheetKeyDown = (e) => {
+    if (desktopLayout) return;
     const { lo, hi, ready } = boundsRef.current;
     if (!ready) return;
 
@@ -1053,16 +1464,38 @@ const ProfileCard = ({
   const interests = profile.interests || [];
   const photoB = profile.photos?.[1];
   const photoC = profile.photos?.[2];
+  const renderExhibit = (targetId, content, onPhoneReply = false) => {
+    if (readOnly) {
+      return <div key={targetId} style={{ display: 'block' }}>{content}</div>;
+    }
+
+    return (
+      <PopoutItem
+        key={targetId}
+        isGated={isGated}
+        targetId={targetId}
+        onAction={onAction}
+        onPhoneReplyKeyboardChange={onPhoneReply ? onPhoneReplyKeyboardChange : undefined}
+        style={{ display: 'block' }}
+      >
+        {content}
+      </PopoutItem>
+    );
+  };
 
   return (
-    <div ref={rootRef} className="pc-root">
+    <div
+      ref={rootRef}
+      className={`pc-root${desktopLayout ? ' pc-desktop' : ''}${isTabletLayout ? ' pc-tablet' : ''}`}
+    >
       <style>{PROFILE_CARD_CSS}</style>
 
       <motion.div
         className="pc-heroWrap"
+        onClick={onPhotoClick}
         style={{
-          scale: combinedPhotoScale,
-          opacity: combinedPhotoOpacity,
+          scale: photoScale,
+          opacity: photoOpacity,
         }}
       >
         <img
@@ -1070,7 +1503,6 @@ const ProfileCard = ({
           src={profile.photos?.[0] || FALLBACK_IMG}
           alt={profile.name || 'Profile photo'}
           draggable={false}
-          onLoad={() => setHeroLoaded(true)}
           onError={(e) => {
             const img = e.currentTarget;
             if (!img.dataset.err) {
@@ -1079,7 +1511,7 @@ const ProfileCard = ({
             }
           }}
           decoding="async"
-          className={`pc-hero${heroLoaded ? ' is-loaded' : ''}`}
+          className="pc-hero"
         />
         <div className="pc-shade" aria-hidden="true" />
       </motion.div>
@@ -1087,12 +1519,15 @@ const ProfileCard = ({
       <motion.div
         ref={setSheetRefs}
         className="pc-sheet"
-        style={{ y: yMV, visibility: sheetReady ? 'visible' : 'hidden' }}
+        style={{
+          y: yMV,
+          visibility: sheetReady ? 'visible' : 'hidden',
+        }}
         onClickCapture={onClickCapture}
         onKeyDown={onSheetKeyDown}
         tabIndex={0}
         role="region"
-        aria-label={`${profile.name || 'Profile'} details — drag or use arrow keys to move the card`}
+        aria-label={`${profile.name || 'Profile'} details${desktopLayout ? '' : ' — drag or use arrow keys to move the card'}`}
       >
         <div className="pc-grabber" aria-hidden="true" />
 
@@ -1170,24 +1605,24 @@ const ProfileCard = ({
 
         {profile.bio && (
           <div className="pc-sec">
-            <SectionHead mark="green">About</SectionHead>
+            <SectionHead mark="neutral">About</SectionHead>
             <p className="pc-bio">{profile.bio}</p>
           </div>
         )}
 
         <div className="pc-sec">
-          <SectionHead mark="coral">Vitals</SectionHead>
+          <SectionHead mark="lavender">Vitals</SectionHead>
           <div className="pc-card" style={{ padding: 15 }}>
             <div className="pc-grid">
               <FieldCell
                 icon={Calendar}
-                color={TILE[1]}
+                color="lavender"
                 label="Year"
                 value={profile.year || '—'}
               />
               <FieldCell
                 icon={Sparkle}
-                color={TILE[3]}
+                color="green"
                 label="Pronouns"
                 value={profile.pronouns || '—'}
               />
@@ -1196,13 +1631,26 @@ const ProfileCard = ({
         </div>
 
         <div className="pc-sec">
-          <SectionHead mark="pink">Seeking</SectionHead>
+          <SectionHead mark="intent">Seeking</SectionHead>
           <div className="pc-pills">
             {(profileIntent.length ? profileIntent : ['Connection']).map((it, i) => (
               <span key={`${it}-${i}`} className="pc-chip acc">{it}</span>
             ))}
           </div>
         </div>
+
+        {interestedIn.length > 0 && (
+          <div className="pc-sec">
+            <SectionHead mark="sky">Open to</SectionHead>
+            <div className="pc-pills">
+              {interestedIn.map((preference, i) => (
+                <span key={`${preference}-${i}`} className="pc-chip meeting">
+                  {preference}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         {interests.length > 0 && (
           <div className="pc-sec">
@@ -1223,7 +1671,7 @@ const ProfileCard = ({
           || profile.photos?.[3]) && (
           <div className="pc-sec">
             <SectionHead
-              mark="coral"
+            mark="ink"
               count={[
                 prompts[0], prompts[1], prompts[2],
                 photoB, photoC, profile.photos?.[3],
@@ -1233,95 +1681,50 @@ const ProfileCard = ({
             </SectionHead>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {prompts[0]?.question && (
-                <PopoutItem
-                  isGated={isGated}
-                  targetId="prompt_0"
-                  onAction={onAction}
-                  style={{ display: 'block' }}
-                >
+              {prompts[0]?.question && renderExhibit('prompt_0', (
                   <div className="pc-card pc-prompt">
                     <p className="pc-promptq">{prompts[0].question}</p>
                     {prompts[0].answer && (
                       <p className="pc-prompta">{prompts[0].answer}</p>
                     )}
+                    <ExhibitHeartBadge />
                   </div>
-                </PopoutItem>
-              )}
+              ))}
 
               {(photoB || photoC) && (photoB && photoC ? (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                  <PopoutItem
-                    isGated={isGated}
-                    targetId="photo_1"
-                    onAction={onAction}
-                    style={{ display: 'block' }}
-                  >
-                    <PhotoTile src={photoB} />
-                  </PopoutItem>
-
-                  <PopoutItem
-                    isGated={isGated}
-                    targetId="photo_2"
-                    onAction={onAction}
-                    style={{ display: 'block' }}
-                  >
-                    <PhotoTile src={photoC} />
-                  </PopoutItem>
+                  {renderExhibit('photo_1', <PhotoTile src={photoB} />, true)}
+                  {renderExhibit('photo_2', <PhotoTile src={photoC} />, true)}
                 </div>
               ) : (
-                <PopoutItem
-                  isGated={isGated}
-                  targetId={photoB ? 'photo_1' : 'photo_2'}
-                  onAction={onAction}
-                  style={{ display: 'block' }}
-                >
-                  <PhotoTile src={photoB || photoC} wide />
-                </PopoutItem>
+                renderExhibit(
+                  photoB ? 'photo_1' : 'photo_2',
+                  <PhotoTile src={photoB || photoC} wide />,
+                  true,
+                )
               ))}
 
-              {prompts[1]?.question && (
-                <PopoutItem
-                  isGated={isGated}
-                  targetId="prompt_1"
-                  onAction={onAction}
-                  style={{ display: 'block' }}
-                >
+              {prompts[1]?.question && renderExhibit('prompt_1', (
                   <div className="pc-card pc-prompt">
                     <p className="pc-promptq">{prompts[1].question}</p>
                     {prompts[1].answer && (
                       <p className="pc-prompta">{prompts[1].answer}</p>
                     )}
+                    <ExhibitHeartBadge />
                   </div>
-                </PopoutItem>
-              )}
+              ))}
 
-              {profile.photos?.[3] && (
-                <PopoutItem
-                  isGated={isGated}
-                  targetId="photo_3"
-                  onAction={onAction}
-                  style={{ display: 'block' }}
-                >
-                  <PhotoTile src={profile.photos[3]} wide />
-                </PopoutItem>
-              )}
+              {profile.photos?.[3] && renderExhibit('photo_3', <PhotoTile src={profile.photos[3]} wide />, true)}
 
-              {prompts[2]?.question && (
-                <PopoutItem
-                  isGated={isGated}
-                  targetId="prompt_2"
-                  onAction={onAction}
-                  style={{ display: 'block' }}
-                >
+              {prompts[2]?.question && renderExhibit('prompt_2', (
                   <div className="pc-card pc-prompt">
                     <p className="pc-promptq">{prompts[2].question}</p>
                     {prompts[2].answer && (
                       <p className="pc-prompta">{prompts[2].answer}</p>
                     )}
+                    <ExhibitHeartBadge />
                   </div>
-                </PopoutItem>
-              )}
+              ))}
             </div>
           </div>
         )}

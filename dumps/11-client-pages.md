@@ -1,7 +1,7 @@
 # Chunk 11 — Client Pages
 
-> Matchalize · `client-pages` · files 11 of 27 chunks · 1 file(s) · 60 KB · ~17,514 tokens
-> Generated 2026-10-17 21:10.
+> Matchalize · `client-pages` · files 11 of 28 chunks · 1 file(s) · 60 KB · ~17,635 tokens
+> Generated 2026-10-18 20:29.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -649,8 +649,14 @@ function SettingsTab() {
       { key: 'maintenanceMode', label: 'Maintenance Mode', type: 'bool' },
     ]},
     { group: 'Moderation', items: [
-      { key: 'shadowbanThreshold', label: 'Shadowban Score Threshold', type: 'number' },
-      { key: 'autoShadowban', label: 'Auto-Shadowban', type: 'bool' },
+      {
+        key: 'reportReviewThreshold',
+        label: 'Different reporters needed to flag an account for review',
+        type: 'number',
+        min: 1,
+        max: 1000,
+        description: 'Repeat reports from the same person count once. Reports flag an account for review; an admin must decide whether to suspend it.',
+      },
     ]},
   ];
 
@@ -667,6 +673,7 @@ function SettingsTab() {
           {group.items.map(f => (
             <div key={f.key} style={{ marginBottom: 14 }}>
               <label style={label}>{f.label}</label>
+              {f.description && <p style={{ fontSize: 12, color: T.ink2, margin: '6px 0 0' }}>{f.description}</p>}
               {f.type === 'bool'
                 ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
                     <button onClick={() => set(f.key, !settings[f.key])} style={{ width: 46, height: 26, borderRadius: 999, border: `2px solid ${T.ink}`, backgroundColor: settings[f.key] ? T.yellow : T.hair, cursor: 'pointer', position: 'relative', transition: 'background 0.2s' }}>
@@ -676,6 +683,9 @@ function SettingsTab() {
                   </div>
                 : <input
                     type={f.type === 'number' ? 'number' : 'text'}
+                    min={f.min}
+                    max={f.max}
+                    step={f.type === 'number' ? 1 : undefined}
                     value={settings[f.key] ?? ''}
                     onChange={e => set(f.key, f.type === 'number' ? Number(e.target.value) : e.target.value)}
                     style={{ width: '100%', maxWidth: 300, padding: '10px 13px', borderRadius: 11, border: `2px solid ${T.ink}`, backgroundColor: T.card, fontSize: 13.5, fontWeight: 500, color: T.ink, fontFamily: T.fontBody, outline: 'none', marginTop: 8 }}

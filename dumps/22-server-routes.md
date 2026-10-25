@@ -1,1837 +1,1905 @@
 # Chunk 22 — Server Routes
 
-> Matchalize · `server-routes` · files 22 of 27 chunks · 1 file(s) · 85 KB · ~24,929 tokens
-> Generated 2026-10-17 21:10.
+> Matchalize · `server-routes` · files 22 of 28 chunks · 4 file(s) · 71 KB · ~20,897 tokens
+> Generated 2026-10-18 20:29.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
-> - `./server/routes/discover.js`
+> - `./server/routes/admin.js`
+> - `./server/routes/alignments.js`
+> - `./server/routes/auth.js`
+> - `./server/routes/colleges.js`
 
 ---
-### ./server/routes/discover.js
+### ./server/routes/admin.js
 
 ```
 import express from 'express';
+import mongoose from 'mongoose';
 import User from '../models/User.js';
+import Report from '../models/Report.js';
 import Alignment from '../models/Alignment.js';
 import Message from '../models/Message.js';
-import Notification from '../models/Notification.js';
-import Interaction from '../models/Interaction.js';
-import DeckImpression from '../models/DeckImpression.js';
-import DiscoverSession from '../models/DiscoverSession.js';
-import { protect } from '../middleware/auth.js';
-import { sendPushNotification } from '../utils/push.js';
-import { addToQueue } from '../utils/queue.js';
-import { CARD_FIELDS_SELECT, toPublicCard } from '../utils/publicCard.js';
-import { isFreshLocation, bandFromIndex, sanitizeLatLng, haversineKm, LOCATION_TTL_DAYS } from '../utils/geo.js';
+import Setting from '../models/Setting.js';
 import College from '../models/College.js';
-import { LADDER } from '../utils/ladder.js';
-import { discoverLimiter } from '../middleware/rateLimiters.js';
-import { getBlockExclusionQuery } from '../middleware/blockFilter.js';
-import { body } from '../middleware/validate.js';
-import { validate } from '../middleware/validate.js';
+import CollegeRequest from '../models/CollegeRequest.js';
+import ModerationLedger from '../models/ModerationLedger.js';
+import { fingerprintModerationEmail } from '../utils/moderationLedger.js';
+import { normaliseDomain } from '../utils/collegeDomain.js';
+import { sendCollegeLive } from '../utils/email.js';
+import { adminProtect } from '../middleware/admin.js';
 
 const router = express.Router();
-const DAY_MS = 24 * 60 * 60 * 1000;
+router.use(adminProtect);
+const DEFAULT_REPORT_REVIEW_THRESHOLD = 3;
+const RETIRED_MODERATION_SETTING_KEYS = ['shadowbanThreshold', 'autoShadowban'];
 
-/* How fast the deck forgets an inactive profile.
-   Exponential decay on this half-life. 72h means a profile untouched for three
-   days scores 0.5 — slow enough that a student who opens the app every few
-   days stays near the top of their own band, fast enough that someone who
-   churned in July sinks below someone who logged in last week. */
-const RECENCY_HALF_LIFE_HOURS = 72;
+// ─── Helpers ───
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
-/* Score for a profile whose lastActive we cannot read.
-   Deliberately mid-scale, not 0 — see the recency block in GET /discover. */
-const UNKNOWN_ACTIVITY_SCORE = 0.5;
+const VALID_REPORT_STATUSES = ['pending', 'reviewed', 'dismissed', 'actioned'];
+const ALLOWED_SETTING_KEYS = new Set([
+  'supportEmail',
+  'maintenanceMode',
+  'reportReviewThreshold',
+  'appConfig',
+]);
 
-/* How long a deck order stays valid.
-   A session survives while the user keeps browsing, so a normal 10–15 minute
-   session never reshuffles under them mid-swipe. Coming back after longer than
-   this rebuilds the order, which is what surfaces people who signed up since.
-
-   Deliberately much shorter than Hinge's 24-hour Most Compatible cycle: their
-   pool is tens of millions, this one is a campus. Holding one order for a day
-   here would just re-serve an exhausted list. */
-const SESSION_IDLE_MINUTES = 30;
-
-/* Bumped whenever the ranking formula or the ordering rules change. An open
-   session carrying an older version is rebuilt instead of read, so a deploy can
-   never leave a user walking a stale ordering with no visible cause. */
-const RANKING_VERSION = 'hybrid-v1';
-
-/* Ceiling on how many ids a single session's extension query will scan past.
-   `servedIds` grows for as long as the session lives, so without a cap the
-   over-fetch in rankWindow() becomes proportional to everything the user has
-   been shown and the query cost drifts upward as they browse. */
-const MAX_SESSION_SERVED = 1000;
-
-
-
-/**
- * Step `reserved` evenly through `main` instead of stacking them at either end.
- *
- * ── WHY NOT JUST APPEND OR PREPEND ─────────────────────────────────────────
- * A reservation exists to stop a group being invisible. Appending them keeps
- * them invisible whenever the list is longer than the reservation; prepending
- * them makes the deck's first impression the group it was meant to rescue. With
- * 50 newcomers in a 500 deck, prepending meant the first FIVE SCREENS were empty
- * profiles before anyone real appeared.
- *
- * ── WHY DETERMINISTIC ─────────────────────────────────────────────────────
- * No randomness. P2's entire guarantee is that a session's order never moves
- * between requests, so this function must return the same arrangement for the
- * same input every time — otherwise calling it twice in one request would
- * silently reorder the deck.
- *
- * ── NO ITEM IS EVER DROPPED ───────────────────────────────────────────────
- * The naive `for` loop that pushes a reserved item when the loop index hits a
- * computed boundary breaks when two boundaries collide — the second item's
- * boundary has already passed, it never matches, and it is lost. This walks the
- * reserved items and drains `main` up to each boundary instead, so the output is
- * always exactly `main.length + reserved.length` long.
- *
- * @param {Array} main ordered items that keep their ranking
- * @param {Array} reserved items to step in, already in their own ranked order
- * @returns {Array}
- */
-const spreadReserved = (main, reserved) => {
-  if (!reserved || reserved.length === 0) return [...main];
-  if (!main || main.length === 0) return [...reserved];
-
-  const total = main.length + reserved.length;
-  /* Space between reserved items. One extra slot because the first one sits
-     after some of `main`, not at position zero. */
-  const gap = total / (reserved.length + 1);
-
-  const out = [];
-  let mi = 0;
-  for (let ri = 0; ri < reserved.length; ri++) {
-    /* `total - 1` is a floor on the boundary: two boundaries can round to the
-       same index when the reserved list is dense, and without this the last few
-       items would all pile onto the final position. */
-    const at = Math.min(total - 1, Math.floor((ri + 1) * gap));
-    while (mi < at && mi < main.length) out.push(main[mi++]);
-    out.push(reserved[ri]);
-  }
-  while (mi < main.length) out.push(main[mi++]);
-  return out;
-};
-
-/**
- * Write one impression row per card returned, without ever letting the logging
- * affect the response.
- *
- * Deliberately NOT awaited. A deck request is the hottest path in the app, and
- * an analytics write that can slow it down or throw into it would trade real
- * user-facing latency for data we can reconstruct later. Failures are logged and
- * dropped — a missing impression row is a gap in the analytics, never a broken
- * deck.
- *
- * `insertMany` is used over N saves so this is one round trip regardless of page
- * size, and `ordered: false` so one malformed document can't abort the rest.
- */
-const recordImpressions = ({ viewerId, sessionId, cards, startPosition }) => {
+// ─── STATS ───
+router.get('/stats', async (req, res) => {
   try {
-    if (!Array.isArray(cards) || cards.length === 0) return;
-    const docs = [];
-    for (let index = 0; index < cards.length; index++) {
-      const card = cards[index];
-      /* `_id` is added by the code below, NOT by toPublicCard() — that helper is
-         a deliberate allowlist of publicly shareable profile fields, and _id is
-         not one of them. So a card arriving here legitimately has no _id, and
-         writing it straight through produced documents with candidateId
-         undefined. Mongoose does NOT reject those: `insertMany` treats a missing
-         path as "not provided", so it silently inserts a row with candidateId
-         omitted and the write reports success. The result was an empty-looking
-         collection and no error anywhere.
-
-         `_id` is attached after toPublicCard() precisely because it is the row
-         identity the client needs and the impression log needs, and it is not
-         sensitive. */
-      const candidateId = card._id;
-      if (!candidateId) continue;
-      docs.push({
-        viewerId,
-        candidateId,
-        sessionId: sessionId || null,
-        rankInPage: index,
-        deckPosition: startPosition + index,
-        rankingVersion: 'legacy-hybrid-v1',
-        recency: card._recency ?? null,
-        hybridScore: card.hybridScore ?? null,
-      });
-    }
-    if (docs.length === 0) return;
-    DeckImpression.insertMany(docs, { ordered: false })
-      .catch((err) => console.error('Deck impression write failed:', err.message));
-  } catch (err) {
-    console.error('Deck impression build failed:', err.message);
-  }
-};
-
-/**
- * True when an error means "a concurrent request got there first".
- *
- * There are THREE distinct shapes of the same race, and fixing only the first one
- * leaves the 500 in place — which is exactly what happened when this was first
- * written to handle `VersionError` alone.
- *
- *   1. `VersionError` — "No matching document found for id … version N". The
- *     session EXISTED when we read it, and somebody else saved it before we did.
- *     This is the one the original report was about: two overlapping deck
- *     requests, only the second save rejected.
- *
- *   2. `MongoServerError` code 112 / "write conflict" — the write-conflict
- *     variant, where two saves interleave instead of arriving strictly in order.
- *
- *   3. `E11000` duplicate key on `viewerId_1` — the session did NOT exist when we
- *     read it, and by the time we tried to CREATE it, a concurrent request had
- *     created it first. The unique index (one live session per viewer, which is
- *     what stops two windows racing to define the order) rejects the second
- *     insert. This one is a correctness constraint working exactly as designed;
- *     the loser simply needs to re-read and use the winner's session.
- *
- * All three mean the same thing for the caller: the request that lost should
- * re-read current state and serve the page that follows it.
- */
-const isConcurrentDeckRace = (err) => {
-  if (!err) return false;
-  if (err.name === 'VersionError') return true;
-  if (err.name === 'MongoServerError' && (err.code === 112 || /write conflict/i.test(err.message || ''))) {
-    return true;
-  }
-  /* E11000, but ONLY on the viewerId unique index. A duplicate key on some other
-     collection is a genuine bug and must not be retried into obscurity. */
-  if (err.code === 11000 || err.name === 'MongoServerError' && err.code === 11000) {
-    return /discoversessions/i.test(err.message || '') && /viewerId/i.test(err.message || '');
-  }
-  return false;
-};
-
-/**
- * 📇 THE DECK HANDLER — one page of the viewer's ordered deck.
- *
- * Named rather than anonymous so the retry below can re-invoke it. It is NOT
- * mounted directly: see `serveDeck`.
- */
-const buildDeckPage = async (req, res) => {
-  try {
-    const currentUser = req.user;
-    const limit = Math.min(parseInt(req.query.limit) || 10, 20);
-
-    // Build exclusion set from the Interaction ledger
-    const acted = await Interaction.find({
-      $or: [
-        { actorId: currentUser._id, actionType: { $in: ['letter', 'telegram', 'accept_letter', 'archive'] } },
-        { targetId: currentUser._id, actionType: 'archive' },
-      ],
-    }).select('actorId targetId actionType cooldownExpiresAt').lean();
-
-    const excludedIds = new Set();
     const now = new Date();
-    for (const it of acted) {
-      const otherId = it.actorId.toString() === currentUser._id.toString()
-        ? it.targetId.toString()
-        : it.actorId.toString();
-      if (it.actionType === 'archive') {
-        // Permanent archive (cooldownExpiresAt === null) always excludes
-        // Temporary archive only excludes while cooldown is active
-        if (!it.cooldownExpiresAt || new Date(it.cooldownExpiresAt) > now) {
-          excludedIds.add(otherId);
-        }
-      } else {
-        excludedIds.add(otherId);
-      }
-    }
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
 
-    const blockExclusion = await getBlockExclusionQuery(currentUser._id);
-    const blockedIds = blockExclusion._id?.$nin || [];
-    blockedIds.forEach(id => excludedIds.add(id.toString()));
-    excludedIds.add(currentUser._id.toString());
+    const [totalUsers, newToday, active7d, active30d, pendingReports, activeBans, shadowbannedUsers] = await Promise.all([
+      User.countDocuments({ isDeleted: false }),
+      User.countDocuments({ isDeleted: false, createdAt: { $gte: todayStart } }),
+      User.countDocuments({ isDeleted: false, lastActive: { $gte: sevenDaysAgo } }),
+      User.countDocuments({ isDeleted: false, lastActive: { $gte: thirtyDaysAgo } }),
+      Report.countDocuments({ status: 'pending' }),
+      User.countDocuments({ isDeleted: false, suspended: true }),
+      User.countDocuments({ isDeleted: false, shadowbannedAt: { $ne: null } }),
+    ]);
 
-    /* One session per viewer. There used to be one per (viewer, scope) so the
-       campus chip could swap between them — that chip is gone, so there is one
-       feed, one frozen order and one cursor. */
-    // Base filter — heavy $nin moved to Node.js memory filtering
-    //
-    // ⚠️ NOT filtered by college. This deck is PLATFORM-WIDE: an IIT Bombay
-    // student should see IIT Delhi, NIT Trichy and everyone else, because the
-    // product is an inter-college network, not one campus. A single IIT-sized
-    // pool is thin once mutual gender filtering is applied on top.
-    //
-    // Campus is now VERIFICATION ONLY — it proves the account is a real student
-    // and labels the card. It no longer narrows the feed, because a campus is
-    // not where a person is. Distance is measured from the person's own stored
-    // location; see the candidate-position block in rankStages.
-    const baseFilter = {
-      isOnboarded: true,
-      isVerified: true,
-      suspended: { $ne: true },
-      shadowbannedAt: null,
-      isDeleted: { $ne: true },
-    };
+    res.json({
+      totalUsers,
+      newToday,
+      active7d,
+      active30d,
+      pendingReports,
+      activeBans,
+      activeShadowbans: shadowbannedUsers,
+    });
+  } catch (err) {
+    console.error('Admin stats error:', err);
+    res.status(500).json({ message: 'Failed to fetch stats' });
+  }
+});
 
+// ─── REPORTS ───
+router.get('/reports', async (req, res) => {
+  try {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const perPage = Math.min(Number(req.query.perPage) || 15, 100);
+    const { status, search, reason } = req.query;
+    const skip = (page - 1) * perPage;
 
-    const myGenders = (currentUser.interestedIn || []).filter((g) => g !== 'Everyone');
-    if (myGenders.length > 0) {
-      baseFilter.gender = { $in: myGenders };
-    }
+    const filter = {};
+    if (status && status !== 'all') filter.status = status;
+    if (reason && reason !== 'all') filter.reason = reason;
 
-    // MUTUAL: only show candidates interested in my gender (or 'Everyone').
-    // Candidates who never set a preference stay visible (treated as open).
-    if (currentUser.gender) {
-      baseFilter.$or = [
-        { interestedIn: { $in: [currentUser.gender, 'Everyone'] } },
-        { interestedIn: { $size: 0 } },
-        { interestedIn: { $exists: false } },
+    if (search) {
+      const safeSearch = escapeRegex(search);
+      const searchUsers = await User.find({
+        $or: [
+          { name: { $regex: safeSearch, $options: 'i' } },
+          { email: { $regex: safeSearch, $options: 'i' } },
+        ],
+      }).select('_id').lean();
+      const userIds = searchUsers.map(u => u._id);
+      filter.$or = [
+        { reporter: { $in: userIds } },
+        { reported: { $in: userIds } },
       ];
     }
 
-    /* 🎯 FULL-POOL RANKING — the whole candidate set, ranked by MongoDB.
-     *
-     * This used to be: roll a random point, fetch a hardcoded `.limit(80)`,
-     * then RANK THOSE 80 IN JAVASCRIPT and take the best 10. That had a ceiling
-     * nobody could see: with 50,000 eligible users only 80 were ever scored, so
-     * anyone ranked 81st was unreachable no matter how many times you swiped.
-     * The app could not see them, because it never looked.
-     *
-     * Ranking now happens inside MongoDB over every eligible document, so the
-     * ceiling is gone at any pool size — 1k users or 1M, same query.
-     *
-     * `allowDiskUse` is required, not defensive: the sort key is COMPUTED
-     * (see `$addFields` below), so no index can serve it and MongoDB must sort
-     * the matched set in memory. Without this flag that sort fails with
-     * Sort exceeded memory limit at large pool sizes, which would silently
-     * reintroduce a cap somewhere much harder to detect.
-     *
-     * See models/User.js for why the deck's score sort deliberately has no
-     * index behind it, and what the denormalized-field fix looks like. */
-
-    /* Hours since lastActive, or null when the field is missing/unparseable.
-       Mirrors the JS `Number.isFinite(lastSeenAt)` guard exactly — a profile
-       with no usable timestamp must NOT silently become hoursSince = now, which
-       would score it as ancient instead of unknown.
-
-       `$lastActive` is a DATE and `now.getTime()` is a NUMBER, and MongoDB's
-       `$subtract` refuses to mix the two (TypeMismatch: "can't $subtract date
-       from double"). `$toLong` coerces the stored Date to epoch millis first.
-       It returns null for a null input rather than erroring, so the missing-
-       timestamp case still falls through to UNKNOWN_ACTIVITY_SCORE below. */
-    const lastActiveMs = { $toLong: { $ifNull: ['$lastActive', null] } };
-    const hoursSinceRaw = {
-      $divide: [
-        { $subtract: [now.getTime(), lastActiveMs] },
-        60 * 60 * 1000,
-      ],
-    };
-
-    /* The two live signals, re-weighted to fill the range. Compatibility used
-       to be 50% of this and is gone: it was computed from a per-user answer
-       array no client could ever fill, so `compatRaw` was always null and the
-       term silently contributed 0 to every candidate. */
-    const recencyExpr = {
-      $cond: [
-        { $ne: [{ $ifNull: ['$lastActive', null] }, null] },
-        {
-          $exp: {
-            $multiply: [
-              -Math.LN2 / RECENCY_HALF_LIFE_HOURS,
-              /* Clamp at 0: a `lastActive` in the future (clock skew, a bad
-                 write) would otherwise produce a NEGATIVE exponent and score
-                 above 1.0, putting the profile permanently on top. */
-              { $max: [0, { $ifNull: [hoursSinceRaw, 0] }] },
-            ],
-          },
-        },
-        UNKNOWN_ACTIVITY_SCORE,
-      ],
-    };
-
-    const completenessExpr = {
-      $cond: [
-        {
-          $and: [
-            { $gte: [{ $size: { $ifNull: ['$photos', []] } }, 4] },
-            { $gte: [{ $size: { $ifNull: ['$prompts', []] } }, 3] },
-            { $gt: [{ $strLenCP: { $ifNull: ['$bio', ''] } }, 10] },
-          ],
-        },
-        1.0,
-        0.5,
-      ],
-    };
-
-    const hybridExpr = {
-      $add: [
-        { $multiply: [recencyExpr, 0.6] },
-        { $multiply: [completenessExpr, 0.4] },
-      ],
-    };
-
-    /* The ranked WINDOW, not just the visible page.
-       Ranking returns the top slice, but this deliberately keeps a headroom
-       buffer above `limit` because exclusions (passed/liked/blocked) are
-       applied in Node memory right after — see the comment there. Ranking
-       straight to `limit` would mean a heavy swiper gets 6 cards back because
-       4 of the top 10 were people they'd already passed. */
-    /* `DECK_FIELDS` is the public allowlist (utils/publicCard.js). It is
-       projected in the pipeline for the same reason the old `.select()` did: an
-       aggregation with no `$project` ships the WHOLE user document over the wire
-       from MongoDB, including `email`, `shadowbanScore` and `adminNotes`.
-       Those never reached the client before and still don't (toPublicCard
-       allowlists the response), but pulling them into route memory for 60
-       candidates per request is waste and widens the blast radius if this route
-       ever throws one of them into a log. */
-    const DECK_PROJECTION = Object.fromEntries([
-      ...CARD_FIELDS_SELECT.split(/\s+/).filter(Boolean).map((f) => [f, 1]),
-      ['_recency', 1],
-      ['hybridScore', 1],
-      ['_bandIndex', 1],
-      ['finalScore', 1], // Added so the blended score is passed through
+    const [reports, total] = await Promise.all([
+      Report.find(filter)
+        .populate('reporter', 'name email photos')
+        .populate('reported', 'name email photos suspended shadowbannedAt')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(perPage)
+        .lean(),
+      Report.countDocuments(filter),
     ]);
 
-    /* 🃏 WINDOW SIZE — how many ranked ids a session stores.
-
-   500, not 60. An earlier version of this file kept P1's `limit * 6` headroom
-   buffer (60 at a 10-card page), which was correct for the single-page
-   over-fetch it was written for but wrong once P2 made the window a per-session
-   supply: at 60 a user exhausted it in six pages and the deck rebuilt every
-   couple of minutes, which is the reshuffle churn P2 exists to remove.
-
-   500 ids is ~12KB per session and covers 50 pages — roughly 25 minutes of
-   swiping at a normal pace, which is the 30-minute session lifetime. Two
-   consequences worth keeping in mind:
-
-     - Duplicates are now impossible by CONSTRUCTION regardless of this number,
-       because the order is decided once. This is purely how long a session
-       lasts before rebuilding.
-     - A bigger window means a bigger Mongo read per session build. 500 docs is
-       nothing; do not raise it much past this without reconsidering. */
-const RANK_WINDOW = 500;
-
-    /* ── SESSION HANDLING ──────────────────────────────────────────────────
-     *
-     * Everything below is about answering one question: has this viewer's deck
-     * order already been decided?
-     *
-     *  - No session, or the session is older than SESSION_IDLE_MINUTES
-     *      → RANK a fresh window and write it down.
-     *  - Live session with cards left
-     *      → read the next ids from the order that was already decided.
-     *  - Live session, window exhausted
-     *      → rank a NEW window that skips everything already served, if anyone
-     *        eligible is left at all. If nobody is, the deck is genuinely over
-     *        and we say so instead of re-serving the same exhausted ids.
-     */
-    const isLive = (session) =>
-      !!session &&
-      session.rankingVersion === RANKING_VERSION &&
-      Date.now() - session.lastSeenAt.getTime() < SESSION_IDLE_MINUTES * 60 * 1000;
-
-    /* Rank a window of ids, skipping anyone already excluded or already served
-       this session. Shared by the first build and every extension so the
-       ordering rules cannot drift between the two paths.
-
-       `skipSet` holds STRINGS. It originally held ObjectIds, which made every
-       `skip.includes(u._id.toString())` check compare an ObjectId against a
-       string and return false — so nothing was ever skipped, and a window
-       extension re-ranked the pool and handed back the SAME people it had
-       already served. The deck looped forever on 60 cards instead of advancing.
-       Both sides of every id comparison in this file are `.toString()` for the
-       same reason. */
-    /* 📍 DISTANCE RANKING — degrades safely to "off".
-     *
-     * The viewer's own location counts only if it is present AND fresh (geo.js
-     * enforces the 30-day window). When it is not — permission declined, never
-     * granted, or a reading older than the TTL — `viewerPoint` stays null and
-     * the distance stages are OMITTED from the pipeline entirely rather than
-     * being computed as zero.
-     *
-     * That branch matters more than it looks: a viewer with no location falls
-     * back to the pure quality ranking, and is never shown everyone as "0km
-     * away". */
-    const myCollege = currentUser.collegeCode
-      ? await College.findOne({ code: currentUser.collegeCode }).select('latLng').lean()
-      : null;
-    const myCollegePoint = sanitizeLatLng(myCollege?.latLng);
-
-    /* 📍 CAMPUS IS THE BASE; A PERSONAL POSITION IS A REFINEMENT.
-     *
-     * This used to be `viewerPoint = personal || null`, and the whole distance
-     * layer was skipped when that was null. That made distance ranking a
-     * GPS-only feature: a student who tapped "Not now" — which is a first-class
-     * answer we offer and never penalise — silently got NO distance ordering at
-     * all, even though their campus has a position sitting in the database
-     * ready to use.
-     *
-     * Campus positions are public information about a building, so using one
-     * requires no consent and discloses nothing about the person. A personal
-     * position is sensitive even rounded to a kilometre, so it is only ever an
-     * improvement on top of a signal that already works without it.
-     *
-     *   personal, fresh  → measure from it (knows they're at home for a break)
-     *   otherwise        → measure from their campus (assumes they're there)
-     *   neither          → no distance ranking, intent and quality only
-     *
-     * A personal reading that has gone stale past the TTL also falls back to the
-     * campus, rather than dropping the viewer out of distance ranking entirely. */
-    const personalPoint = isFreshLocation(currentUser, now)
-      ? sanitizeLatLng(currentUser.currentLatLng)
-      : null;
-    const viewerPoint = personalPoint || myCollegePoint;
-
-    /* Within this distance the viewer counts as being AT their campus, so their
-       own college is what the reserved slots come from. Beyond it — on a
-       summer break at home, say — the viewer is simply somewhere else, and the
-       cap drops so nearest-people fills the page instead. Without this the
-       reserved slots would be served from a campus 1,400km away, which is how a
-       "campus" deck becomes useless in July.
-     *
-     * 30km is the same threshold as the "Near you" band, so it reads as "I am at
-     * my campus" rather than as an unexplained constant. */
-    const OWN_CAMPUS_KM = 30;
-    const atOwnCampus = !!viewerPoint && !!myCollegePoint
-      && haversineKm(viewerPoint, myCollegePoint) <= OWN_CAMPUS_KM;
-
-    /* Hard ceiling on the share of a window that may come from the viewer's own
-       college, so one campus cannot monopolise a deck that is meant to be
-       inter-college. A SHARE rather than a literal "2 per page" because the
-       session stores one flat ordered list, not discrete pages — a hard per-page
-       guarantee would mean interleaving the list, and a share delivers the same
-       outcome (roughly two cards in every ten) without that machinery. */
-    const OWN_COLLEGE_SHARE = 0.2;
-    /* 📐 The cap is a share of the ACTUAL POOL, clamped to the historical
-       ceiling of 20% of the window.
-
-       It used to be `ceil(RANK_WINDOW * SHARE)` — a flat 100 — which silently
-       became a no-op on a small launch. With 100 users, a cap of 100 allows the
-       viewer's own college to be ALL 100 cards, so the rule that exists to stop
-       a campus monopolising the feed did nothing precisely when a new campus
-       dominates the population.
-
-       Measuring the share against `eligible` makes the ratio mean what it says at
-       any size: 20 users → 4, 100 → 20, 500 → 100. Above 500 the clamp holds and
-       behaviour is byte-for-byte what it always was.
-
-       ⚠️ This still never REMOVES anyone. `overflow` is pushed back into
-       `others` below, so the cap only changes how many own-college cards keep
-       their early position — it cannot leave a hole, and cannot shorten the
-       deck. If the viewer's campus is the only thing available, every one of
-       them is still shown; there is simply nothing to swap them with. */
-    const ownCollegeCap = (poolSize) =>
-      Math.max(
-        2,
-        Math.min(
-          Math.ceil(RANK_WINDOW * OWN_COLLEGE_SHARE),
-          Math.ceil(poolSize * OWN_COLLEGE_SHARE),
-        ),
-      );
-
-    /* The ranking stages, shared by BOTH consumers.
-       ⚠️ They MUST stay shared. `hybridScore` and `_bandIndex` are computed by
-       these stages and are NOT stored on the User document, so any path that
-       reads candidates with a plain `User.find().select()` silently gets
-       `undefined` for them — every card then renders with score 0 and no
-       distance label, and nothing errors. That is exactly what happened when
-       pages were served from a stored session while ranking still happened in
-       the aggregation: the ordering was correct but every value shown on the
-       card was blank. */
-
-      /* Degrees→radians factor for the aggregation-side haversine below. Mongo's
-       $sin/$cos take radians, so every angle in that expression is scaled by
-       this. Declared here rather than inline so the two `$multiply` sites stay
-       visibly identical — a mismatch between them is a silent wrong answer, not
-       an error. */
-    const rad = Math.PI / 180;
-
-    const distanceStages = viewerPoint
-        ? (() => {
-            /* ⚠️ MONGO EVALUATES `$cond` BRANCHES EAGERLY. A branch that guards
-               "only compute the distance when coordinates exist" still has its
-               arithmetic executed, so a college with no latLng makes
-               `$subtract: ['$_c.latLng.0', 19.07]` fail the WHOLE aggregation
-               with "can't $subtract double from array" — taking down the deck
-               for every viewer.
-
-               So the coordinates are normalised to plain numbers FIRST, with an
-               in-range placeholder used when they are genuinely absent. For a
-               campus with no position the distance that comes out is therefore
-               meaningless — (0,0) is in the Gulf of Guinea, so it always exceeds
-               300km and lands in band 3, which is exactly where an unpositioned
-               campus is meant to go. That is a happy accident, not the design:
-               the design is that it must never THROW, and normalising first is
-               what guarantees that. */
-            const dLat = { $multiply: [{ $subtract: ['$_lat1', viewerPoint[0]] }, rad] };
-            const dLng = { $multiply: [{ $subtract: ['$_lng1', viewerPoint[1]] }, rad] };
-            const lat1 = { $multiply: [viewerPoint[0], rad] };
-            const lat2 = { $multiply: ['$_lat1', rad] };
-            const hav = {
-              $add: [
-                { $pow: [{ $sin: { $divide: [dLat, 2] } }, 2] },
-                {
-                  $multiply: [
-                    { $cos: lat1 },
-                    { $cos: lat2 },
-                    { $pow: [{ $sin: { $divide: [dLng, 2] } }, 2] },
-                  ],
-                },
-              ],
-            };
-            const km = {
-              $multiply: [6371, { $multiply: [2, { $asin: { $sqrt: { $min: [1, hav] } } }] }],
-            };
-            /* A card's band comes from its COLLEGE's position, not the person's
-               own coordinates. Every student at one campus would otherwise get a
-               different band for standing in a different building, and the campus
-               is the meaningful unit for a campus product. A candidate's own GPS
-               is used for nothing on anyone else's card.
-
-               ⚠️ A CAMPUS WITH NO POSITION MAPS TO BAND 3 — THE UNLABELLED
-               CATCH-ALL — NOT TO A SEPARATE BUCKET BEHIND EVERYTHING.
-               This is deliberately different from a missing VIEWER location, and
-               the distinction matters:
-
-                 - No VIEWER location  → we do not know where this person is.
-                   Distance ranking switches off entirely (see `viewerPoint`).
-                 - No CAMPUS position → we do not know where this BUILDING is.
-                   That is an incomplete dataset, not a fact about the person, and
-                   most colleges will have no coordinates at all: the
-                   CollegeRequest → admin flow never asks for them.
-
-               Sorting the second case last put every student of every
-               un-coordinated campus behind every located user, for EVERY viewer,
-               with no way to recover — a whole campus made invisible by a missing
-               field. Band 3 renders NO LABEL, so no false "Further away" is ever
-               claimed; these cards simply compete on intent and quality alongside
-               genuinely distant people, which is what they should do. */
-            const bandIndex = {
-              $cond: [
-                { $lte: [km, 30] }, 0,
-                { $cond: [{ $lte: [km, 100] }, 1, { $cond: [{ $lte: [km, 300] }, 2, 3] }] },
-              ],
-            };
-            return { bandIndex, km };
-          })()
-        : null;
-
-      /* Intent as a RANKING SIGNAL ONLY — never a filter.
-       * Filtering on it was explicitly rejected: on a small campus it would
-       * empty the deck entirely, and an empty deck with no explanation is the
-       * failure mode this whole ranking rewrite exists to remove. Matching intent
-       * moves you up; it never removes anyone. */
-      const myIntent = Array.isArray(currentUser.intent) ? currentUser.intent : [];
-      const intentMatchExpr = myIntent.length
-        ? {
-            $cond: [
-              {
-                $gt: [
-                  { $size: { $setIntersection: [{ $ifNull: ['$intent', []] }, myIntent] } },
-                  0,
-                ],
-              },
-              1,
-              0,
-            ],
-          }
-        : 0;
-
-      /* 🆕 COLD-START EXPOSURE — A BOUNDED RESERVATION, NOT A SCORE BOOST.
-     *
-     * A profile below LADDER.publish scores 0.5 on completeness instead of 1.0,
-     * which puts it below every finished profile in its band. At pool sizes past
-     * the 500-id window that means a new user with three photos never enters the
-     * window at all — never seen, never told why, never fixes the profile. The
-     * deck would enforce a standard it gives the person no way to meet.
-     *
-     * The ladder exists to gate INTERACTION, not visibility. That gate reads the
-     * VIEWER's own score, so a qualified viewer can still like a promoted
-     * profile — promoting one costs nothing and wastes no action.
-     *
-     * ⚠️ WHY THIS IS A QUOTA AND NOT A BONUS ADDED TO THE SCORE. Two attempts at
-     * an additive bonus were tried and both were wrong:
-     *   +0.15 was silently inert — completeness is a STEP worth a flat 0.2 at
-     *   recency 1.0, so a bonus smaller than 0.2 can never move a profile across
-     *   the very boundary it exists to cross.
-     *   +0.25 worked but then outranked a score-80 profile with a full profile,
-     *   because 0.8 + 0.25 > 1.0. Promoting an empty profile above a strong one
-     *   is worse than the invisibility it was meant to fix.
-     * There is no additive value that is both big enough to help and small
-     * enough to be safe. So the reservation is applied to POPULATION instead:
-     * a fixed slice of the window is filled with below-publish profiles, ranked
-     * among themselves by score. Bounded, so it cannot invert anyone's ranking
-     * beyond that slice, and it keeps `hybridScore` the honest formula so the
-     * impression log stays a clean baseline for the next ranking change. */
-    const COLD_START_SHARE = 0.1;
-
-    const rankStages = () => {
-        const stages = [];
-
-        /* Campus position, for distance and for the own-college share. Only
-           joined when there is actually a viewer location to measure from — an
-           unnecessary $lookup on every request would be pure cost. */
-        if (viewerPoint) {
-          stages.push(
-            {
-              $lookup: {
-                from: 'colleges',
-                localField: 'collegeCode',
-                foreignField: 'code',
-                as: '_c',
-                pipeline: [{ $project: { code: 1, latLng: 1 } }],
-              },
-            },
-            { $unwind: { path: '$_c', preserveNullAndEmptyArrays: true } },
-          );
-        }
-
-        /* 📍 CANDIDATE POSITION — the person, not their campus.
-
-           `_lat1`/`_lng1` MUST each resolve to a SCALAR number. They are consumed
-           by `$subtract` a few stages below; handing them the `[lat, lng]` PAIR
-           instead reproduces the one failure this file is most careful about —
-           "can't $subtract double from array" — which takes down the whole
-           aggregation and therefore the entire feed.
-
-           Order of preference, per candidate:
-             1. their own stored reading, but ONLY while it is fresh (30d TTL,
-                matching `isFreshLocation` on the viewer side)
-             2. otherwise their campus coordinates
-
-           ⚠️ The candidate side had NO freshness gate at all before this change:
-           `isFreshLocation` was only ever applied to the VIEWER, so a reading
-           from months ago was treated as if the person were standing there today.
-           A stale reading now falls through to campus rather than lying.
-
-           `$$NOW` is the aggregation constant, not a JS value — a `Date` baked
-           into the pipeline would freeze the TTL boundary at request-build time
-           and never advance. */
-        if (distanceStages) {
-          const candidateIsFresh = {
-            $and: [
-              { $ne: [{ $type: '$currentLatLng' }, 'missing'] },
-              { $ne: ['$currentLatLng', null] },
-              { $ne: [{ $type: '$locationUpdatedAt' }, 'missing'] },
-              { $ne: ['$locationUpdatedAt', null] },
-              /* A future-dated stamp is corrupt data, not "very fresh" — treat it
-                 as stale rather than letting it bypass the TTL entirely. */
-              { $lte: ['$locationUpdatedAt', '$$NOW'] },
-              {
-                $gte: [
-                  '$locationUpdatedAt',
-                  { $dateSubtract: { startDate: '$$NOW', unit: 'day', amount: LOCATION_TTL_DAYS } },
-                ],
-              },
-            ],
-          };
-
-          const ownOrCampus = (idx) => ({
-            $arrayElemAt: [
-              {
-                $cond: {
-                  if: candidateIsFresh,
-                  then: '$currentLatLng',
-                  else: { $ifNull: ['$_c.latLng', []] },
-                },
-              },
-              idx,
-            ],
-          });
-
-          stages.push({
-            $addFields: {
-              /* `$arrayElemAt`, NOT the dotted path '$_c.latLng.0'.
-                 Inside a `$cond` the dotted form silently evaluates to an EMPTY
-                 ARRAY rather than the first element, so `$subtract` then failed
-                 with "can't $subtract double from array" and took the whole
-                 aggregation — and therefore the entire deck — down.
-                 `$arrayElemAt` is explicit about indexing and cannot be
-                 reinterpreted. */
-              _lat1: ownOrCampus(0),
-              _lng1: ownOrCampus(1),
-            },
-          });
-        }
-
-        stages.push({
-          $addFields: {
-            _recency: recencyExpr,
-            _completeness: completenessExpr,
-            hybridScore: hybridExpr,
-            /* ⚠️ `_intentMatch` IS NOT CONDITIONAL. It used to sit inside the
-               `...(distanceStages ? …)` spread alongside `_bandIndex`, which
-               coupled intent ranking to having GPS enabled: a viewer who declined
-               the permission prompt silently got NO intent ranking at all, even
-               though intent is a profile field they filled in themselves and has
-               nothing to do with location.
-
-               Two of these bugs were stacked — the viewer's intent was also not
-               selected in middleware/auth.js — so intent ranking had never once
-               actually run for anyone. It only appeared to work in tests that
-               happened to have location switched on. Distance and intent are
-               independent signals and must be gated independently. */
-            _intentMatch: intentMatchExpr,
-            /* Only `_bandIndex` is conditional, because it genuinely cannot be
-               computed without a position to measure from. */
-            ...(distanceStages ? { _bandIndex: distanceStages.bandIndex } : {}),
-          },
-        });
-
-        /* 🧮 BLENDED SCORE — distance, intent, quality in one number.
-           Evaluated in a second stage so it can read hybridScore and _intentMatch
-           which were just birthed above.
-           baseScore = hybridScore * 0.7 + _intentMatch * 0.3  (range 0..1)
-           distanceMultiplier by bandIndex: 0=1.0, 1=0.6, 2=0.4, 3=0.1
-           No viewer location → neutral 1.0 (fairness: cannot penalise unknown) */
-        stages.push({
-          $addFields: {
-            finalScore: {
-              $multiply: [
-                {
-                  $add: [
-                    { $multiply: ['$hybridScore', 0.7] },
-                    { $multiply: ['$_intentMatch', 0.3] }
-                  ]
-                },
-                viewerPoint ? {
-                  $switch: {
-                    branches: [
-                      { case: { $eq: ['$_bandIndex', 0] }, then: 1.0 },
-                      { case: { $eq: ['$_bandIndex', 1] }, then: 0.6 },
-                      { case: { $eq: ['$_bandIndex', 2] }, then: 0.4 },
-                      { case: { $eq: ['$_bandIndex', 3] }, then: 0.1 }
-                    ],
-                    default: 0.1
-                  }
-                } : 1.0
-              ]
-            }
-          }
-        });
-
-        /* ⚠️ NO `$project` HERE.
-           Projection must be the LAST stage. DECK_PROJECTION is an inclusion
-           list. Projecting before the sort deletes the sort key. */
-        return stages;
-      };
-
-      const rankWindow = async (skipIds) => {
-        const skipSet = new Set([...skipIds].map((id) => id.toString()));
-
-        /* ⚠️ SINGLE SOURCE OF TRUTH. This is the ranked query's own row limit,
-           and the `poolExhausted` guard further down compares the result against
-           it to decide whether the pool has anything left to give. Written out in
-           both places it would drift the moment either was edited — and it would
-           drift SILENTLY, in the direction of running an unnecessary full scan on
-           every window build. */
-        const FETCH_CAP = RANK_WINDOW + Math.min(skipSet.size, MAX_SESSION_SERVED);
-
-      /* 📍 Distance, computed IN MONGO for the same reason the score is: doing
-         it in JavaScript would mean fetching candidates first, which is the
-         ceiling bug from P1 all over again.
-
-         Built ONLY when there is a viewer position. These expressions index
-         `viewerPoint[0]` eagerly while the pipeline is assembled, so
-         constructing them unconditionally throws a TypeError on a viewer who
-         has no location — which is the majority of users until the onboarding
-         step ships. */
-
-      const docs = await User.aggregate([
-        { $match: baseFilter },
-
-        ...rankStages(),
-        /* Sort and limit live HERE, not in rankStages(): building a window needs
-           them, but serving a page from a stored session must NOT re-sort — the
-           session's order IS the contract P2 exists to keep, and sorting again
-           would re-decide exactly what we promised to freeze. */
-        /* 📍 NEAREST FIRST, then shared intent, then quality.
-           Single blended score handles distance, intent, and quality.
-           finalScore already includes band-based distance multiplier,
-           intent boost, and hybridScore. No need for _sortBand. */
-        { $sort: { finalScore: -1 } },
-        /* Over-fetch past the window so post-filter survivors still fill it. */
-        { $limit: FETCH_CAP },
-        { $project: DECK_PROJECTION },
-      ], { allowDiskUse: true });
-
-      let eligible = docs
-        .filter((u) => !skipSet.has(u._id.toString()))
-        .filter((u) => !excludedIds.has(u._id.toString()));
-
-      /* 🆕 COLD-START RESERVATION — see COLD_START_SHARE for why this is a quota
-         and not a score bonus.
-
-         TOPPED UP FROM OUTSIDE THE BATCH. The below-publish profiles already in
-         the ranked batch are kept exactly where their rank put them — they earned
-         that position — and the reservation is filled from DEEPER in the pool,
-         which is the part that matters.
-
-         ⚠️ That "from outside" is what used to make this a no-op at small scale,
-         and the failure is worth stating plainly: with a pool smaller than the
-         window, EVERY eligible person is already inside the batch, so there is
-         nothing deeper to pull and the reservation silently did nothing. At 100
-         users a brand-new account ranked purely on completeness sank to the
-         bottom — precisely the population the reserve exists to protect, and
-         precisely the population that needs it most.
-
-         Two ways out, so the quota holds at any pool size:
-
-           1. Pool is LARGE — pull newcomers from beyond the window and step
-              them in. Unchanged, and the common case.
-           2. Pool is SMALL — nothing to pull, so step the newcomers already
-              present through the batch instead. Same guarantee (they occupy
-              spread positions rather than ranking purely on score), reached the
-              other way.
-
-         Both are POSITIONAL ONLY. Nobody is added or dropped by either path.
-
-         The reserve is a share of what is actually available, not of the window:
-         `max(1, ceil(pool × share))`, still clamped to the historical 50 so a
-         large pool behaves exactly as it always has. */
-      const reserve = Math.max(
-        1,
-        Math.min(
-          Math.floor(RANK_WINDOW * COLD_START_SHARE),
-          Math.ceil(eligible.length * COLD_START_SHARE),
-        ),
-      );
-      if (reserve > 0) {
-        const isCold = (u) => (u.profileScore ?? 0) < LADDER.publish;
-        const inBatch = eligible.filter(isCold).length;
-
-        /* ⛔ SKIP WHEN THE POOL IS SMALLER THAN THE WINDOW.
-           If the ranked batch came back short, the database already told us it
-           has nothing more to give — a second scan cannot find anything, it can
-           only re-read a pool we have completely seen. This fired on every single
-           deck request for any viewer whose pool was under 500, which is every
-           viewer on a small campus.
-
-           Compared against the query's OWN limit, not the bare window size. The
-           limit is `RANK_WINDOW + skipSet.size`, so on a window extension a pool
-           of exactly 500 would return 500 rows and compare as "full" even though
-           500 minus the skipped ids means there is genuinely nothing left — one
-           wasted scan on the boundary. */
-        const poolExhausted = docs.length < FETCH_CAP;
-
-        if (inBatch < reserve && !poolExhausted) {
-          /* ⚠️ `$and: [baseFilter, …]`, NOT `{ ...baseFilter, $or: … }`.
-             `baseFilter` already carries a `$or` — the mutual-preference filter
-             that keeps the deck to people who are interested in the viewer AND
-             who are interested in the viewer. Spreading the filter into a new
-             object and then adding `$or` REPLACES that key, silently dropping the
-             preference. The first version of this block did exactly that, which
-             meant the 50 reserved slots could contain people the viewer had
-             explicitly said they were not interested in — spread through their
-             deck rather than buried, which is far worse than the invisibility the
-             reservation exists to fix.
-
-             Wrapping in `$and` keeps every key of baseFilter intact. */
-          const COLD_FILTER = {
-            $or: [
-              { profileScore: { $lt: LADDER.publish } },
-              { profileScore: { $exists: false } },
-            ],
-          };
-
-          /* Same ranking stages as the main query — the campus lookup, the band
-             calculation, the intent match. The first version ran a bare
-             `sort: { hybridScore: -1 }` with no campus lookup at all, so reserved
-             profiles were ordered without knowing where anyone was and could be
-             placed ahead of someone standing next to the viewer. Sharing the
-             stages also means the two queries cannot drift apart in future. */
-          const deeper = await User.aggregate([
-            { $match: { $and: [baseFilter, COLD_FILTER] } },
-            ...rankStages(),
-            /* finalScore already includes distance, intent, quality — single sort key. */
-            { $sort: { finalScore: -1 } },
-            { $limit: (reserve - inBatch) * 4 + 20 },
-            { $project: DECK_PROJECTION },
-          ], { allowDiskUse: true });
-
-          const seenInBatch = new Set(eligible.map((u) => u._id.toString()));
-          const extra = deeper
-            .filter((u) => !seenInBatch.has(u._id.toString()))
-            .filter((u) => !skipSet.has(u._id.toString()))
-            .filter((u) => !excludedIds.has(u._id.toString()))
-            .filter(isCold)
-            .slice(0, reserve - inBatch);
-
-          if (extra.length) {
-            /* 👉 SPREAD, DON'T PREPEND. These profiles were outside the window
-               entirely; stepping them into even gaps keeps them visible without
-               costing the viewer their first screen. Newcomers already inside the
-               ranked batch are untouched and keep their real position. */
-            const alreadyIn = new Set(extra.map((u) => u._id.toString()));
-            eligible = spreadReserved(
-              eligible.filter((u) => !alreadyIn.has(u._id.toString())),
-              extra,
-            );
-          }
-        }
-
-        /* ⛔→✅ SMALL-POOL FALLBACK — the case the exhausted-pool guard above used
-           to abandon entirely.
-
-           When the pool is exhausted there is nothing beyond the window to pull,
-           so the reservation silently lapsed and every newcomer ranked purely on
-           completeness — which is what sank them. Instead, spread the newcomers
-           ALREADY in the batch so they occupy even gaps rather than clustering at
-           whatever rank their incomplete profile earned them.
-
-           ⚠️ Only when the pool is exhausted. On a large pool the pull-from-
-           outside path above is strictly better: it adds people who would not
-           otherwise be seen at all, rather than merely repositioning people who
-           already were. Doing this unconditionally would overwrite the ranked
-           order of newcomers who genuinely earned good positions.
-
-           ⚠️ Only the TOP-UP is spread, never the whole in-batch newcomer set:
-           once `reserve` slots are satisfied the rest keep their real rank, which
-           is the same rule the large-pool path has always used.
-
-           ⚠️ POSITIONAL ONLY — `spreadReserved` returns the same members
-           reordered. Nobody is added or dropped, so the zero-repeat guarantee is
-           untouched. */
-        else if (poolExhausted && inBatch > 0) {
-          const inBatchCold = eligible.filter(isCold);
-          const topUp = inBatchCold.slice(0, reserve);
-          const rest = new Set(topUp.map((u) => u._id.toString()));
-          eligible = spreadReserved(
-            eligible.filter((u) => !rest.has(u._id.toString())),
-            topUp,
-          );
-        }
-      }
-
-      /* 🎓 OWN-COLLEGE SHARE.
-         Without a cap, a single-campus user sees their own college over and
-         over and meets nobody — the product is an inter-college network, so a
-         deck that is 100% your own campus is a failure even though it is
-         "correct" by every ranking rule.
-
-         ⚠️ ONLY APPLIES WHEN THE VIEWER IS ACTUALLY AT THEIR CAMPUS. On a
-         break trip `atOwnCampus` is false, the reserved slots are dropped, and
-         the nearest people fill the page instead. Reserving campus slots for
-         someone 1,400km from that campus would hand them a deck made entirely of
-         people they cannot meet, which is the summer-break problem this whole
-         distance layer exists to solve.
-
-         Applied AFTER ordering rather than inside the query, so it never changes
-         WHICH people rank highest — only how many are the same campus. */
-      if (!atOwnCampus) return eligible.slice(0, RANK_WINDOW);
-
-      /* Measured against the real pool — see ownCollegeCap(). */
-      const cap = ownCollegeCap(eligible.length);
-      const mine = [];
-      const others = [];
-      for (const u of eligible) {
-        (u.collegeCode && u.collegeCode === currentUser.collegeCode ? mine : others).push(u);
-      }
-      const keptMine = mine.slice(0, cap);
-      const overflow = mine.slice(cap);
-      others.push(...overflow);
-
-      /* Spread the kept own-college cards evenly through the window so no page
-         ends up dominated by them. Deterministic given a fixed order, which
-         matters because the whole point of P2 is that the order does not move
-         between requests. */
-      const out = [];
-      const stride = keptMine.length ? Math.max(1, Math.floor(others.length / keptMine.length)) : 1;
-      let mi = 0;
-      let nextMineAt = 0;
-      for (const o of others) {
-        out.push(o);
-        if (mi < keptMine.length && others.length && out.length >= nextMineAt) {
-          out.push(keptMine[mi++]);
-          nextMineAt += stride;
-        }
-      }
-      while (mi < keptMine.length) out.push(keptMine[mi++]);
-
-      return out.slice(0, RANK_WINDOW);
-    };
-
-    /* Keyed by viewer ALONE. It used to be keyed by (viewer, scope) so the campus
-       chip could resume a second frozen order — the chip is gone, so there is
-       one order and one cursor. Keying on scope would have kept two live
-       sessions per returning user, one of them dead weight. */
-    let session = await DiscoverSession.findOne({ viewerId: currentUser._id });
-    let rebuiltWindow = false;
-
-    if (!isLive(session)) {
-      /* Fresh session. Any previous window is overwritten rather than extended:
-         past SESSION_IDLE_MINUTES the user has been away, and carrying the old
-         order forward is the one thing that would make "new cards" not new. */
-      const window = await rankWindow([]);
-
-      if (session) {
-        session.userIds = window.map((u) => u._id);
-        session.cursor = 0;
-        session.servedIds = [];
-        session.rankingVersion = RANKING_VERSION;
-        session.lastSeenAt = now;
-        await session.save();
-      } else {
-        session = await DiscoverSession.create({
-          viewerId: currentUser._id,
-          userIds: window.map((u) => u._id),
-          cursor: 0,
-          servedIds: [],
-          rankingVersion: RANKING_VERSION,
-          lastSeenAt: now,
-        });
-      }
-      /* Deliberately left false. A first-ever build has no previous order to
-         compare against, so there is nothing for the client to announce — every
-         card is new by definition. The flag means "the order you were mid-way
-         through has changed", which only an extension can do. */
-      rebuiltWindow = false;
-    } else {
-      session.lastSeenAt = now;
-    }
-
-    /* Scan forward from the cursor until `limit` cards survive the exclusions.
-       Scanned-not-returned ids are consumed permanently — that is the whole
-       point of an index-based cursor, and it is why a page can come back short
-       without those people reappearing on the next page.
-
-       ⚠️ A FUNCTION, because it has to run a SECOND time after a window
-       rebuild. It used to be an inline `while` loop that ran once, and the
-       rebuild branch underneath reset the cursor to 0 over a fresh 500 ids and
-       then returned without ever reading them — so the response carried NO
-       cards while `hasMore` was true (`0 < 500`). The client saw "more available",
-       asked again, got nothing, and asked again: an unbounded request loop,
-       each iteration re-ranking the pool and rewriting the session. */
-    const SCAN_CHUNK = Math.max(limit * 4, 40);
-
-    const scanFrom = async (windowIds, startCursor) => {
-      const collected = [];
-      let cursor = startCursor;
-
-      while (collected.length < limit && cursor < windowIds.length) {
-        const slice = windowIds.slice(cursor, cursor + SCAN_CHUNK);
-        if (slice.length === 0) break;
-
-        /* ⚠️ MUST go through the same ranking stages as the window build.
-         This used to be `User.find({_id:{$in:slice}}).select(DECK_PROJECTION)`,
-         which is a QUERY. `hybridScore` and `_bandIndex` are computed by the
-         aggregation and are not stored on the document, so a query projection
-         cannot return them — every card served from a stored session came back
-         with score 0 and no distance label, silently, with no error anywhere.
-
-         That mattered because serving from the session is the NORMAL path once a
-         deck is under way; only the very first request of a session reads values
-         straight from the window build. */
-        const found = await User.aggregate([
-          { $match: { _id: {$in: slice } } },
-          ...rankStages(),
-          { $project: DECK_PROJECTION },
-        ], { allowDiskUse: true });
-        const byId = new Map(found.map((u) => [u._id.toString(), u]));
-
-        let scannedCount = 0;
-        for (const id of slice) {
-          scannedCount += 1;
-          const u = byId.get(id.toString());
-          if (u && !excludedIds.has(u._id.toString())) collected.push(u);
-          if (collected.length >= limit) break;
-        }
-        cursor += scannedCount;
-      }
-      return { collected, cursor };
-    };
-
-    let { collected, cursor } = await scanFrom(session.userIds, session.cursor);
-    session.cursor = cursor;
-
-    /* Window exhausted mid-session. Rank a fresh one that skips everything this
-       session has already shown — being shown is not an Interaction, so the
-       ledger above cannot know about them. */
-    let deckExhausted = false;
-    if (collected.length < limit && session.cursor >= session.userIds.length) {
-      const alreadyServed = new Set([
-        ...session.servedIds.map((id) => id.toString()),
-        ...session.userIds.map((id) => id.toString()),
+    const reportedIds = [...new Set(reports.map(r => r.reported?._id?.toString()))];
+    const reportCounts = {};
+    if (reportedIds.length) {
+      const counts = await Report.aggregate([
+        { $match: { reported: { $in: reportedIds }, status: { $ne: 'dismissed' } } },
+        { $group: { _id: '$reported', count: { $sum: 1 } } },
       ]);
-      const fresh = await rankWindow(alreadyServed);
-
-      if (fresh.length > 0) {
-        session.userIds = fresh.map((u) => u._id);
-        session.cursor = 0;
-        rebuiltWindow = true;
-        /* 👉 SERVE FROM THE WINDOW WE JUST BUILT. Without this second scan the
-           response returned whatever the first scan managed to collect — usually
-           nothing — while `hasMore` was true. The user is left staring at an
-           empty deck that claims to have more, which is both a visible dead end
-           and the trigger for the request loop above.
-
-           `rankWindow` already filters against `alreadyServed`, so the fresh ids
-           are strictly new and this cannot cycle: each rebuild strictly enlarges
-           the set of people this session can still show. */
-        ({ collected, cursor } = await scanFrom(session.userIds, 0));
-        session.cursor = cursor;
-
-        /* Belt and braces. If the fresh window somehow yields nothing servable
-           there is no point reporting "more available" — say so instead, so the
-           client stops asking. */
-        if (collected.length === 0) deckExhausted = true;
-      } else {
-        /* Nobody eligible left anywhere in the system. Hand back what this page
-           managed to collect and let `deckExhausted` tell the client to stop —
-           re-serving the exhausted window is what produces the "endless deck"
-           feeling, and it is a lie about there being anyone left. */
-        deckExhausted = true;
-      }
+      counts.forEach(c => { reportCounts[c._id.toString()] = c.count; });
     }
 
-    /* Every id actually handed out this session, for the next extension.
+    const data = reports.map(r => ({
+      _id: r._id,
+      reporter: {
+        name: r.reporter?.name || 'Unknown',
+        email: r.reporter?.email || '',
+        photo: r.reporter?.photos?.[0] || '',
+      },
+      reported: {
+        name: r.reported?.name || 'Unknown',
+        email: r.reported?.email || '',
+        photo: r.reported?.photos?.[0] || '',
+        suspended: r.reported?.suspended || false,
+        shadowbanned: !!r.reported?.shadowbannedAt,
+        reportCount: reportCounts[r.reported?._id?.toString()] || 0,
+      },
+      reason: r.reason,
+      details: r.details,
+      status: r.status,
+      createdAt: r.createdAt,
+    }));
 
-       ⚠️ NO DEDUP HERE. This used to be
-       `.filter((id, i, arr) => arr.findIndex(...) === i)` — O(n²) with a
-       `.toString()` allocated inside the inner comparison, roughly 125,000
-       string comparisons once a session had served 500 cards, on the hottest
-       route in the app.
-
-The array is still capped by the 30-minute session lifetime, so it cannot
-        grow without bound within a session. */
-    /* NOTE: we no longer append every dealt card to `servedIds` here. Only
-       cards the user actually acts on (pass, like, telegram) will be added
-       below, so that prefetched cards are not permanently burned. */
-
-    /* Cards handed out in this session BEFORE this page. Used as the first card's
-       `deckPosition`, and as the base the running total is incremented from once
-       this page's real size is known (below, after exclusions have run).
-
-       Read HERE rather than inline at the impression call, because by then
-       `session.cardsServed` has already been advanced by this page — so reading
-       it late would label every card one page too deep. */
-    const startPosition = session.cardsServed || 0;
-
-    /* NO SAVE HERE. The cursor, `servedIds` and `cardsServed` are all written by
-       the single save below, once the page's card count is known. Splitting this
-       across two saves doubled the window in which a concurrent request could
-       bump the session version and get THIS request rejected with a
-       `VersionError` — the intermittent 500 this retry now catches. */
-    /* Shapes and strips happen only on the cards actually returned. */
-    const eligibleBatch = collected;
-
-    /* Calculate the ranking score.
-       Compatibility used to be 50% of this. It is gone: it was computed from
-       a per-user answer array that no client could ever fill (the questions were
-       served by /config but rendered nowhere), so `compatRaw` was always null
-       and the term silently contributed 0 for every candidate. The two live
-       signals are re-weighted to fill the range instead of being left summing to
-       0.8, which would have compressed every score into the top 40% of the band
-       and made the sort close to arbitrary. */
-    /* Both `_recency` and `hybridScore` are now COMPUTED BY MONGO in the
-       `$addFields` stage above, not here. Re-deriving them in JavaScript would
-       be the old bug in a new place: two implementations of one formula that
-       drift apart, and the JS one would silently disagree with the sort that
-       actually ordered the results. Read them off the document. */
-    const scoredUsers = eligibleBatch.map((u) => {
-      const recencyScore = u._recency ?? UNKNOWN_ACTIVITY_SCORE;
-      const hybridScore = u.hybridScore ?? 0;
-
-      /* 🔒 CAMPUS BADGE — strip it server-side when the person opted out.
-       *
-       * Done HERE rather than in CSS on purpose. Hiding the field client-side
-       * still ships it over the wire, so anyone opening devtools would see
-       * every card's college regardless of the setting — the toggle would be a
-       * decoration rather than the privacy control it claims to be. Removing it
-       * here means the data never leaves the database.
-       *
-       * Keyed on EACH CARD's own `showCollege`, never the viewer's: this
-       * controls whether people can see YOU, and says nothing about what you
-       * are allowed to see. A user with the badge off is still shown college
-       * names on other people's cards. */
-      /* Campus-badge stripping and the dob→age derivation live in
-         utils/publicCard.js so the `profile-updated` broadcast (routes/users.js)
-         projects fields identically. Duplicating this is how the badge ends up
-         hidden in the deck but shipped over the wire in the live path. */
-      const shaped = { ...toPublicCard(u), hybridScore, _recency: recencyScore };
-
-      /* 📍 Coarse distance label — a BAND, never a distance and never
-       * coordinates. `bandFor` is given the band index rather than a km value
-       * because the km value is deliberately not computed in JavaScript or
-       * carried on the document; only the bucket crosses this boundary.
-       *
-       * Band 3 resolves to `label: null` and so renders nothing — labelling
-       * every distant stranger "Elsewhere in India" is noise, and the college
-       * badge already carries the useful part of that information.
-       *
-       * A missing band (viewer has no location, or the campus has no map
-       * position) leaves `distanceBand` undefined, which is the correct output:
-       * no label at all, rather than a wrong or "nearby" one. */
-      const band = bandFromIndex(u._bandIndex);
-      if (band && band.label) shaped.distanceBand = band.label;
-      /* _id is appended AFTER toPublicCard's allowlist on purpose — see the note
-         in recordImpressions. The deck client needs it to key the card stack, and
-         the impression log needs it as candidateId. It carries no profile data. */
-      shaped._id = u._id;
-      return shaped;
+    res.json({
+      data,
+      pagination: { page, perPage, total, totalPages: Math.ceil(total / perPage) },
     });
-
-    /* NO re-sort here. MongoDB already returned these in descending
-       hybridScore order via `$sort`. Re-sorting in JS looks harmless but
-       reintroduces exactly the bug we just fixed: it would re-rank only the
-       RANK_WINDOW slice, silently making anyone outside that window
-       unreachable again — the ceiling, just wearing a different hat. */
-    const finalDeck = scoredUsers.slice(0, limit);
-
-    /* Fold this page's real card count into the session's own running total.
-
-       `scoredUsers.length`, not `finalDeck.length` and not `collected.length`:
-         • `collected` over-collects on purpose so the scan can satisfy `limit`
-           after exclusions, so it overstates the count on most pages.
-         • `finalDeck` is capped at `limit`, so on a SHORT page — the last page of
-           a deck, or one where exclusions ate most of the batch — it would
-           understate it.
-       `scoredUsers` is what actually survives exclusion, so its length is the
-       page's true size either way.
-
-       ONE save, not two. An earlier version saved a second time here, because
-       `finalDeck` was originally declared below this point. That doubled the
-       window in which a concurrent request could bump the session version and
-       reject THIS save — which is how a normal page load started returning
-       intermittent 500s. The field is set before the single save at the end of
-       the scan instead. */
-    session.cardsServed = startPosition + scoredUsers.length;
-
-    /* 📍 REMEMBER EVERY CARD DEALT, NOT JUST THE ONES ACTED ON.
-     *
-     * `servedIds` used to be written only by the pass/align actions, on the
-     * reasoning that a merely-prefetched card should not be "burned". That
-     * reasoning is sound for a single window and wrong for the session.
-     *
-     * On window rebuild the skip set is `servedIds ∪ session.userIds`
-     * (see `alreadyServed`), and the rebuild REPLACES `userIds` with the new
-     * window. So the moment the new window is installed, every id from the
-     * previous window that was dealt but never acted on vanishes from the skip
-     * set. The next rebuild ranks them again and hands them back a second time.
-     *
-     * Measured on the seeded 1,200-user population: draining a viewer with 600
-     * eligible profiles dealt 600 cards containing only 543 distinct people —
-     * 57 of them a second time. The comment above the rebuild claimed "each
-     * rebuild strictly enlarges the set of people this session can still show";
-     * replacing the window made that false, and it was the only thing keeping
-     * the deck from cycling.
-     *
-     * Recording the dealt ids fixes it at the source, because the skip set then
-     * survives a window swap. The cost the old comment worried about — an
-     * unbounded array — is already handled by MAX_SESSION_SERVED, and the whole
-     * session is discarded after SESSION_IDLE_MINUTES regardless, so a card can
-     * never be burned beyond the lifetime of one browsing session.
-     *
-     * `$addToSet` so a pass/align that already recorded the id, or two cards in
-     * one page, cannot duplicate it. Trimmed to the cap by dropping the oldest,
-     * which is the only order worth losing: the newest cards are the ones a
-     * repeat would be most visible against. */
-    const dealt = finalDeck.map((u) => u._id).filter(Boolean);
-    if (dealt.length) {
-      session.servedIds = [...new Set([...(session.servedIds || []), ...dealt])];
-      if (session.servedIds.length > MAX_SESSION_SERVED) {
-        session.servedIds = session.servedIds.slice(-MAX_SESSION_SERVED);
-      }
-    }
-
-    await session.save();
-
-    /* 📊 IMPRESSION LOG — fire-and-forget, never awaited.
-     *
-     * One row per card actually returned. This is the baseline the ranking
-     * rewrite is measured against, so it has to be recording from BEFORE that
-     * change ships — afterwards, the "before" ordering can no longer be
-     * reconstructed. See models/DeckImpression.js for why likes and passes
-     * alone cannot substitute for it.
-     *
-     * `deckPosition` continues from where this viewer left off, which is why it
-     * is computed from the count already served rather than restarting at 0 for
-     * every page.
-     *
-     * `sessionId` is the DiscoverSession that defined this page's ORDER, not a
-     * client-supplied value. Taking it from the query string would let a caller
-     * mislabel which ordering produced these impressions, which is precisely
-     * the thing the column exists to record.
-     *
-     * ⚠️ `startPosition` IS SERVER-OWNED TOO, and it used to be
-     * `Number(req.query.served) || 0` — the client-supplied number, three lines
-     * below an argument for not trusting the client on exactly this point. The
-     * client keeps a running total in a ref; when the app-open location check
-     * discards a stale deck because the viewer travelled, the deck was rebuilt
-     * correctly (the CURSOR resets to 0, so the cards are right) but the client's
-     * total was never reset, so a fresh deck's first page was logged as cards
-     * 41–50 instead of 1–10. Invisible in the product, fatal to the metric the
-     * log exists for. `session.cardsServed` cannot drift that way. */
-    recordImpressions({
-      viewerId: currentUser._id,
-      sessionId: session._id,
-      cards: finalDeck,
-      startPosition,
-    });
-
-    res.status(200).json({
-      users: finalDeck,
-      total: eligibleBatch.length,
-      /* "Are there more cards after this one?"
-
-         ⚠️ NEVER TRUE WITH AN EMPTY PAGE. This expression used to be
-         `session.cursor < session.userIds.length || …`, which is satisfied the
-         moment a fresh window exists — even if this request returned zero cards.
-         The client reads `hasMore` as permission to ask again, so a
-         rebuild-then-return-empty response told it to keep asking, and it did:
-         an unbounded loop of requests, each one re-ranking the pool.
-
-         The guard is `finalDeck.length > 0`. A response with nothing in it is
-         never an invitation to try again, whatever the cursor says. The session
-         is left intact so a later request can still resume it — we are stopping
-         the client hammering, not deleting the deck. */
-      hasMore: finalDeck.length > 0
-        && (session.cursor < session.userIds.length || finalDeck.length === limit),
-      /* True when this request re-decided the order (new session, expired
-         session, or window extension). The client uses this to show a brief
-         "showing newer profiles" line. It is NOT a prompt to act and NOT a
-         button — see the decision that there is no user-triggered re-roll,
-         because tapping one returns the same exhausted pool. */
-      rebuiltWindow,
-      /* Nobody eligible is left anywhere in the system. The client must stop
-         fetching and show "You're all caught up" rather than paging into a void. */
-      deckExhausted,
-      /* Identifies the order this page came from, so impressions from one
-         browsing session can be told apart from another's. */
-      sessionId: session._id.toString(),
-      /* Cards handed out in this session, SERVER-SIDE. Sent back so the client's
-         running total agrees with the number actually logged — the client no
-         longer needs it for correctness, but keeping them in sync means a future
-         client that reads it is reading the truth rather than its own guess. */
-      served: session.cardsServed || 0,
-    });
-  } catch (error) {
-    /* ⚠️ A LOST OPTIMISTIC-CONCURRENCY RACE IS NOT AN ERROR. It means another
-       request for this same viewer finished first and already advanced the
-       session — which is precisely what should happen when two deck requests
-       overlap. Mongoose reports it as `VersionError` ("No matching document
-       found for id ... version N"), and the old code turned that into a 500.
-
-       The failure was reachable from ordinary use, not just a rare race. On
-       mount the client issues TWO deck requests: `refreshMerged()` (limit=20)
-       and `fetchProfiles(false)` (limit=10), milliseconds apart. Only the one
-       that saved second lost, which is why the log showed the same URL as both
-       `500 221ms` and `200 266ms` — an intermittent 500 that looked like the
-       server randomly breaking.
-
-       So: retry once against fresh state. The retry re-reads the session, sees
-       the winner's cursor, and serves the page that actually follows it — which
-       is what the client needed all along. One retry is deliberate rather than a
-       loop: genuine contention on a single viewer's deck is two requests, and a
-       third concurrent caller is a client bug that should still surface.
-
-       Retrying beats returning the winner's response because that response was
-       built for a different page size and cursor, so handing it back would
-       duplicate or skip cards in the deck the user is holding. */
-    throw error;
+  } catch (err) {
+    console.error('Admin reports error:', err);
+    res.status(500).json({ message: 'Failed to fetch reports' });
   }
-};
+});
 
-/**
- * 🔒 PER-VIEWER SERIALISATION FOR THE DECK.
- *
- * A session's whole purpose is that it is a single ordered list advancing by a
- * cursor. Two requests reading and writing it at once is not a rare edge case —
- * it is the normal state on page load, because the client deliberately issues
- * `refreshMerged()` (limit=20) and `fetchProfiles(false)` (limit=10) together.
- *
- * Both problems that produced 500s are the same problem. With Mongoose's
- * optimistic concurrency, whichever request saved second was rejected with
- * `VersionError`, and when neither request found an existing session both tried
- * to CREATE one, so the unique `viewerId` index rejected the loser with `E11000`.
- *
- * Retrying is the WRONG shape of fix here. Measured on a 5-way burst, three
- * retries still lost a request: every colliding retry re-runs the same read and
- * collides again, and the retries are themselves concurrent. It reduced the
- * failure rate without removing it.
- *
- * Serialising per viewer removes the race instead of surviving it. Requests for
- * DIFFERENT viewers still run fully in parallel — the key is the viewer's id, not
- * a global lock — so this costs nothing under real multi-user load. It is
- * in-process only, which matches how the app runs today; a multi-process
- * deployment would need the same guarantee at the database level instead.
- *
- * Chain-based rather than a mutex flag, so the ordering is FIFO and a waiter
- * cannot be starved by a stream of newcomers.
- */
-const deckLocks = new Map();
-
-const withViewerDeckLock = async (viewerId, fn) => {
-  const key = String(viewerId);
-  const previous = deckLocks.get(key) || Promise.resolve();
-
-  /* Release on settle, not on success — a throw must not wedge the viewer. */
-  let release;
-  const held = new Promise((r) => { release = r; });
-  deckLocks.set(key, previous.then(() => held));
-
-  await previous.catch(() => {});
+router.put('/reports/bulk', async (req, res) => {
   try {
-    return await fn();
-  } finally {
-    release();
-    /* Drop the entry once this request is the last one queued, so the map does
-       not grow one entry per viewer for the life of the process. */
-    if (deckLocks.get(key) === held) deckLocks.delete(key);
-  }
-};
-
-/**
- * Serves one deck page, serialised per viewer.
- *
- * ⚠️ A LOST RACE IS NOT AN ERROR. It means another request for this same viewer
- * finished first and already advanced — or created — the session, which is
- * precisely what should happen when two deck requests overlap.
- *
- * This was reachable from ordinary use, not a rare race. On mount the client
- * issues TWO deck requests milliseconds apart. Only whichever finished second
- * lost, which is why the log showed the same URL as both `500 221ms` and
- * `200 266ms` — an intermittent 500 that read as the server randomly breaking.
- *
- * The lock above is what prevents the race. `isConcurrentDeckRace` below is only
- * a backstop for the case the lock cannot cover: a process restart mid-write, or
- * a deployment where the in-memory map is not shared between workers. Two
- * attempts is enough there, because there is no ongoing contention to retry
- * through — only at most one already-committed write to step past.
- */
-const DECK_RACE_RETRIES = 2;
-
-const serveDeck = async (req, res) => {
-  const viewerId = req.user?._id;
-  if (!viewerId) {
-    res.status(401).json({ message: 'Not authorised' });
-    return;
-  }
-
-  await withViewerDeckLock(viewerId, async () => {
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        await buildDeckPage(req, res);
-        return;
-      } catch (error) {
-        if (isConcurrentDeckRace(error) && attempt < DECK_RACE_RETRIES) {
-          console.warn(
-            `Discover deck: ${error.name || error.code} despite the viewer lock, retry ${attempt + 1}/${DECK_RACE_RETRIES}`,
-          );
-          await new Promise((r) => setTimeout(r, 20 * (attempt + 1)));
-          continue;
-        }
-        console.error('Discover deck error:', error);
-        /* `headersSent` guards against writing a second response: a retry can
-           partially succeed and then fail while shaping cards. */
-        if (!res.headersSent) {
-          res.status(500).json({ message: 'Server error fetching discovery deck' });
-        }
-        return;
-      }
+    const { ids, status } = req.body;
+    if (!Array.isArray(ids) || !ids.length || !status) {
+      return res.status(400).json({ message: 'ids (array) and status required' });
     }
-  });
-};
+    if (ids.some(id => !mongoose.Types.ObjectId.isValid(id))) {
+      return res.status(400).json({ message: 'One or more invalid report IDs' });
+    }
+    if (!VALID_REPORT_STATUSES.includes(status)) {
+      return res.status(400).json({ message: `Invalid status. Must be one of: ${VALID_REPORT_STATUSES.join(', ')}` });
+    }
+    await Report.updateMany(
+      { _id: { $in: ids } },
+      { $set: { status } }
+    );
+    res.json({ message: `${ids.length} reports updated to ${status}` });
+  } catch (err) {
+    console.error('Admin bulk update error:', err);
+    res.status(500).json({ message: 'Failed to bulk update' });
+  }
+});
 
-// @route   GET /api/discover
-router.get('/', protect, serveDeck);
-
-// Validation middleware for target artifact to prevent injection/NaN crashes
-const validateTarget = [
-  body('target')
-    .optional({ nullable: true, checkFalsy: true })
-    .matches(/^(photo|prompt)_\d+$/)
-    .withMessage('Invalid target artifact format. Must be like "photo_0" or "prompt_1".'),
-  validate,
-];
-
-/* ✨ ALIGN — the single expression of interest in the deck.
-
-   Replaces both the flower (`/like`) and the telegram. One action, so there is
-   no longer a question of which button expresses more.
-
-   Deliberately a SEPARATE handler rather than `handleLike(req, res, { … })`
-   with a flag. Sharing it would keep the two-era daily limits (7 letters, 1
-   telegram) and the two-era notification types alive in the only code path that
-   matters, and the flags would be the part that rots first.
-
-   The note is OPTIONAL and the target is OPTIONAL: a bare POST with neither body
-   field is a plain profile-level align, which is what the global button sends. */
-const handleAlign = async (req, res) => {
-  const targetId = req.params.id;
-  const currentUser = req.user;
-
+router.put('/reports/:id', async (req, res) => {
   try {
-    // 🛡️ BLOCK SELF-INTERACTION
-    if (targetId === currentUser._id.toString()) {
-      return res.status(400).json({ message: 'Cannot align with yourself' });
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid report ID' });
     }
 
-    /* 🛡️ THE GATE — server-side enforcement. Presentation lives in the client;
-     * this is what actually enforces it, because POST /discover/align/:id is
-     * directly callable and devtools makes that trivial. Same threshold the
-     * client uses, read from the same module, so they cannot drift. */
-    const actor = await User.findById(currentUser._id).select('profileScore');
-    const score = Number.isFinite(actor?.profileScore) ? actor.profileScore : 0;
-    if (score < LADDER.interact) {
-      return res.status(403).json({
-        message: 'Finish your profile to start aligning.',
-        code: 'GATED',
-        profileScore: score,
-        required: LADDER.interact,
-      });
+    const { status } = req.body;
+    if (status && !VALID_REPORT_STATUSES.includes(status)) {
+      return res.status(400).json({ message: `Invalid status. Must be one of: ${VALID_REPORT_STATUSES.join(', ')}` });
     }
 
-    // 🛡️ TARGET MUST EXIST AND BE ACTIVE
-    const targetUser = await User.findById(targetId);
-    if (!targetUser || targetUser.isDeleted || targetUser.suspended) {
-      return res.status(404).json({ message: 'User not found' });
+    const update = {};
+    if (status) update.status = status;
+
+    const report = await Report.findByIdAndUpdate(req.params.id, update, { new: true });
+    if (!report) return res.status(404).json({ message: 'Report not found' });
+
+    res.json({ message: 'Report updated', report });
+  } catch (err) {
+    console.error('Admin report update error:', err);
+    res.status(500).json({ message: 'Failed to update report' });
+  }
+});
+
+// ─── USERS ───
+router.get('/users', async (req, res) => {
+  try {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const perPage = Math.min(Number(req.query.perPage) || 15, 100);
+    const { status, search } = req.query;
+    const skip = (page - 1) * perPage;
+
+    const filter = { isDeleted: false };
+    if (status === 'active') { filter.suspended = false; filter.shadowbannedAt = null; }
+    else if (status === 'suspended') filter.suspended = true;
+    else if (status === 'shadowbanned') filter.shadowbannedAt = { $ne: null };
+
+    if (search) {
+      const safeSearch = escapeRegex(search);
+      filter.$or = [
+        { name: { $regex: safeSearch, $options: 'i' } },
+        { email: { $regex: safeSearch, $options: 'i' } },
+      ];
     }
 
-    // 🛡️ BLOCK PERMANENTLY CLOSED CONNECTIONS
-    const permanentArchive = await Interaction.findOne({
-      $or: [
-        { actorId: currentUser._id, targetId, actionType: 'archive', cooldownExpiresAt: null },
-        { actorId: targetId, targetId: currentUser._id, actionType: 'archive', cooldownExpiresAt: null },
-      ],
-    });
-    if (permanentArchive) {
-      return res.status(403).json({
-        message: 'This connection has been permanently closed.',
-        code: 'USER_UNMATCHED',
-      });
+    const [users, total] = await Promise.all([
+      User.find(filter)
+        .select('name email college year gender photos suspended suspendedReason shadowbannedAt isDeleted lastActive createdAt adminNotes')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(perPage)
+        .lean(),
+      User.countDocuments(filter),
+    ]);
+
+    const userIds = users.map(u => u._id);
+    const reportCounts = {};
+    if (userIds.length) {
+      const counts = await Report.aggregate([
+        { $match: { reported: { $in: userIds } } },
+        { $group: {
+          _id: '$reported',
+          total: { $sum: 1 },
+          pending: { $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] } },
+        } },
+      ]);
+      counts.forEach(c => { reportCounts[c._id.toString()] = c; });
     }
 
-    /* DAILY LIMIT — 10 aligns/day, IST midnight.
-     * Align is the deck's only positive action, so this is the quota that now
-     * matters. The old split (7 letters + 1 telegram) was two budgets for one
-     * gesture, which is why neither number described what a user could do. */
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const istNow = new Date(Date.now() + IST_OFFSET_MS);
-    istNow.setUTCHours(0, 0, 0, 0);
-    const startOfDay = new Date(istNow.getTime() - IST_OFFSET_MS);
-    const dailyCount = await Interaction.countDocuments({
-      actorId: currentUser._id,
-      actionType: 'align',
-      createdAt: { $gte: startOfDay },
-    });
-    const DAILY_ALIGN_LIMIT = 10;
-    if (dailyCount >= DAILY_ALIGN_LIMIT) {
-      return res.status(403).json({ message: "Out of aligns. Come back tomorrow." });
-    }
-
-    const { note, target } = req.body;
-    const safeNote = typeof note === 'string' ? note.trim() : '';
-    if (safeNote.length > 140) {
-      return res.status(400).json({
-        message: 'Note must be 140 characters or fewer.',
-        code: 'NOTE_TOO_LONG',
-      });
-    }
-
-    // 1. THE LEDGER ENTRY
-    const alignInteraction = await Interaction.create({
-      actorId: currentUser._id,
-      targetId,
-      actionType: 'align',
-      targetArtifact: target || null,
-      letterContent: safeNote || null,
-      cooldownExpiresAt: null,
-    });
-
-    // 2. INBOX NOTIFICATION
-    const notification = await Notification.create({
-      recipientId: targetId,
-      senderId: currentUser._id,
-      type: 'new_align',
-      interactionRef: alignInteraction._id,
-    });
-
-    const io = req.app.get('io');
-
-    // 3. REAL-TIME PING
-    if (io) {
-      io.to(targetId.toString()).emit('new-align', {
-        type: 'new_align',
-        senderName: currentUser.name,
-      });
-    }
-
-    // 4. BACKGROUND PUSH
-    addToQueue(() => sendPushNotification(targetId, {
-      title: 'New Align',
-      body: `${currentUser.name} wants to align with you.`,
-      data: {
-        type: 'notification',
-        notificationId: notification._id.toString(),
-        interactionId: alignInteraction._id.toString(),
+    const data = users.map(u => ({
+      ...u,
+      reportStats: {
+        count: reportCounts[u._id.toString()]?.total || 0,
+        pendingCount: reportCounts[u._id.toString()]?.pending || 0,
       },
     }));
 
-    /* 5. MUTUAL — spans the retired types on purpose.
-       'letter' and 'telegram' rows already exist from the two-action era, and a
-       match half-built out of those is a real match the user can see in their
-       drawer. Dropping them would strand those pairs forever, because nothing
-       re-writes history into 'align'. */
-    const isMutual = await Interaction.findOne({
-      actorId: targetId,
-      targetId: currentUser._id,
-      actionType: { $in: ['align', 'letter', 'telegram', 'accept_letter'] },
+    res.json({
+      data,
+      pagination: { page, perPage, total, totalPages: Math.ceil(total / perPage) },
     });
+  } catch (err) {
+    console.error('Admin users error:', err);
+    res.status(500).json({ message: 'Failed to fetch users' });
+  }
+});
 
-    const targetProfile = {
-      _id: targetUser._id,
-      name: targetUser.name,
-      photos: targetUser.photos,
-      bio: targetUser.bio,
-      year: targetUser.year,
-      // Same opt-out as the deck rows: hiding your campus must not re-expose it
-      // through the payload that follows a mutual align.
-      ...(targetUser.showCollege !== false && targetUser.college
-        ? { college: targetUser.college, collegeCode: targetUser.collegeCode }
-        : {}),
-      pronouns: targetUser.pronouns,
-      interests: targetUser.interests,
-      prompts: targetUser.prompts,
-      intent: targetUser.intent,
-    };
+router.get('/users/:id', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id)
+      .select('-onboardingData -pushSubscription +adminNotes +suspendedReason')
+      .lean();
+    if (!user) return res.status(404).json({ message: 'User not found' });
 
-    if (isMutual) {
-      const pairKey = [currentUser._id.toString(), targetId.toString()].sort().join('__');
+    const reportCount = await Report.countDocuments({ reported: user._id });
+    const pendingReports = await Report.countDocuments({ reported: user._id, status: 'pending' });
+    const matchCount = await Alignment.countDocuments({ users: user._id, isActive: true });
 
-      // Atomic upsert: two people can accept at the same instant, and a plain
-      // find-then-create is a duplicate-key crash on the loser.
-      const match = await Alignment.findOneAndUpdate(
-        { pairKey },
-        {
-          $setOnInsert: {
-            pairKey,
-            users: [currentUser._id, targetId],
-          },
-          $set: {
-            isActive: true,
-            unlockedByInteractionId: alignInteraction._id,
-          },
-        },
-        { upsert: true, new: true },
-      );
+    res.json({
+      ...user,
+      reportStats: { count: reportCount, pendingCount: pendingReports },
+      matchCount,
+    });
+  } catch (err) {
+    console.error('Admin user detail error:', err);
+    res.status(500).json({ message: 'Failed to fetch user' });
+  }
+});
 
-      /* OPENING MESSAGE — only when there is something to open with.
-         A bare align carries no text, and an empty chat bubble reading "" is
-         worse than no message: it looks broken rather than unwritten. */
-      if (safeNote || target) {
-        const senderProfile = await User.findById(currentUser._id).select('photos prompts');
-        const msgData = {
-          alignmentId: match._id,
-          senderId: currentUser._id,
-          type: 'opening_letter',
-          text: safeNote || '',
-          deliveryStatus: 'sent',
-        };
+router.put('/users/:id', async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid user ID' });
+    }
+    const { suspended, suspendedReason, shadowbanned, adminNotes } = req.body;
+    const update = {};
 
-        if (target?.startsWith('photo_')) {
-          const idx = parseInt(target.split('_')[1], 10);
-          const url = senderProfile?.photos?.[idx] || senderProfile?.photos?.[0];
-          if (url) {
-            msgData.mediaUrl = url;
-          }
-        } else if (target?.startsWith('prompt_')) {
-          const idx = parseInt(target.split('_')[1], 10);
-          const q = senderProfile?.prompts?.[idx]?.question;
-          if (q) {
-            msgData.text = safeNote ? `"${q}"\n\n${safeNote}` : `"${q}"`;
-          }
-        }
-
-        try {
-          await Message.findOneAndUpdate(
-            { alignmentId: match._id, type: 'opening_letter' },
-            { $setOnInsert: msgData },
-            { upsert: true },
-          );
-        } catch (err) {
-          // E11000 = a concurrent request already created the opening message.
-          // That is the desired end-state, so swallow it. Anything else rethrow.
-          if (err.code !== 11000) throw err;
-        }
+    if (suspended !== undefined) {
+      if (typeof suspended !== 'boolean') {
+        return res.status(400).json({ message: 'suspended must be a boolean' });
       }
-
-      if (io) {
-        io.to(targetId.toString()).emit('match-notification', {
-          _id: match._id,
-          alignmentId: match._id,
-          interactionRef: alignInteraction._id,
-          targetArtifact: target || null,
-          letterContent: safeNote || null,
-          user: targetProfile,
-        });
+      update.suspended = suspended;
+      update.suspendedAt = suspended ? new Date() : null;
+      update.suspendedReason = suspended ? (suspendedReason || null) : null;
+      // Revoke push on the way IN, not only on account deletion. A suspended
+      // user's alignment stays `isActive: true`, so without this their counterpart
+      // can keep messaging them and their lock screen keeps lighting up with the
+      // message preview. Clearing it here means suspension actually stops contact
+      // on suspension day — restoring `suspended: false` leaves it null, so they
+      // simply re-enable notifications themselves.
+      if (suspended) update.pushSubscription = null;
+    }
+    if (shadowbanned !== undefined) {
+      if (typeof shadowbanned !== 'boolean') {
+        return res.status(400).json({ message: 'shadowbanned must be a boolean' });
       }
-
-      /* Mark as seen HERE, and only here.
-         The deck route marks a card seen when the viewer ACTS on it; this is the
-         action route, so it owns that write. Doing it in both places would be a
-         duplicate `$addToSet`, which is harmless — but doing it in neither is
-         how a card the user aligned with comes back on the next rebuild. */
-      const session = await DiscoverSession.findOne({ viewerId: currentUser._id });
-      if (session) {
-        await session.updateOne({ $addToSet: { servedIds: targetId } });
+      update.shadowbannedAt = shadowbanned ? new Date() : null;
+      if (!shadowbanned) update.contentFrozen = false;
+    }
+    if (adminNotes !== undefined) {
+      if (typeof adminNotes !== 'string') {
+        return res.status(400).json({ message: 'adminNotes must be a string' });
       }
+      update.adminNotes = adminNotes;
+    }
 
-      return res.status(200).json({
-        matched: true,
-        alignmentId: match._id,
-        user: targetProfile,
+    const user = await User.findByIdAndUpdate(req.params.id, update, { new: true })
+      .select('name email suspended suspendedReason shadowbannedAt adminNotes');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    if (shadowbanned === false && user.email) {
+      await ModerationLedger.deleteOne({
+        emailFingerprint: fingerprintModerationEmail(user.email),
       });
     }
 
-    const session = await DiscoverSession.findOne({ viewerId: currentUser._id });
-    if (session) {
-      await session.updateOne({ $addToSet: { servedIds: targetId } });
+    if (suspended) {
+      const io = req.app.get('io');
+      if (io) {
+        io.to(req.params.id.toString()).emit('force-disconnect', {
+          reason: suspendedReason || 'Account suspended',
+        });
+        // Force-close every socket belonging to this user (all their devices).
+        // `force-disconnect` above is emitted on their personal room, but a
+        // suspended user must stop both sending and RECEIVING realtime frames —
+        // otherwise "…" typing indicators and presence keep flowing. socket/chat.js
+        // stores identity as `socket.user._id`, not `socket.data.userId`.
+        for (const s of io.sockets.sockets.values()) {
+          if (String(s.user?._id) === String(req.params.id)) {
+            s.disconnect(true);
+          }
+        }
+      }
     }
 
-    return res.status(200).json({ matched: false });
-  } catch (error) {
-    console.error('Align error:', error);
-    return res.status(500).json({ message: 'Server error processing align' });
-  }
-};
-
-router.post('/align/:id', protect, discoverLimiter, validateTarget, handleAlign);
-
-router.post('/pass/:id', protect, discoverLimiter, async (req, res) => {
-  const targetId = req.params.id;
-  const currentUser = req.user;
-
-  try {
-    // 🧹 ATOMIC UPSERT: Overwrites existing pass cooldowns instead of stacking duplicate rows
-    //
-    // `origin: 'pass'` is what finally distinguishes a swipe from a block or an
-    // unmatch. The field has been in the Interaction schema's enum since it was
-    // added, but no route ever wrote it, so a pass and a permanent block were
-    // only separable by `cooldownExpiresAt === null` — which cannot express
-    // "passed four times, now hide forever". Setting origin here is what lets the
-    // escalating cooldown count passes without counting blocks as passes.
-    //
-    // NOTE: `$set` would clobber a permanent archive back into a temporary pass.
-    // It is deliberately NOT in the $set — origin only moves null → 'pass', so a
-    // blocked user who somehow gets a pass row cannot un-block themselves.
-    await Interaction.findOneAndUpdate(
-      { actorId: currentUser._id, targetId, actionType: 'archive', origin: { $ne: 'unmatch' } },
-      {
-        $set: { cooldownExpiresAt: new Date(Date.now() + 7 * DAY_MS) },$setOnInsert: { origin: 'pass' },
-      },
-      { upsert: true, new: true }
-    );
-    let session = await DiscoverSession.findOne({ viewerId: currentUser._id });
-if (!session) {
-  session = await DiscoverSession.create({ viewerId: currentUser._id, servedIds: [] });
-}
-await session.updateOne({ $addToSet: { servedIds: targetId } });
-res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Pass error:', error);
-    res.status(500).json({ message: 'Server error processing pass' });
+    res.json({ message: 'User updated', user });
+  } catch (err) {
+    console.error('Admin user update error:', err);
+    res.status(500).json({ message: 'Failed to update user' });
   }
 });
+
+router.post('/users/:id/disconnect', async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid user id' });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { lastLogoutAt: new Date() },
+      { new: true, select: '_id' }
+    );
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(req.params.id.toString()).emit('force-disconnect', {
+        reason: 'Admin forced disconnect',
+      });
+      io.in(req.params.id.toString()).disconnectSockets(true);
+    }
+    res.json({ message: 'User disconnected' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to disconnect user' });
+  }
+});
+
+// ─── ANALYTICS ───
+router.get('/analytics', async (req, res) => {
+  try {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const [dailySignups, dailyReports, dailyMatches, dailyMessages, dailyActive] = await Promise.all([
+      User.aggregate([
+        { $match: { isDeleted: false, createdAt: { $gte: thirtyDaysAgo } } },
+        { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, count: { $sum: 1 } } },
+        { $sort: { _id: 1 } },
+      ]),
+      Report.aggregate([
+        { $match: { createdAt: { $gte: thirtyDaysAgo } } },
+        { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, count: { $sum: 1 } } },
+        { $sort: { _id: 1 } },
+      ]),
+      Alignment.aggregate([
+        { $match: { createdAt: { $gte: thirtyDaysAgo } } },
+        { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, count: { $sum: 1 } } },
+        { $sort: { _id: 1 } },
+      ]),
+      Message.aggregate([
+        { $match: { createdAt: { $gte: thirtyDaysAgo }, deleted: false } },
+        { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, count: { $sum: 1 } } },
+        { $sort: { _id: 1 } },
+      ]),
+      User.aggregate([
+        { $match: { isDeleted: false, lastActive: { $gte: thirtyDaysAgo } } },
+        { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$lastActive' } }, count: { $sum: 1 } } },
+        { $sort: { _id: 1 } },
+      ]),
+    ]);
+
+    res.json({
+      dailySignups: dailySignups.map(d => ({ date: d._id, count: d.count })),
+      dailyReports: dailyReports.map(d => ({ date: d._id, count: d.count })),
+      dailyMatches: dailyMatches.map(d => ({ date: d._id, count: d.count })),
+      dailyMessages: dailyMessages.map(d => ({ date: d._id, count: d.count })),
+      dailyActive: dailyActive.map(d => ({ date: d._id, count: d.count })),
+    });
+  } catch (err) {
+    console.error('Admin analytics error:', err);
+    res.status(500).json({ message: 'Failed to fetch analytics' });
+  }
+});
+
+// ─── COLLEGES ────────────────────────────────────────────────────────────
+// Colleges live in the DATABASE so an operator can add a campus without a
+// deploy. This is the whole reason `COLLEGE_MAP` in appData.js stopped being
+// the source of truth.
+//
+// Two rules are enforced here rather than trusted to the UI:
+//   1. At least one valid domain. A college with no domain has nothing to
+//      verify an email against, so it would accept anyone.
+//   2. `code` is immutable once students exist. It is the join key on every
+//      user document; renaming it splits one campus into two in the data.
+
+/** Normalise + validate a list of domains into storage form. */
+const sanitiseDomains = (raw) => {
+  const list = Array.isArray(raw) ? raw : String(raw || '').split(',');
+  const out = [];
+  for (const item of list) {
+    const d = normaliseDomain(item);
+    if (d && !out.includes(d)) out.push(d);
+  }
+  return out;
+};
+
+/* 📍 Parse a campus map position from the admin form.
+ *
+ * Accepts an already-paired `[lat, lng]` (how the API receives it) or the two
+ * separate string fields the form posts, because an operator types "19.076" into
+ * a latitude box and a comma-separated pair is awkward to validate by eye.
+ *
+ * Returns null for anything unusable so callers can distinguish "not supplied"
+ * from "supplied and wrong" — those two need different handling: the first is
+ * normal, the second is a data-entry error worth reporting.
+ *
+ * Rounding is deliberately NOT applied here. Campus coordinates are public
+ * building locations, not user data, so they keep full precision — the privacy
+ * rounding in `sanitizeLatLng` exists to protect a person's home coordinates
+ * and a campus does not need it. */
+const parseCollegeLatLng = (raw, rawLng) => {
+  let pair = null;
+  if (Array.isArray(raw)) {
+    pair = raw;
+  } else if (raw !== undefined && raw !== null && String(raw).trim() !== '') {
+    const parts = String(raw).split(',').map((s) => s.trim()).filter(Boolean);
+    pair = rawLng !== undefined && parts.length === 1 ? [parts[0], rawLng] : parts;
+  }
+  if (!pair || pair.length !== 2) return null;
+  const [lat, lng] = pair.map((n) => Number(n));
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return [lat, lng];
+};
+
+router.get('/colleges', async (req, res) => {
+  try {
+    const colleges = await College.find().sort({ name: 1 }).lean();
+    // Student counts come from the user index on collegeCode, so this is one
+    // aggregation rather than a query per college.
+    const counts = await User.aggregate([
+      { $match: { collegeCode: { $nin: ['', null] } } },
+      { $group: { _id: '$collegeCode', n: { $sum: 1 } } },
+    ]);
+    const byCode = Object.fromEntries(counts.map((c) => [c._id, c.n]));
+
+    res.json({
+      colleges: colleges.map((c) => ({
+        ...c,
+        studentCount: byCode[c.code] || 0,
+      })),
+    });
+  } catch (err) {
+    console.error('Admin colleges list error:', err);
+    res.status(500).json({ message: 'Failed to fetch colleges' });
+  }
+});
+
+router.post('/colleges', async (req, res) => {
+  try {
+    const code = String(req.body?.code || '').trim().toLowerCase();
+    const name = String(req.body?.name || '').trim();
+    const domains = sanitiseDomains(req.body?.domains);
+    const latLngFromBody = parseCollegeLatLng(req.body?.latLng);
+
+    /* Reject a malformed coordinate pair rather than silently discarding it.
+       This is an operator data-entry form, so a typo here would otherwise
+       quietly leave the campus unranked by distance with nothing to indicate
+       why. Absent is fine; present-and-wrong is an error. */
+    if (req.body?.latLng !== undefined && req.body?.latLng !== null && req.body?.latLng !== '' && !latLngFromBody) {
+      return res.status(400).json({
+        message: 'Map position must be a latitude and longitude between -90/90 and -180/180',
+      });
+    }
+
+    if (!/^[a-z0-9-]{2,30}$/.test(code)) {
+      return res.status(400).json({ message: 'Code must be 2-30 lowercase letters, numbers or dashes' });
+    }
+    if (name.length < 3) {
+      return res.status(400).json({ message: 'Enter the full official college name' });
+    }
+    if (domains.length === 0) {
+      return res.status(400).json({
+        message: 'Add at least one email domain. Without one, anyone could verify as a student there.',
+      });
+    }
+
+    if (await College.findOne({ code })) {
+      return res.status(400).json({ message: `A college with code "${code}" already exists` });
+    }
+
+    const college = await College.create({
+      code,
+      name,
+      domains,
+      city: String(req.body?.city || '').trim(),
+      state: String(req.body?.state || '').trim(),
+      country: String(req.body?.country || '').trim(),
+      // 📍 Optional campus position for distance ranking. Validated by
+      // sanitizeLatLng() and omitted entirely when blank — a college with no
+      // position is fully functional, its students just sort as unknown
+      // distance rather than being guessed at.
+      ...(latLngFromBody ? { latLng: latLngFromBody } : {}),
+      active: req.body?.active !== false,
+    });
+
+    res.status(201).json({ college: { ...college.toObject(), studentCount: 0 } });
+  } catch (err) {
+    if (err?.code === 11000) {
+      return res.status(400).json({ message: 'That college code is already taken' });
+    }
+    console.error('Admin college create error:', err);
+    res.status(500).json({ message: 'Failed to create college' });
+  }
+});
+
+router.put('/colleges/:code', async (req, res) => {
+  try {
+    const college = await College.findOne({ code: req.params.code });
+    if (!college) return res.status(404).json({ message: 'College not found' });
+
+    const studentCount = await User.countDocuments({ collegeCode: college.code });
+
+    // The join key. Renaming it after students exist would orphan every one of
+    // them onto a college that no longer exists, and split them from their peers.
+    if (req.body?.code && String(req.body.code).trim().toLowerCase() !== college.code) {
+      if (studentCount > 0) {
+        return res.status(400).json({
+          message: `Cannot change the code — ${studentCount} student(s) already use it. The code is a permanent identifier.`,
+        });
+      }
+      college.code = String(req.body.code).trim().toLowerCase();
+    }
+
+    if (req.body?.name !== undefined) {
+      const n = String(req.body.name).trim();
+      if (n.length < 3) return res.status(400).json({ message: 'Enter the full official college name' });
+      college.name = n;
+    }
+
+    if (req.body?.domains !== undefined) {
+      const domains = sanitiseDomains(req.body.domains);
+      if (domains.length === 0) {
+        return res.status(400).json({ message: 'A college needs at least one email domain' });
+      }
+      college.domains = domains;
+    }
+
+    for (const k of ['city', 'state', 'country']) {
+      if (req.body?.[k] !== undefined) college[k] = String(req.body[k]).trim();
+    }
+
+    /* 📍 Map position. Setting it to null/'' CLEARS it, which is how an operator
+       removes a coordinate that was entered against the wrong campus. */
+    if (req.body?.latLng !== undefined) {
+      const parsed = parseCollegeLatLng(req.body.latLng);
+      if (!parsed && req.body.latLng !== null && req.body.latLng !== '') {
+        return res.status(400).json({
+          message: 'Map position must be a latitude and longitude between -90/90 and -180/180',
+        });
+      }
+      college.latLng = parsed ?? undefined;
+    }
+    if (req.body?.active !== undefined) college.active = Boolean(req.body.active);
+
+    await college.save();
+    res.json({ college: { ...college.toObject(), studentCount } });
+  } catch (err) {
+    if (err?.code === 11000) {
+      return res.status(400).json({ message: 'That college code is already taken' });
+    }
+    console.error('Admin college update error:', err);
+    res.status(500).json({ message: 'Failed to update college' });
+  }
+});
+
+router.delete('/colleges/:code', async (req, res) => {
+  try {
+    const college = await College.findOne({ code: req.params.code });
+    if (!college) return res.status(404).json({ message: 'College not found' });
+
+    // Deleting a college with students would orphan them — no college to
+    // display, no domain to re-verify against. Deactivate instead: that hides
+    // it from new signups and leaves existing students intact.
+    const studentCount = await User.countDocuments({ collegeCode: college.code });
+    if (studentCount > 0) {
+      return res.status(400).json({
+        message: `Cannot delete — ${studentCount} student(s) verified through this college. Deactivate it instead to stop new signups.`,
+      });
+    }
+
+    await college.deleteOne();
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Admin college delete error:', err);
+    res.status(500).json({ message: 'Failed to delete college' });
+  }
+});
+
+// ─── COLLEGE REQUESTS ────────────────────────────────────────────────────
+// Students who can't find their campus submit one. They do NOT get access:
+// an operator must verify the domain and add the college first.
+//
+// Grouped by collegeName and sorted by request count, because for a solo
+// operator the count IS the priority queue — it tells you which campus has the
+// most people waiting.
+
+router.get('/college-requests', async (req, res) => {
+  try {
+    const requests = await CollegeRequest.find().sort({ createdAt: -1 }).lean();
+
+    const groups = {};
+    for (const r of requests) {
+      const key = r.collegeName.trim();
+      if (!groups[key]) {
+        groups[key] = {
+          collegeName: key,
+          count: 0,
+          city: r.city,
+          state: r.state,
+          country: r.country,
+          domains: new Set(),
+          status: r.status,
+          oldest: r.createdAt,
+          requesters: [],
+        };
+      }
+      const g = groups[key];
+      g.count += 1;
+      // Fill blanks from later rows rather than leaving them empty.
+      g.city = g.city || r.city;
+      g.state = g.state || r.state;
+      g.country = g.country || r.country;
+      // The submitted address hints at the domain to verify. Masked in the
+      // list so the queue doesn't display a wall of full addresses.
+      const d = String(r.email || '').split('@')[1];
+      if (d) g.domains.add(d);
+      if (r.status === 'pending') g.requesters.push({
+        _id: r._id,
+        name: r.name,
+        email: r.email.replace(/^(.{2}).*(@.*)$/, '$1•••$2'),
+        createdAt: r.createdAt,
+      });
+    }
+
+    const list = Object.values(groups)
+      .map((g) => ({
+        ...g,
+        domains: [...g.domains],
+        // Age of the oldest pending request — the "old requests" view is just
+        // this list filtered to 30+ days, so nothing sits forgotten.
+        ageDays: Math.floor((Date.now() - new Date(g.oldest).getTime()) / 86400000),
+      }))
+      // Most requests first: that ordering is the operator's to-do list.
+      .sort((a, b) => b.count - a.count || new Date(a.oldest) - new Date(b.oldest));
+
+    res.json({ groups: list, total: requests.length });
+  } catch (err) {
+    console.error('Admin college requests error:', err);
+    res.status(500).json({ message: 'Failed to fetch college requests' });
+  }
+});
+
+router.post('/college-requests/:id/approve', async (req, res) => {
+  try {
+    const request = await CollegeRequest.findById(req.params.id);
+    if (!request) return res.status(404).json({ message: 'Request not found' });
+
+    const domain = String(request.email || '').split('@')[1];
+    const code = String(req.body?.code || request.collegeName).trim().toLowerCase()
+      .replace(/[^a-z0-9]+/g, '').slice(0, 30);
+    if (!code) return res.status(400).json({ message: 'Provide a college code' });
+
+    const domains = sanitiseDomains(req.body?.domains || [domain]);
+    if (domains.length === 0) {
+      return res.status(400).json({ message: 'A college needs at least one email domain' });
+    }
+
+    // Upsert so re-approving a group the operator already added is a no-op
+    // rather than a duplicate-key 500.
+    const college = await College.findOneAndUpdate(
+      { code },
+      {
+        $set: {
+          name: request.collegeName,
+          domains,
+          city: request.city || '',
+          state: request.state || '',
+          country: request.country || '',
+          active: true,
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
+
+    // Mark every pending request for this college as approved, so the operator
+    // can then press Notify once for the whole group.
+    await CollegeRequest.updateMany(
+      { collegeName: request.collegeName, status: 'pending' },
+      { $set: { status: 'approved', collegeCode: college.code } },
+    );
+
+    res.json({ ok: true, college: { ...college.toObject(), studentCount: 0 } });
+  } catch (err) {
+    console.error('Admin approve request error:', err);
+    res.status(500).json({ message: 'Failed to approve request' });
+  }
+});
+
+router.post('/college-requests/:id/reject', async (req, res) => {
+  try {
+    const request = await CollegeRequest.findById(req.params.id);
+    if (!request) return res.status(404).json({ message: 'Request not found' });
+    await CollegeRequest.updateOne(
+      { _id: request._id },
+      { $set: { status: 'rejected' } },
+    );
+    // No email is sent on rejection, by design: a silent rejection is
+    // indistinguishable from being ignored.
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Admin reject request error:', err);
+    res.status(500).json({ message: 'Failed to reject request' });
+  }
+});
+
+// Manual, explicit — never automatic. Notifying is the one moment we email an
+// address someone typed into a public form, which is exactly why it must be a
+// deliberate press rather than a side effect of adding the college: an operator
+// who mistypes a college name would otherwise email everyone who requested it.
+router.post('/college-requests/:id/notify', async (req, res) => {
+  try {
+    const request = await CollegeRequest.findById(req.params.id);
+    if (!request) return res.status(404).json({ message: 'Request not found' });
+
+    const targets = await CollegeRequest.find(
+      { collegeName: request.collegeName, status: 'approved' },
+    ).lean();
+
+    const college = request.collegeCode
+      ? await College.findOne({ code: request.collegeCode })
+      : null;
+
+    let sent = 0;
+    const failed = [];
+    for (const r of targets) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await sendCollegeLive(r.email, college?.name || request.collegeName);
+        sent += 1;
+      } catch (e) {
+        failed.push(r.email);
+      }
+    }
+
+    await CollegeRequest.updateMany(
+      { collegeName: request.collegeName, status: 'approved', notifiedAt: null },
+      { $set: { notifiedAt: new Date() } },
+    );
+
+    res.json({ ok: true, sent, failed: failed.length, total: targets.length });
+  } catch (err) {
+    console.error('Admin notify error:', err);
+    res.status(500).json({ message: 'Failed to send notifications' });
+  }
+});
+
+// ─── SETTINGS ───
+router.get('/settings', async (req, res) => {
+  try {
+    const settings = await Setting.find({
+      key: { $nin: RETIRED_MODERATION_SETTING_KEYS },
+    }).lean();
+    const obj = {};
+    settings.forEach(s => { obj[s.key] = s.value; });
+    obj.reportReviewThreshold ??= DEFAULT_REPORT_REVIEW_THRESHOLD;
+    res.json(obj);
+  } catch (err) {
+    console.error('Admin settings error:', err);
+    res.status(500).json({ message: 'Failed to fetch settings' });
+  }
+});
+
+router.put('/settings', async (req, res) => {
+  try {
+    const entries = Object.entries(req.body || {});
+    if (!entries.length) {
+      return res.status(400).json({ message: 'No settings provided' });
+    }
+    if (entries.length > 50) {
+      return res.status(400).json({ message: 'Too many settings at once' });
+    }
+
+    for (const [key, value] of entries) {
+      if (!ALLOWED_SETTING_KEYS.has(key)) {
+        return res.status(400).json({ message: `Unknown setting key: ${key}` });
+      }
+      if (key === 'reportReviewThreshold') {
+        if (!Number.isInteger(value) || value < 1 || value > 1000) {
+          return res.status(400).json({ message: 'reportReviewThreshold must be a whole number between 1 and 1000' });
+        }
+      } else if (typeof value === 'string' && value.trim().length > 50) {
+        return res.status(400).json({ message: `${key} must be 50 characters or fewer` });
+      }
+    }
+
+    const ops = entries.map(([key, value]) =>
+      Setting.findOneAndUpdate({ key }, { key, value }, { upsert: true, new: true })
+    );
+    await Promise.all(ops);
+    res.json({ message: 'Settings saved' });
+  } catch (err) {
+    console.error('Admin settings save error:', err);
+    res.status(500).json({ message: 'Failed to save settings' });
+  }
+});
+
+export default router;
+
+```
+
+### ./server/routes/alignments.js
+
+```
+import express from 'express';
+import mongoose from 'mongoose';
+import Alignment from '../models/Alignment.js';
+import User from '../models/User.js';
+import Interaction from '../models/Interaction.js';
+import Block from '../models/Block.js';
+import { withFreshAge } from '../utils/age.js';
+import { protect } from '../middleware/auth.js';
+
+const router = express.Router();
+
+/** Ids the given user has blocked, or who have blocked them. */
+const getBlockedUserIds = async (userId) => {
+  const blocks = await Block.find({
+    $or: [{ blocker: userId }, { blocked: userId }],
+  }).lean();
+  return blocks.map((b) =>
+    b.blocker.toString() === userId.toString() ? b.blocked : b.blocker
+  );
+};
+
+// @route   GET /api/alignments
+// @desc    Get all active alignments for the current user with details (paginated) using Aggregation
+// @access  Private
+router.get('/', protect, async (req, res) => {
+  try {
+    const userId = new mongoose.Types.ObjectId(req.user._id);
+    // Clamped. `parseInt('-1') || 1` yields -1 (truthy), so a negative page
+    // reached `$skip: -40`, which MongoDB rejects — a 500 plus a log-spam
+    // vector. The limit was previously uncapped, so ?limit=1e9 went straight
+    // to Mongo. admin.js already used this form.
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 100);
+
+    // 🚫 BLOCK FILTER — second layer behind the accept-letter check.
+    //
+    // This route gated only on `isActive`, and never consulted the Block
+    // collection at all. A block sets `isActive: false` on the alignment, but any
+    // path that flipped it back (the accept-letter route, which had no block
+    // check) put a blocked chat straight back into this list for both users.
+    // Filtering here means a stale/re-activated alignment can never surface a
+    // block, regardless of what wrote it.
+    const blockedUserIds = await getBlockedUserIds(userId);
+    const blockedClause = blockedUserIds.length
+      ? { users: { $not: { $in: blockedUserIds } } }
+      : {};
+
+    const query = { users: userId, isActive: true, ...blockedClause };
+
+    const total = await Alignment.countDocuments(query);
+
+    // SINGLE AGGREGATION PIPELINE
+    // FIXED: sortDate is computed BEFORE $skip/$limit so pagination and display
+    // order use the SAME key. (Old code paginated by updatedAt, then re-sorted
+    // the page by sortDate — alignments could duplicate/vanish across pages.)
+    const rawAlignments = await Alignment.aggregate([
+      { $match: query },
+
+      // 1. Most recent message — computed BEFORE pagination so sortDate is stable.
+      //    Cheap indexed lookup ({ alignmentId: 1, createdAt: 1 } index in Message.js).
+      {
+        $lookup: {
+          from: 'messages',
+          let: { alignmentId: '$_id' },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$alignmentId', '$$alignmentId'] } } },
+            { $sort: { createdAt: -1 } },
+            { $limit: 1 },
+            { $project: { text: 1, senderId: 1, createdAt: 1, readAt: 1, type: 1, mediaUrl: 1 } }
+          ],
+          as: 'lastMessageArr'
+        }
+      },
+      {
+        $unwind: {
+          path: '$lastMessageArr',
+          preserveNullAndEmptyArrays: true // Keep alignment even if no messages exist
+        }
+      },
+
+      // 1b. Unread message count for this alignment (messages from other user, not read, not deleted)
+      {
+        $lookup: {
+          from: 'messages',
+          let: { alignmentId: '$_id' },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$alignmentId', '$$alignmentId'] } } },
+            { $match: { senderId: { $ne: userId }, readAt: null, deleted: false } },
+            { $count: 'count' }
+          ],
+          as: 'unreadCountArr'
+        }
+      },
+      {
+        $addFields: {
+          unreadCount: {
+            $ifNull: [{ $arrayElemAt: ['$unreadCountArr.count', 0] }, 0]
+          }
+        }
+      },
+
+      // 2. Sort ONCE by the same key the client sees, with an _id tiebreaker for
+      //    deterministic page boundaries. THEN paginate.
+      { $addFields: { sortDate: { $ifNull: ['$lastMessageArr.createdAt', '$updatedAt'] } } },
+      { $sort: { sortDate: -1, _id: -1 } },
+      { $skip: (page - 1) * limit },
+      { $limit: limit },
+
+      // 3. Join the aligned user's profile (heavy lookup — AFTER pagination,
+      //    so it only runs for this page's alignments)
+      {
+        $lookup: {
+          from: 'users',
+          let: { userIds: '$users' },
+          pipeline: [
+            { $match: { $expr: { $in: ['$_id', '$$userIds'] } } },
+            { $match: { _id: { $ne: userId } } },
+            // `dob` instead of `age`: the stored age is written once at
+            // onboarding and goes stale, so projecting it straight out of the
+            // database shows an out-of-date number on the Matches page and the
+            // chat header. withFreshAge() below derives a current age and drops
+            // dob before the response — see utils/age.js. `age` is projected too
+            // only as the fallback for rows with no dob.
+            { $project: { name: 1, photos: 1, year: 1, dob: 1, age: 1, lastActive: 1, gender: 1, bio: 1, prompts: 1, intent: 1, interests: 1, suspended: 1, isDeleted: 1 } }
+          ],
+          as: 'otherUserArr'
+        }
+      },
+      { $unwind: { path: '$otherUserArr', preserveNullAndEmptyArrays: true } },
+      { $match: { otherUserArr: { $ne: null } } },
+
+      // 4. Join the original interaction that created this alignment
+      {
+        $lookup: {
+          from: 'interactions',
+          let: { interactionId: '$unlockedByInteractionId' },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$_id', '$$interactionId'] } } },
+            { $project: { targetArtifact: 1, letterContent: 1, actionType: 1 } }
+          ],
+          as: 'originInteraction'
+        }
+      },
+      {
+        $unwind: {
+          path: '$originInteraction',
+          preserveNullAndEmptyArrays: true
+        }
+      },
+
+      // 5. Shape the final output to match frontend expectations
+      {
+        $project: {
+          _id: 1,
+          user: '$otherUserArr',
+          lastMessage: '$lastMessageArr',
+          originInteraction: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          sortDate: 1,
+          unreadCount: 1,
+          yourTurn: {
+            $cond: {
+              if: { $ifNull: ['$lastMessageArr.senderId', false] },
+              then: {
+                $and: [
+                  { $ne: ['$lastMessageArr.senderId', userId] },
+                  { $eq: [{ $ifNull: ['$lastMessageArr.readAt', null] }, null] }
+                ]
+              },
+              else: false
+            }
+          }
+        }
+      }
+    ]);
+
+    // Age is derived from dob here rather than inside the pipeline, so the deck
+    // (routes/discover.js) and this list can never disagree about someone's age.
+    // `user` is the only profile object in the response, and withFreshAge()
+    // strips dob so the date of birth is never sent to the client.
+    const alignments = rawAlignments.map((a) => ({
+      ...a,
+      user: a.user ? withFreshAge(a.user) : a.user,
+    }));
+
+    res.status(200).json({
+      // `matches` is the key the client reads. Three call sites — Matches.jsx:76,
+      // AppShell.jsx:69 and AppShell.jsx:79/83 — all read `.matches`, and this
+      // route used to send the list under `alignments` instead, so every one of
+      // them resolved to `undefined`. The Matches page rendered an empty list,
+      // the unread count was permanently 0, and the realtime update handlers
+      // bailed on their first line (`if (!old?.matches) return old`). Mutual
+      // matches were invisible to both sides.
+      matches: alignments,
+      // Deprecated alias, same array. Kept for one release so nothing that
+      // still reads `.alignments` breaks mid-deploy. Remove once no client code
+      // references it — the client's only reads of this endpoint are the three
+      // above.
+      alignments,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+      hasMore: page * limit < total,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error fetching alignments' });
+  }
+});
+
+// @route   DELETE /api/alignments/:id
+// @desc    Unmatch/deactivate an alignment
+// @access  Private
+router.delete('/:id', protect, async (req, res) => {
+  try {
+    // isActive guard: a second (double-tap/retry) unmatch finds nothing here,
+    // so it can never create duplicate permanent-archive Interactions.
+    const alignment = await Alignment.findOne({
+      _id: req.params.id,
+      users: req.user._id,
+      isActive: true,
+    });
+
+    if (!alignment) {
+      return res.status(400).json({ message: 'Alignment not found or already inactive' });
+    }
+
+    alignment.isActive = false;
+    await alignment.save();
+
+    // Create permanent exclusion so they never appear in each other's Discover deck
+    const otherUserId = alignment.users.find(u => u.toString() !== req.user._id.toString());
+    await Interaction.create({
+      actorId: req.user._id,
+      targetId: otherUserId,
+      actionType: 'archive',
+      cooldownExpiresAt: null, // Permanent — no cooldown expiry
+      origin: 'unmatch',       // Distinguishes from block archives — unblock never sweeps it
+    });
+
+    // Notify the other user
+    const io = req.app.get('io');
+    if (io) {
+      const alignmentId = alignment._id.toString();
+      io.in(alignmentId).socketsLeave(alignmentId);
+    }
+    if (otherUserId && io) {
+      io.to(otherUserId.toString()).emit('unmatch-notification', { alignmentId: alignment._id });
+      io.to(req.user._id.toString()).emit('unmatch-notification', { alignmentId: alignment._id });
+    }
+    res.status(200).json({ success: true, message: 'Unmatched successfully' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error processing unmatch' });
+  }
+});
+
+export default router;
+```
+
+### ./server/routes/auth.js
+
+```
+import express from 'express';
+import { body } from '../middleware/validate.js';
+import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
+import OTP from '../models/OTP.js';
+import User from '../models/User.js';
+import ModerationLedger from '../models/ModerationLedger.js';
+import { fingerprintModerationEmail, preserveShadowban } from '../utils/moderationLedger.js';
+import { validate } from '../middleware/validate.js';
+import { protect, setAuthCookie, clearAuthCookie } from '../middleware/auth.js';
+import { APP_CONSTANTS } from '../config/appData.js';
+import { sendOTP } from '../utils/email.js';
+import { hashOtp, verifyOtp, normalizeEmail } from '../utils/otpHash.js';
+import College from '../models/College.js';
+import { emailMatchesCollege } from '../utils/collegeDomain.js';
+import { isCollegeAllowed, COLLEGE_GATE_MESSAGE } from '../utils/campusGate.js';
+import { verifyOtpLimiter, otpEmailLimiter, otpIpLimiter, reverifyLimiter } from '../middleware/rateLimiters.js';
+
+const router = express.Router();
+
+// Generate 6-digit cryptographically secure code
+// NOTE: randomInt upper bound is EXCLUSIVE — 1000000 makes 999999 reachable
+const generateOTP = () => {
+  return crypto.randomInt(100000, 1000000).toString();
+};
+
+/**
+ * 🔒 COLLEGE RESOLUTION — the user PICKS their college; we never infer it.
+ *
+ * This used to guess the college from the email domain by taking "the label
+ * immediately before .ac.in", which meant `x@cse.iitb.ac.in` and `x@iitb.ac.in`
+ * both became `iitb` — and, critically, that the college was a FUNCTION of the
+ * email. With the picker, the student states their college and the email must
+ * then agree with it.
+ *
+ * Matching is exact-or-subdomain via utils/collegeDomain.js, so a college
+ * registered as `iitb.ac.in` accepts every department address without listing
+ * them, while `evil@iitb.ac.in.attacker.com` is rejected.
+ */
+
+/**
+ * Look up a college and check the email belongs to it.
+ *
+ * @returns {{ok:true, college}|{ok:false, college?:object, reason:string}}
+ */
+export const resolveCollege = async (collegeCode, email) => {
+  const code = (collegeCode || '').toString().trim().toLowerCase();
+  if (!code) {
+    return { ok: false, reason: 'Please select your college first.' };
+  }
+
+  const college = await College.findOne({ code });
+  if (!college) {
+    return { ok: false, reason: 'Please select your college from the list.' };
+  }
+  if (!college.active) {
+    return { ok: false, college, reason: 'Sign-ups for this college are currently closed.' };
+  }
+
+  // 🔒 THE PILOT GATE.
+  //
+  // Checked AFTER the college exists and is active, so a student outside the
+  // gate gets the same closed-door message whether their campus is missing,
+  // deactivated, or simply not yet opened to the pilot. Before this line the
+  // three failure modes were indistinguishable to the caller and each leaked a
+  // little of the shape of the pilot.
+  //
+  // This is the security control. The picker hiding non-gated colleges (see
+  // collegeGateFilter in the list routes) is only cosmetic — it keeps the UI
+  // honest, but a student can post any collegeCode they like to /api/auth, so
+  // the check that matters has to live here, server-side, on the path that
+  // actually issues an OTP.
+  if (!isCollegeAllowed(code)) {
+    return { ok: false, college, reason: COLLEGE_GATE_MESSAGE };
+  }
+
+  if (!emailMatchesCollege(email, college.domains)) {
+    // ── THE OPERATOR ESCAPE HATCH ────────────────────────────────────────────
+    //
+    // A single account, matched by exact address, is allowed to register
+    // without a college-domain email. This exists because adminProtect gates on
+    // `user.email === ADMIN_EMAIL`, and an admin whose address is a Gmail or an
+    // alumni mailbox can never satisfy an academic-domain check — so without
+    // this, setting ADMIN_EMAIL to anything other than a student address makes
+    // the entire admin panel permanently unreachable. There is no other way
+    // to recover it: the panel has no separate login.
+    //
+    // Deliberately narrow on all three axes:
+    //   • ONE address, exact match after trim+lowercase — never a domain.
+    //   • It still needs a valid college CODE that exists and is active, and
+    //     still has to clear the pilot gate. This bypasses the email check
+    //     only, not the college gate.
+    //   • It still requires a real OTP. Nothing about it skips verification;
+    //     it only lets a non-@iitb.ac.in mailbox receive that code.
+    //
+    // Unset ADMIN_EMAIL → the comparison is against undefined, matches
+    // nothing, and behaviour is exactly as before.
+    const adminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    if (adminEmail && email.toLowerCase() === adminEmail) {
+      console.warn(
+        `[admin-bootstrap] ${email} registered on "${code}" without a matching college domain.`,
+      );
+      return { ok: true, college };
+    }
+
+    // The one error that names the college and its domain. Specific enough to
+    // tell a student what went wrong; it leaks no user data — college domains
+    // are public information and the student supplied the email themselves.
+    const suffix = college.domains[0] ? `@${college.domains[0]}` : 'a college email address';
+    return {
+      ok: false,
+      college,
+      reason: `${college.name} students need an email address ending in ${suffix}.`,
+    };
+  }
+
+  return { ok: true, college };
+};
+
+// How long a verified account stays verified before the annual re-check.
+const REVERIFY_INTERVAL_MS = 365 * 24 * 60 * 60 * 1000;
+
+// Grace period after the re-check date passes, before the account is gated.
+// Absorbs a college mail-server outage without cutting students off.
+const REVERIFY_GRACE_DAYS = 14;
+
+/**
+ * Next re-verification date = one year after the moment we just proved inbox
+ * control. Deliberately NOT derived from graduatingYear: a student on a
+ * semester extension legitimately types a later year, and we must not gate them
+ * on a date they never chose. One year from the proof is both simpler and
+ * always fair.
+ */
+const nextReverifyDate = (from = new Date()) => new Date(from.getTime() + REVERIFY_INTERVAL_MS);
+
+/**
+ * Whole days remaining in the grace window. Negative once overdue+expired,
+ * which is what the login gate keys on. An account with no `reverifyDue` is
+ * treated as not-yet-due, so nothing is ever locked out by missing data.
+ */
+const graceDaysLeft = (due, now = new Date()) => {
+  if (!due) return REVERIFY_GRACE_DAYS;
+  const end = new Date(due).getTime() + REVERIFY_GRACE_DAYS * 24 * 60 * 60 * 1000;
+  return Math.ceil((end - now.getTime()) / (24 * 60 * 60 * 1000));
+};
+
+// @route   POST /api/auth/send-otp
+// @desc    Generate OTP and send it via email
+// @access  Public
+router.post(
+  '/send-otp',
+  otpIpLimiter,
+  otpEmailLimiter,
+  [
+    body('email')
+      .isEmail()
+      .withMessage('Please enter a valid email address'),
+    body('collegeCode')
+      .isString()
+      .withMessage('Please select your college')
+      .bail()
+      .trim()
+      .notEmpty()
+      .withMessage('Please select your college'),
+  ],
+  validate,
+  async (req, res) => {
+    const email = normalizeEmail(req.body.email);
+    const collegeCode = req.body.collegeCode;
+
+    try {
+      // The picker is authoritative: the student chose the college, and the
+      // email must belong to THAT college. There is no global .ac.in rule any
+      // more — a college registered as `foo.com` works exactly like an .ac.in
+      // one, which is what makes this an inter-college network rather than an
+      // India-academics-only one.
+      const resolved = await resolveCollege(collegeCode, email);
+      if (!resolved.ok) {
+        return res.status(400).json({ message: resolved.reason });
+      }
+      const college = resolved.college;
+      // Rate limiting: check recent OTP requests (optional, but let's keep it robust)
+      const recentOTPs = await OTP.find({
+        email,
+        createdAt: { $gte: new Date(Date.now() - 60 * 60 * 1000) }, // last hour
+      });
+
+      if (recentOTPs.length >= 5) {
+        return res.status(429).json({
+          message: 'Too many verification codes requested. Please try again in an hour.',
+        });
+      }
+
+      const otp = generateOTP();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
+
+      // Save to DB — only the HMAC fingerprint, never the code itself.
+      //
+      // collegeCode is persisted HERE, server-side, at the moment the challenge
+      // is issued. verify-otp reads it from this record rather than accepting it
+      // from the request body, so a client cannot ask for a code against one
+      // college and then verify as a different one.
+      await OTP.create({
+        email,
+        otpHash: hashOtp(email, otp),
+        expiresAt,
+        collegeCode: college.code,
+      });
+
+      // Send OTP
+      await sendOTP(email, otp);
+
+      res.status(200).json({ message: 'Verification code sent successfully' });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: 'Server error, could not send code' });
+    }
+  }
+);
+
+// @route   POST /api/auth/verify-otp
+// @desc    Verify OTP and return JWT token
+// @access  Public
+router.post(
+  '/verify-otp',
+  verifyOtpLimiter,
+  [
+    body('email').isEmail().withMessage('Valid email required'),
+    body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits'),
+  ],
+  validate,
+  async (req, res) => {
+    const email = normalizeEmail(req.body.email);
+    const otp = req.body.otp;
+
+    try {
+      const record = await OTP.findOne({ email }).sort({ createdAt: -1 });
+
+      if (!record) {
+        return res.status(400).json({ message: 'No verification code found' });
+      }
+
+      // Check expiry
+      if (record.expiresAt < new Date()) {
+        await OTP.deleteOne({ _id: record._id });
+        return res.status(400).json({ message: 'Verification code has expired. Please request a new one.' });
+      }
+
+      // Check attempts
+      if (record.attempts >= 3) {
+        return res.status(400).json({
+          message: 'Too many incorrect attempts. Please request a new code.',
+        });
+      }
+
+      // Compare (constant-time against the stored HMAC)
+      if (!verifyOtp(email, otp, record.otpHash)) {
+        const updated = await OTP.findOneAndUpdate(
+          { _id: record._id, attempts: { $lt: 3 } },
+          { $inc: { attempts: 1 } },
+          { new: true }
+        );
+        if (!updated) {
+          return res.status(400).json({ message: 'Too many incorrect attempts. Please request a new code.' });
+        }
+        return res.status(400).json({ message: 'Invalid verification code' });
+      }
+
+      // Valid OTP! Find or create user
+      let user = await User.findOne({ email });
+
+      // RECLAMATION: a soft-deleted email can be reused once the 30-day
+      // Trust & Safety retention window has elapsed. Hard-delete the stale
+      // doc so a fresh account can be created below (no cron needed).
+      const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+      if (user && user.isDeleted) {
+        const deletedAt = user.deletedAt ? user.deletedAt.getTime() : 0;
+        if (Date.now() - deletedAt >= RETENTION_MS) {
+          await preserveShadowban(user);
+          await User.deleteOne({ _id: user._id });
+          user = null; // fall through to fresh-account creation
+        }
+      }
+
+      // The college comes from the OTP record — the same value send-otp validated
+      // against this email's domain. Never re-derived here.
+      const college = record.collegeCode ? await College.findOne({ code: record.collegeCode }) : null;
+      if (!college) {
+        // The college was deleted between issuing and verifying the code. Fail
+        // closed: no college, no account.
+        await OTP.deleteMany({ email });
+        return res.status(400).json({
+          message: 'That college is no longer available. Please select your college again.',
+        });
+      }
+
+      if (!user) {
+        const moderationRecord = await ModerationLedger.findOne({
+          emailFingerprint: fingerprintModerationEmail(email),
+        }).lean();
+        user = await User.create({
+          email,
+          college: college.name,
+          collegeCode: college.code,
+          isVerified: true,
+          isOnboarded: false,
+          status: 'active',
+          lastVerifiedAt: new Date(),
+          reverifyDue: nextReverifyDate(),
+          ...(moderationRecord ? {
+            shadowbanScore: moderationRecord.shadowbanScore,
+            shadowbannedAt: moderationRecord.shadowbannedAt,
+            contentFrozen: moderationRecord.contentFrozen,
+          } : {}),
+        });
+      } else {
+        // 🛡️ Block suspended users from logging in
+        if (user.suspended) {
+          return res.status(403).json({
+            message: 'Your account has been suspended. Contact support for assistance.',
+            suspended: true,
+            reason: user.suspendedReason || 'Multiple community reports',
+          });
+        }
+
+        // 🛡️ Block deleted users from logging in
+        if (user.isDeleted) {
+          const unlockAt = user.deletedAt
+            ? new Date(user.deletedAt.getTime() + RETENTION_MS)
+            : new Date(Date.now() + RETENTION_MS);
+          return res.status(403).json({
+            message: `This account was deleted recently. You can create a new account with this email on or after ${unlockAt.toDateString()}.`,
+            deleted: true,
+            reusableAt: unlockAt.toISOString(),
+          });
+        }
+
+        user.isVerified = true;
+        // ⚠️ college/collegeCode are NOT overwritten on login any more.
+        //
+        // This used to re-derive them from the email domain on every single
+        // login. With the picker that was actively wrong — it silently discarded
+        // the student's stated college and replaced it with a guess, which would
+        // have made the picker decorative. They're set once at account creation
+        // and only change via the explicit "change college" flow.
+        //
+        // Each successful OTP proof renews the re-verification clock.
+        user.status = 'active';
+        user.lastVerifiedAt = new Date();
+        user.reverifyDue = nextReverifyDate();
+        await user.save();
+      }
+
+      // Delete OTP records for this email
+      await OTP.deleteMany({ email });
+
+      // Create JWT
+      const token = jwt.sign(
+        { id: user._id },
+        process.env.JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      // Set httpOnly cookie (primary auth mechanism)
+      setAuthCookie(res, token);
+
+      res.status(200).json({
+        user: {
+          _id: user._id,
+          email: user.email,
+          college: user.college,
+          collegeCode: user.collegeCode,
+          isOnboarded: user.isOnboarded,
+          name: user.name,
+          isUnderReview: Boolean(user.shadowbannedAt || user.contentFrozen),
+          suspended: user.suspended,
+          isDeleted: user.isDeleted,
+          status: user.status || 'active',
+          reverifyDue: user.reverifyDue || null,
+          // Returned so the client can decide whether to show the annual
+          // student check. `required` is false inside the grace window, so a
+          // student with a temporarily broken inbox is nudged, not blocked.
+          reverifyRequired:
+            Boolean(user.reverifyDue) &&
+            new Date(user.reverifyDue).getTime() + REVERIFY_GRACE_DAYS * 86400000 < Date.now(),
+        },
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: 'Server error during verification' });
+    }
+  }
+);
+
+// ─── ANNUAL RE-VERIFICATION ──────────────────────────────────────────────
+// The product claims "Students only." A college email proves inbox control at
+// one moment, and alumni mailboxes keep working for decades. Re-checking once a
+// year is the only thing that makes the claim true rather than aspirational —
+// when a graduate's inbox finally dies, the code stops arriving and they stop
+// being a student. Nobody is blocked by us; the inbox does it.
+//
+// ⚠️ NEVER deletes or suspends for a failed check. Losing mail access is not
+// proof of anything, and silently destroying an account because a university
+// mail server had a bad afternoon is unacceptable.
+
+// @route   POST /api/auth/reverify
+// @desc    Send a fresh code to the user's college email (annual student check)
+// @access  Private
+router.post('/reverify', protect, reverifyLimiter, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const college = user.collegeCode ? await College.findOne({ code: user.collegeCode }) : null;
+    if (!college) {
+      // Their college was removed from the directory. Do NOT delete — they may
+      // just need to be moved to a corrected record by an operator.
+      return res.status(400).json({
+        message: 'Your college is no longer listed. Please contact support.',
+        code: 'COLLEGE_UNAVAILABLE',
+      });
+    }
+
+    const now = new Date();
+    const otp = generateOTP();
+    const expiresAt = new Date(now.getTime() + 10 * 60 * 1000);
+
+    await OTP.create({
+      email: user.email,
+      otpHash: hashOtp(user.email, otp),
+      expiresAt,
+      collegeCode: college.code,
+    });
+
+    await sendOTP(user.email, otp);
+
+    const body = {
+      message: `Code sent to your ${college.name} email.`,
+      reverifyDue: user.reverifyDue,
+      graceDaysLeft: graceDaysLeft(user.reverifyDue, now),
+    };
+
+    /* ⚠️ TEST-ONLY. The plaintext code is unrecoverable by design — only its
+       HMAC is stored — and Dev Mode inside sendOTP prints it to the server
+       console, which isn't reachable when the route is driven over HTTP. This
+       returns it so the re-verify flow can be verified end to end without
+       reading logs.
+       Gated on NODE_ENV === 'test' so it cannot fire in production, where it
+       would hand a caller the code for the account they're already logged into
+       (which would defeat the entire annual check). */
+    if (process.env.NODE_ENV === 'test') body.__testOtp = otp;
+
+    res.json(body);
+  } catch (err) {
+    console.error('Reverify send error:', err);
+    res.status(500).json({ message: 'Could not send verification code' });
+  }
+});
+
+// @route   POST /api/auth/reverify/confirm
+// @desc    Complete the annual student check and renew the re-verification date
+// @access  Private
+router.post('/reverify/confirm', protect, verifyOtpLimiter, [
+  body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits'),
+], validate, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const record = await OTP.findOne({ email: user.email }).sort({ createdAt: -1 });
+    if (!record || !record.collegeCode) {
+      return res.status(400).json({ message: 'Request a new code first.' });
+    }
+    if (record.expiresAt < new Date()) {
+      await OTP.deleteOne({ _id: record._id });
+      return res.status(400).json({ message: 'That code expired. Request a new one.' });
+    }
+    if (!verifyOtp(user.email, req.body.otp, record.otpHash)) {
+      await OTP.findOneAndUpdate(
+        { _id: record._id, attempts: { $lt: 3 } },
+        { $inc: { attempts: 1 } },
+      );
+      return res.status(400).json({ message: 'Incorrect code.' });
+    }
+
+    await OTP.deleteMany({ email: user.email });
+
+    // Success: clear the gate and push the next check a year out. `suspended`
+    // is deliberately untouched — moderation state is independent of whether a
+    // student still receives their college mail.
+    user.status = 'active';
+    user.lastVerifiedAt = new Date();
+    user.reverifyDue = nextReverifyDate();
+    await user.save();
+
+    res.json({ ok: true, reverifyDue: user.reverifyDue });
+  } catch (err) {
+    console.error('Reverify confirm error:', err);
+    res.status(500).json({ message: 'Could not complete re-verification' });
+  }
+});
+
+// @route   GET /api/auth/reverify/status
+// @desc    Does this account need the annual student check?
+// @access  Private
+//
+// Called by the client on load. Returns `required: false` inside the grace
+// window so a student is nudged rather than blocked, and a college mail
+// outage can't strand an entire campus.
+router.get('/reverify/status', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('status reverifyDue lastVerifiedAt college');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const now = new Date();
+    const overdue = user.reverifyDue ? new Date(user.reverifyDue) < now : false;
+    const days = graceDaysLeft(user.reverifyDue, now);
+
+    /* Three distinct states, and the client must be able to tell them apart:
+         required:false, past=false → nothing to do
+         required:false, past=true  → nudge only, still inside the grace window
+         required:true              → gated until they confirm
+
+       Named off `days` rather than `overdue`, because a student 10 days past
+       due and one 30 days past due are both "past" but only the second is
+       actually blocked. */
+    res.json({
+      required: overdue && days < 0,
+      pastDue: overdue,
+      graceDaysLeft: days,
+      reverifyDue: user.reverifyDue,
+      college: user.college,
+    });
+  } catch (err) {
+    console.error('Reverify status error:', err);
+    res.status(500).json({ message: 'Could not read re-verification status' });
+  }
+});
+
+// @route   POST /api/auth/logout
+// @desc    Clear auth cookie
+// @access  Public
+router.post('/logout', async (req, res) => {
+  let userId = null;
+  try {
+    const token =
+      req.cookies?.[APP_CONSTANTS.AUTH_COOKIE_NAME] ||
+      (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
+    if (token) {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      userId = decoded.id;
+    }
+  } catch {
+    // Invalid/expired token — still proceed to clear the cookie
+  }
+
+  if (userId) {
+    req.app.get('io')?.in(userId.toString()).disconnectSockets(true);
+    try {
+      await User.findByIdAndUpdate(userId, { lastLogoutAt: new Date() });
+    } catch (error) {
+      console.error('Logout session invalidation error:', error);
+      clearAuthCookie(res);
+      return res.status(500).json({ message: 'Could not fully invalidate the session' });
+    }
+  }
+
+  clearAuthCookie(res);
+  res.status(200).json({ message: 'Logged out successfully' });
+});
+
+// @route   GET /api/auth/me
+// @desc    Get current user profile from token
+// @access  Private
+router.get('/me', protect, async (req, res) => {
+  try {
+    // protect attaches a LIGHT user (route-critical fields only) for performance.
+    // /me must return the FULL profile (photos, prompts, bio, etc.), so re-fetch it.
+    const fullUser = await User.findById(req.user._id);
+    if (!fullUser) return res.status(404).json({ message: 'User not found' });
+    res.status(200).json({
+      ...fullUser.toJSON(),
+      isUnderReview: Boolean(fullUser.shadowbannedAt || fullUser.contentFrozen),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+export default router;
+
+```
+
+### ./server/routes/colleges.js
+
+```
+import express from 'express';
+import { body } from '../middleware/validate.js';
+import { validate } from '../middleware/validate.js';
+import College from '../models/College.js';
+import CollegeRequest from '../models/CollegeRequest.js';
+import { extractDomain } from '../utils/collegeDomain.js';
+import { collegeRequestLimiter } from '../middleware/rateLimiters.js';
+import { collegeGateFilter, getAllowedColleges } from '../utils/campusGate.js';
+
+const router = express.Router();
+
+/**
+ * 🏫 PUBLIC COLLEGE ROUTES
+ *
+ * Two endpoints, both public by necessity — the picker runs before anyone has
+ * an account:
+ *
+ *   GET  /api/colleges          the picker list (active colleges only)
+ *   POST /api/colleges/request  "can't find my college, add it"
+ *
+ * Neither reveals anything about a user: the picker list is campus metadata
+ * with no student counts, no emails, and no traffic. College counts are only
+ * ever exposed through /api/admin, which is behind adminProtect.
+ */
+
+/**
+ * @route   GET /api/colleges
+ * @desc    Active colleges, for the signup picker. Public — no auth yet.
+ */
+router.get('/', async (req, res) => {
+  try {
+    // Search matches the fields a student actually knows: the official name,
+    // or just their city/state ("Delhi" → IIT Delhi). `active` only — a
+    // deactivated college must not be selectable, but existing students who
+    // verified through it are untouched.
+    const q = String(req.query.q || '').trim();
+
+    // Gate first, then search. Both merge into one filter so the campus limit
+    // cannot be bypassed by supplying a `q` — an `$or` written after this would
+    // still be ANDed against `code`, so a gated-out campus stays invisible
+    // however it is searched for.
+    const filter = { active: true, ...collegeGateFilter() };
+    if (q) {
+      // Escaped so a student typing "(" can't turn into a regex that throws.
+      const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [{ name: rx }, { city: rx }, { state: rx }];
+    }
+
+    const colleges = await College.find(filter).sort({ name: 1 }).limit(50).lean();
+
+    res.json({
+      colleges: colleges.map((c) => ({
+        code: c.code,
+        name: c.name,
+        // Domains are returned so the email screen can pre-fill the suffix.
+        // This is public campus information (it has to be, for the flow to
+        // work) and is NOT user data — no student information is involved.
+        domains: c.domains,
+        city: c.city,
+        state: c.state,
+        country: c.country,
+      })),
+    });
+  } catch (err) {
+    console.error('Colleges list error:', err);
+    res.status(500).json({ message: 'Server error fetching colleges' });
+  }
+});
+
+/**
+ * @route   POST /api/colleges/request
+ * @desc    Student asks for their college to be added. Rate limited.
+ * @access  Public
+ *
+ * ⚠️ This does NOT grant access. The requester still cannot sign up — an
+ * operator must verify the domain and add the college first. Deliberate: if a
+ * request could self-declare a college plus a domain, anyone could invent a
+ * fake campus and verify against it, which defeats the entire product.
+ *
+ * ⚠️ No email is sent here, on purpose. Emailing the submitted address would
+ * let an attacker use this form as a message-delivery or account-takeover
+ * primitive (submit someone else's address, have a link sent to them).
+ * Notification happens only when an operator explicitly presses Notify.
+ */
+router.post(
+  '/request',
+  collegeRequestLimiter,
+  [
+    body('collegeName')
+      .isString()
+      .withMessage('College name is required')
+      .bail()
+      .trim()
+      .notEmpty()
+      .withMessage('College name is required')
+      .isLength({ min: 3, max: 200 })
+      .withMessage('Enter the full name of your college'),
+    body('email')
+      .isEmail()
+      .withMessage('Please enter a valid email address')
+      .normalizeEmail(),
+    body('name').optional().trim().isLength({ max: 100 }).withMessage('Name is too long'),
+    body('city').optional().trim().isLength({ max: 100 }).withMessage('City is too long'),
+    body('state').optional().trim().isLength({ max: 100 }).withMessage('State is too long'),
+    body('country').optional().trim().isLength({ max: 100 }).withMessage('Country is too long'),
+  ],
+  validate,
+  async (req, res) => {
+    const { collegeName, email, name = '', city = '', state = '', country = '' } = req.body;
+
+    try {
+      // If the college already exists, don't create noise — send them to the
+      // picker. Rejecting a public-provider address here is deliberate too: a
+      // gmail.com address is not evidence of belonging to any campus.
+      const domain = extractDomain(email);
+      const publicProvider = ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'protonmail.com', 'icloud.com'];
+      if (!domain || publicProvider.includes(domain)) {
+        return res.status(400).json({
+          message: 'Please use your college email address so we can verify your campus.',
+        });
+      }
+
+      const alreadyListed = await College.findOne({
+        name: new RegExp(`^${collegeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+      });
+      if (alreadyListed) {
+        return res.status(400).json({ message: 'That college is already listed — please pick it above.' });
+      }
+
+      // upsert so a student who submits twice updates their row instead of
+      // creating a duplicate. Their request stays visible rather than vanishing
+      // into a duplicate pile.
+      await CollegeRequest.findOneAndUpdate(
+        { email },
+        {
+          $set: {
+            collegeName, name, city, state, country,
+            status: 'pending',
+            // Clear any previous outcome so re-requesting actually re-enters
+            // the operator queue.
+            notifiedAt: null,
+            collegeCode: '',
+          },
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true },
+      );
+
+      res.status(201).json({
+        message: "Thanks! We've received your request. We'll email you when your college is live.",
+      });
+    } catch (err) {
+      // A duplicate-key here is the unique email index racing; the request is
+      // already recorded, so this is a success as far as the user is concerned.
+      if (err?.code === 11000) {
+        return res.status(201).json({
+          message: "Thanks! We've received your request. We'll email you when your college is live.",
+        });
+      }
+      console.error('College request error:', err);
+      res.status(500).json({ message: 'Server error submitting request' });
+    }
+  }
+);
 
 export default router;
 ```

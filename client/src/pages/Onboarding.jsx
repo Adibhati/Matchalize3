@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
-import { Camera, LogOut, ChevronRight, ChevronLeft, Check, MoreVertical, X } from 'lucide-react';
+import { Camera, LogOut, ChevronRight, ChevronLeft, Check, MoreVertical, Pencil, X } from 'lucide-react';
 import { api } from '../utils/api';
 import { toast } from '../utils/toast';
 import { triggerHaptic } from '../utils/haptics';
@@ -9,21 +9,28 @@ import { readLocationOnce, LOCATION_UNAVAILABLE } from '../utils/geolocation';
 import { useAuth } from '../utils/AuthContext';
 import { useAppConfig } from '../utils/AppConfigContext';
 import neu from '../styles/neu';
+import campusNamePhoto from '../assets/campusname.jpg';
+import campusBirthdayPhoto from '../assets/campusbirthday.jpg';
+import identifyCampusPhoto from '../assets/identifycampus.jpg';
+import meetCampusPhoto from '../assets/meetcampus.jpg';
+import chapterCampusPhoto from '../assets/chaptercampus.jpg';
+import findCampusPhoto from '../assets/findcampus.jpg';
+import campusTownPhoto from '../assets/college-town-aesthetic-cute-college-town.jpg';
 
 const T = {
   ...neu,
-  ink: '#111211',
-  ink2: '#383832',
-  ink3: '#77766F',
-  paper: '#F1EDE2',
-  paper2: '#E8E2D6',
-  card: '#F8F5EC',
-  yellow: '#E0A15E',
-  yellowDeep: '#CB8848',
-  orange: '#C96F68',
-  green: '#779477',
-  red: '#A84F4A',
-  concrete: '#A3A3A1',
+  ink: '#171414',
+  ink2: '#393130',
+  ink3: '#6E6160',
+  paper: '#FFF9F4',
+  paper2: '#FFFCF8',
+  card: '#FFFCF8',
+  yellow: '#FFE76A',
+  yellowDeep: '#FFD43D',
+  orange: '#FF7399',
+  green: '#B8F0C7',
+  red: '#D9485D',
+  concrete: '#A39E92',
   fontHeavy: "'Barlow Condensed', sans-serif",
   fontBody: "'Space Grotesk', sans-serif",
   fontMono: "'IBM Plex Mono', monospace",
@@ -32,60 +39,56 @@ const T = {
 const STEPS = [
   {
     key: 'name',
-    title: 'What do your friends call you?',
-    hint: 'First name is plenty. Make yourself at home.',
+    title: 'What do your friends call you, huh?',
   },
   {
     key: 'dob',
-    title: "When's your birthday?",
-    hint: 'You need to be 18–40 to join. Only your age is shown.',
+    title: "When's your birthday, huh?",
     foot: 'Your birthday stays private.',
   },
   {
-    key: 'photo',
-    title: 'Give them a face to remember.',
-    hint: 'Choose a photo that feels like you. You can change it later.',
-  },
-  {
     key: 'gender',
-    title: 'How do you identify?',
+    title: 'How do you describe your gender, huh?',
     hint: 'Choose what feels right to you.',
   },
   {
     key: 'interestedIn',
-    title: 'Who would you like to meet?',
-    hint: 'Choose every option that fits.',
+    title: 'Who are you open to meeting, huh?',
   },
   {
     key: 'year',
-    title: 'What chapter are you in?',
-    hint: 'Undergrad or postgrad?',
+    title: 'What chapter are you in, huh?',
   },
   {
     key: 'intent',
-    title: 'What are you hoping to find?',
-    hint: 'No wrong answers. This helps shape your deck.',
+    title: 'What are you hoping to find, huh?',
+  },
+  {
+    key: 'photo',
+    title: 'Give them a face to remember, huh?',
   },
   {
     key: 'location',
-    title: "Who's in your orbit?",
-    hint: 'Find people nearby, beyond your campus.',
-    foot: 'Your location is never shown to other people.',
+    title: 'Which location should we use, huh?',
     optional: true,
   },
 ];
 
+const SCENE_STEP_KEYS = ['name', 'dob', 'gender', 'interestedIn', 'year', 'intent', 'location'];
+const SELECTION_FLOW_STEP_KEYS = ['gender', 'interestedIn', 'year', 'intent'];
+
 const CSS = `
-  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=Bowlby+One+SC&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
   .ob-root {
     --page: ${T.paper};
     --main: ${T.ink};
     --sub: ${T.ink2};
     --surface: ${T.card};
-    --line: rgba(17,18,17,.13);
+    --line: rgba(23,20,20,.22);
     --accent: ${T.orange};
-    --tint: rgba(201,111,104,.15);
+    --tint: rgba(255,115,153,.16);
+    --bw: 2px;
     --heavy: ${T.fontHeavy};
     --body: ${T.fontBody};
     --mono: ${T.fontMono};
@@ -107,14 +110,13 @@ const CSS = `
     color: var(--main);
     font-family: var(--body);
     -webkit-font-smoothing: antialiased;
-    transition: background-color .45s ease, color .35s ease;
+    transition: background-color .3s ease, color .3s ease;
   }
 
   .ob-root *,
   .ob-root *::before,
   .ob-root *::after {
     box-sizing: border-box;
-    -webkit-tap-highlight-color: transparent;
   }
 
   .ob-root::before {
@@ -139,83 +141,103 @@ const CSS = `
   }
 
   .ob-root-name {
-    --page: #111211;
-    --main: #F1EDE2;
-    --sub: rgba(241,237,226,.76);
-    --surface: #20211F;
-    --line: rgba(241,237,226,.16);
-    --accent: #C96F68;
-    --tint: rgba(201,111,104,.15);
+    --accent: #FF7399;
+    --tint: rgba(255,115,153,.16);
+  }
+
+  .ob-name-scene {
+    display: none;
+  }
+
+  .ob-name-backdrop-art {
+    display: none;
+  }
+
+  .ob-name-brand {
+    display: none;
   }
 
   .ob-root-dob {
-    --page: #F1EDE2;
-    --main: #111211;
-    --sub: #5F5E57;
-    --surface: #F8F5EC;
-    --line: rgba(17,18,17,.13);
-    --accent: #E0A15E;
-    --tint: rgba(224,161,94,.22);
+    --accent: #FFE76A;
+    --tint: rgba(255,231,106,.22);
   }
 
   .ob-root-photo {
-    --page: #E1E7D9;
-    --main: #111211;
-    --sub: #50574C;
-    --surface: #F1EDE2;
-    --line: rgba(17,18,17,.13);
-    --accent: #779477;
-    --tint: rgba(119,148,119,.22);
+    --accent: #171414;
+    --tint: rgba(23,20,20,.08);
+  }
+
+  .ob-root-photo:not(.ob-photo-ready) .ob-actions,
+  .ob-root:has(.ob-screen-photo):not(.ob-photo-ready) .ob-actions {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0s, visibility 0s;
+  }
+
+  .ob-root-photo.ob-photo-ready .ob-actions,
+  .ob-root.ob-photo-ready:has(.ob-screen-photo) .ob-actions {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity .525s ease, visibility 0s;
+  }
+
+  .ob-photo-image {
+    position: relative;
+    z-index: 0;
+    opacity: 1;
+    transition: opacity .6s cubic-bezier(.32,.72,0,1);
+  }
+
+  .ob-photo .ob-photo-blur {
+    position: absolute;
+    z-index: 0;
+    inset: -6%;
+    width: 112%;
+    height: 112%;
+    object-fit: cover;
+    filter: blur(10px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .6s cubic-bezier(.32,.72,0,1);
+  }
+
+  .ob-root.ob-photo-uploading:has(.ob-screen-photo) .ob-photo-image {
+    opacity: 0;
+  }
+
+  .ob-root.ob-photo-uploading:has(.ob-screen-photo) .ob-photo-blur {
+    opacity: 1;
   }
 
   .ob-root-gender {
-    --page: #F0DCD3;
-    --main: #111211;
-    --sub: #5F514D;
-    --surface: #F8F5EC;
-    --line: rgba(17,18,17,.13);
-    --accent: #C96F68;
-    --tint: rgba(201,111,104,.18);
+    --accent: #B8F0C7;
+    --tint: rgba(184,240,199,.35);
   }
 
   .ob-root-interestedin {
-    --page: #F1EDE2;
-    --main: #111211;
-    --sub: #55554E;
-    --surface: #F8F5EC;
-    --line: rgba(17,18,17,.13);
-    --accent: #779477;
-    --tint: rgba(119,148,119,.18);
+    --accent: #8ED8F5;
+    --tint: rgba(142,216,245,.32);
   }
 
   .ob-root-year {
-    --page: #E0A15E;
-    --main: #111211;
-    --sub: #493728;
-    --surface: #F8F5EC;
-    --line: rgba(17,18,17,.15);
-    --accent: #C96F68;
-    --tint: rgba(241,237,226,.25);
+    --accent: #C8B6F2;
+    --tint: rgba(200,182,242,.32);
   }
 
   .ob-root-intent {
-    --page: #111211;
-    --main: #F1EDE2;
-    --sub: rgba(241,237,226,.76);
-    --surface: #20211F;
-    --line: rgba(241,237,226,.16);
-    --accent: #779477;
-    --tint: rgba(119,148,119,.17);
+    --accent: #F5B7C8;
+    --tint: rgba(245,183,200,.32);
   }
 
   .ob-root-location {
-    --page: #E1E7D9;
-    --main: #111211;
-    --sub: #50574C;
-    --surface: #F8F5EC;
-    --line: rgba(17,18,17,.13);
-    --accent: #779477;
-    --tint: rgba(119,148,119,.2);
+    --accent: #F5B942;
+    --tint: rgba(245,185,66,.3);
+  }
+
+  .ob-location-ok svg {
+    color: var(--accent);
   }
 
   .ob-head {
@@ -231,14 +253,9 @@ const CSS = `
       clamp(17px, 4vw, 36px)
       12px;
     background: var(--page);
-    border-bottom: 1px solid var(--line);
+    border-bottom: var(--bw) solid var(--main);
+    box-shadow: 0 3px 0 rgba(23,20,20,.06);
     transition: background-color .4s ease, border-color .4s ease;
-  }
-
-  .ob-headspacer {
-    width: 44px;
-    height: 44px;
-    flex-shrink: 0;
   }
 
   .ob-hbtn {
@@ -251,15 +268,16 @@ const CSS = `
     cursor: pointer;
     color: var(--main);
     background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 16px;
-    box-shadow: 0 3px 0 rgba(17,18,17,.05);
+    border: var(--bw) solid var(--main);
+    border-radius: 12px 12px 5px 12px;
+    box-shadow: 3px 3px 0 var(--main);
     transition: transform .16s ease, background .16s ease;
   }
 
   .ob-hbtn:active {
-    transform: scale(.93);
+    transform: translate(2px, 2px);
     background: var(--tint);
+    box-shadow: 1px 1px 0 var(--main);
   }
 
   .ob-scrim {
@@ -276,9 +294,9 @@ const CSS = `
     min-width: 180px;
     padding: 6px;
     background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 16px;
-    box-shadow: 0 12px 32px rgba(17,18,17,.13);
+    border: var(--bw) solid var(--main);
+    border-radius: 5px;
+    box-shadow: 4px 4px 0 var(--main);
     overflow: hidden;
     transform-origin: top right;
   }
@@ -294,7 +312,7 @@ const CSS = `
     border: 0;
     cursor: pointer;
     text-align: left;
-    border-radius: 11px;
+    border-radius: 3px;
     font-family: var(--body);
     font-size: 14px;
     font-weight: 600;
@@ -306,6 +324,100 @@ const CSS = `
     background: rgba(168,79,74,.1);
   }
 
+  .ob-confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(23,20,20,.52);
+    backdrop-filter: blur(3px);
+  }
+
+  .ob-confirm-dialog {
+    width: min(100%, 420px);
+    padding: clamp(22px, 5vw, 32px);
+    color: var(--main);
+    background: var(--surface);
+    border: var(--bw) solid var(--main);
+    border-radius: 16px 16px 6px 16px;
+    box-shadow: 7px 7px 0 var(--main);
+  }
+
+  .ob-confirm-icon {
+    width: 46px;
+    height: 46px;
+    display: grid;
+    place-items: center;
+    margin-bottom: 18px;
+    color: ${T.red};
+    background: rgba(217,72,93,.1);
+    border: var(--bw) solid var(--main);
+    border-radius: 12px 12px 4px 12px;
+  }
+
+  .ob-confirm-title {
+    margin: 0;
+    font-family: var(--heavy);
+    font-size: 30px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -.02em;
+  }
+
+  .ob-confirm-copy {
+    margin: 12px 0 24px;
+    color: var(--sub);
+    font-family: var(--body);
+    font-size: 14px;
+    line-height: 1.65;
+  }
+
+  .ob-confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+
+  .ob-confirm-button {
+    min-height: 46px;
+    padding: 10px 16px;
+    border: var(--bw) solid var(--main);
+    border-radius: 8px 8px 4px 8px;
+    box-shadow: 3px 3px 0 var(--main);
+    cursor: pointer;
+    font-family: var(--body);
+    font-size: 14px;
+    font-weight: 700;
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+  }
+
+  .ob-confirm-button:active {
+    transform: translate(2px, 2px);
+    box-shadow: 1px 1px 0 var(--main);
+  }
+
+  .ob-confirm-button:disabled {
+    cursor: wait;
+    opacity: .65;
+  }
+
+  .ob-confirm-stay {
+    color: var(--main);
+    background: var(--surface);
+  }
+
+  .ob-confirm-logout {
+    color: ${T.paper};
+    background: ${T.red};
+  }
+
+  .ob-confirm-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
   .ob-fit {
     width: 100%;
     max-width: 1040px;
@@ -313,13 +425,13 @@ const CSS = `
     flex: 1 0 auto;
     margin: 0 auto;
     padding:
-      clamp(30px, 6vh, 68px)
+      clamp(30px, 5vh, 58px)
       clamp(22px, 5vw, 58px)
       0;
     display: flex;
     flex-direction: column;
     justify-content: flex-start;
-    gap: clamp(20px, 3vh, 32px);
+    gap: clamp(18px, 3vh, 30px);
   }
 
   .ob-screen {
@@ -339,6 +451,7 @@ const CSS = `
   }
 
   .ob-screen-photo {
+    isolation: isolate;
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       "title"
@@ -363,13 +476,21 @@ const CSS = `
     transition: color .3s ease;
   }
 
+  .ob-title-line {
+    display: block;
+  }
+
+  .ob-title-tablet-line {
+    display: inline;
+  }
+
   .ob-title::after {
     content: '';
     display: block;
     width: clamp(55px, 8vw, 82px);
-    height: 7px;
-    margin-top: 17px;
-    border-radius: 999px;
+    height: 6px;
+    margin-top: 15px;
+    border-radius: 1px;
     background: var(--screen-accent);
     transition: background-color .3s ease;
   }
@@ -401,8 +522,9 @@ const CSS = `
     align-items: center;
     justify-content: center;
     background: var(--tint);
-    border: 1px solid var(--line);
-    border-radius: 34px 34px 12px 34px;
+    border: var(--bw) solid var(--main);
+    border-radius: 18px 18px 7px 18px;
+    box-shadow: 5px 5px 0 var(--main);
     transition: background .35s ease, border-color .35s ease;
   }
 
@@ -413,7 +535,7 @@ const CSS = `
     height: 125px;
     right: -47px;
     top: -54px;
-    border: 1px solid var(--screen-accent);
+    border: var(--bw) solid var(--main);
     border-radius: 50%;
     opacity: .4;
     pointer-events: none;
@@ -488,31 +610,27 @@ const CSS = `
     padding: 0 22px;
     background: var(--surface);
     color: var(--main);
-    border: 1.5px solid var(--line);
-    border-radius: 18px;
+    border: var(--bw) solid var(--main);
+    border-radius: 12px 12px 5px 12px;
+    box-shadow: 4px 4px 0 var(--main);
     font-family: var(--body);
     font-size: 21px;
     font-weight: 500;
     outline: none;
     -webkit-appearance: none;
     appearance: none;
-    transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+    transition: border-color .18s ease, box-shadow .18s ease, background .18s ease, transform .18s ease;
   }
 
   .ob-input::placeholder {
-    color: var(--ink3);
+    color: ${T.ink3};
     font-weight: 400;
-  }
-
-  .ob-root-name .ob-input::placeholder,
-  .ob-root-intent .ob-input::placeholder {
-    color: rgba(241,237,226,.48);
   }
 
   .ob-input:focus,
   .ob-input:focus-visible {
     outline: none;
-    box-shadow: inset 0 0 0 2px var(--screen-accent);
+    box-shadow: 4px 4px 0 var(--main), inset 0 0 0 2px var(--screen-accent);
   }
 
   .ob-dob {
@@ -533,21 +651,41 @@ const CSS = `
   }
 
   .ob-age {
-    align-self: flex-start;
+    position: absolute;
+    top: 0;
+    left: 0;
     padding: 10px 15px;
-    color: ${T.red};
-    background: #F0DCD3;
-    border: 1px solid rgba(168,79,74,.2);
-    border-radius: 13px;
+    color: ${T.ink};
+    background: #FFE3E8;
+    border: var(--bw) solid var(--main);
+    border-radius: 4px;
+    box-shadow: 3px 3px 0 var(--main);
     font-family: var(--mono);
     font-size: 13px;
     font-weight: 600;
   }
 
+  .ob-age-slot {
+    position: relative;
+    width: 100%;
+    height: 72px;
+    flex: 0 0 72px;
+  }
+
+  .ob-age-warning {
+    position: absolute;
+    top: 47px;
+    left: 0;
+    color: ${T.red};
+    font-family: var(--body);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
   .ob-age.ok {
-    color: #405B40;
-    background: #E3E9DC;
-    border-color: rgba(119,148,119,.35);
+    color: ${T.ink};
+    background: ${T.green};
   }
 
   .ob-chips {
@@ -565,29 +703,35 @@ const CSS = `
     gap: 11px;
     background: var(--surface);
     color: var(--main);
-    border: 1.5px solid var(--line);
-    border-radius: 16px;
+    border: var(--bw) solid var(--main);
+    border-radius: 10px 10px 4px 10px;
     cursor: pointer;
     font-family: var(--body);
     font-size: 18px;
     font-weight: 600;
-    box-shadow: 0 3px 0 rgba(17,18,17,.035);
+    box-shadow: 3px 3px 0 var(--main);
     transition: background .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
   }
 
   .ob-chip:nth-child(3n + 2) {
-    border-radius: 23px 15px 21px 15px;
+    border-radius: 10px 4px 10px 10px;
+  }
+
+  .ob-root-gender .ob-chip,
+  .ob-root-gender .ob-chip:nth-child(3n + 2) {
+    border-radius: 10px 10px 4px 10px;
   }
 
   .ob-chip.on {
     background: var(--screen-accent);
     color: ${T.ink};
-    border-color: transparent;
-    box-shadow: 0 3px 0 rgba(17,18,17,.09);
+    border-color: var(--main);
+    box-shadow: 2px 2px 0 var(--main);
   }
 
   .ob-chip:active:not(:disabled) {
-    transform: scale(.96);
+    transform: translate(2px, 2px);
+    box-shadow: 1px 1px 0 var(--main);
   }
 
   .ob-chip:disabled {
@@ -611,8 +755,9 @@ const CSS = `
       radial-gradient(circle at 20% 20%, rgba(224,161,94,.2), transparent 34%),
       radial-gradient(circle at 85% 80%, rgba(119,148,119,.23), transparent 35%),
       var(--surface);
-    border: 1.5px dashed var(--line);
-    border-radius: 25px;
+    border: var(--bw) dashed var(--main);
+    border-radius: 16px 16px 6px 16px;
+    box-shadow: 5px 5px 0 var(--main);
     transition: border-color .16s ease, background .16s ease;
   }
 
@@ -620,6 +765,7 @@ const CSS = `
     border-style: solid;
     cursor: default;
     background: var(--surface);
+    box-shadow: 5px 5px 0 var(--main);
   }
 
   .ob-photo img {
@@ -648,12 +794,12 @@ const CSS = `
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--screen-accent);
-    border: 1px solid var(--line);
-    border-radius: 24px 24px 24px 9px;
+    background: ${T.paper};
+    border: var(--bw) solid var(--main);
+    border-radius: 14px 14px 14px 5px;
     color: ${T.ink};
     transform: rotate(-4deg);
-    box-shadow: 0 5px 0 rgba(17,18,17,.06);
+    box-shadow: 3px 3px 0 var(--main);
   }
 
   .ob-photohit {
@@ -673,23 +819,62 @@ const CSS = `
     top: 12px;
     right: 12px;
     z-index: 3;
-    width: 46px;
-    height: 46px;
+    width: 30px;
+    height: 30px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(248,245,236,.96);
+    background: ${T.yellow};
     color: ${T.ink};
-    border: 1px solid rgba(17,18,17,.12);
-    border-radius: 14px;
+    border: var(--bw) solid var(--main);
+    border-radius: 4px;
     cursor: pointer;
     transition: transform .15s ease, background .15s ease;
   }
 
-  .ob-photox:active {
-    transform: scale(.92);
-    background: #F0DCD3;
+  .ob-photomenu {
+    position: absolute;
+    top: 52px;
+    right: 12px;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 5px;
+    background: ${T.card};
+    border: var(--bw) solid var(--main);
+    border-radius: 7px;
+    box-shadow: 3px 3px 0 var(--main);
+  }
+
+  .ob-photomenu button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 34px;
+    padding: 7px 9px;
+    color: var(--main);
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--body);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .ob-photomenu button:hover {
+    background: var(--tint);
+  }
+
+  .ob-photomenu .ob-photomenu-remove {
     color: ${T.red};
+  }
+
+  .ob-photox:active {
+    background: ${T.ink};
+    color: ${T.paper};
   }
 
   .ob-uploading {
@@ -704,9 +889,9 @@ const CSS = `
     white-space: nowrap;
     padding: 11px 16px;
     background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    box-shadow: 0 5px 16px rgba(17,18,17,.1);
+    border: var(--bw) solid var(--main);
+    border-radius: 10px 10px 4px 10px;
+    box-shadow: 3px 3px 0 var(--main);
     font-family: var(--body);
     font-size: 13px;
     font-weight: 600;
@@ -760,49 +945,12 @@ const CSS = `
     color: ${T.green};
   }
 
-  .ob-loc-btn {
-    width: 100%;
-    min-height: 59px;
-    padding: 14px 20px;
-    background: var(--screen-accent);
-    color: ${T.ink};
-    border: 1px solid var(--line);
-    border-radius: 17px;
-    cursor: pointer;
-    font-family: var(--body);
-    font-size: 15px;
-    font-weight: 700;
-    box-shadow: 0 3px 0 rgba(17,18,17,.07);
-    transition: transform .15s ease, filter .15s ease;
+  .ob-root-location .ob-location-ok svg {
+    color: var(--accent);
   }
 
-  .ob-loc-btn:active:not(:disabled) {
-    transform: translateY(2px);
-  }
-
-  .ob-loc-btn:disabled,
-  .ob-loc-alt:disabled {
-    opacity: .55;
-    cursor: default;
-  }
-
-  .ob-loc-alt {
-    width: 100%;
-    min-height: 56px;
-    padding: 13px 20px;
-    background: var(--surface);
-    color: var(--main);
-    border: 1px solid var(--line);
-    border-radius: 16px;
-    cursor: pointer;
-    font-family: var(--body);
-    font-size: 14px;
-    font-weight: 600;
-    transition: background .15s ease, border-color .15s ease;
-  }
-
-  .ob-loc-alt:active {
-    background: var(--tint);
+  .ob-location-options {
+    align-items: stretch;
   }
 
   .ob-loc-note {
@@ -823,6 +971,76 @@ const CSS = `
     transition: background .35s ease;
   }
 
+  .ob-root-gender .ob-actions {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity .525s ease, visibility 0s;
+  }
+
+  .ob-root-gender.ob-gender-ready .ob-actions {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity .525s ease, visibility 0s;
+  }
+
+  .ob-root-interestedin .ob-actions {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity .525s ease, visibility 0s;
+  }
+
+  .ob-root-interestedin.ob-interestedin-ready .ob-actions {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity .525s ease, visibility 0s;
+  }
+
+  .ob-root-year .ob-actions {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity .525s ease, visibility 0s;
+  }
+
+  .ob-root-year.ob-year-ready .ob-actions {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity .525s ease, visibility 0s;
+  }
+
+  .ob-root-intent .ob-actions {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity .525s ease, visibility 0s;
+  }
+
+  .ob-root-intent.ob-intent-ready .ob-actions {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity .525s ease, visibility 0s;
+  }
+
+  .ob-root-location .ob-actions {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity .525s ease, visibility 0s;
+  }
+
+  .ob-root-location.ob-location-ready .ob-actions {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity .525s ease, visibility 0s;
+  }
+
   .ob-cta {
     position: relative;
     display: inline-flex;
@@ -834,23 +1052,23 @@ const CSS = `
     padding: 16px 22px;
     background: var(--accent);
     color: ${T.ink};
-    border: 1px solid rgba(17,18,17,.13);
-    border-radius: 18px 18px 7px 18px;
+    border: var(--bw) solid var(--main);
+    border-radius: 12px 12px 5px 12px;
     cursor: pointer;
     font-family: var(--body);
     font-size: 17px;
     font-weight: 700;
-    box-shadow: 0 4px 0 rgba(17,18,17,.09);
+    box-shadow: 5px 5px 0 var(--main);
     transition: transform .16s ease, box-shadow .16s ease, opacity .16s ease, background .3s ease;
   }
 
   .ob-cta:active:not(:disabled) {
-    transform: translateY(3px);
-    box-shadow: 0 1px 0 rgba(17,18,17,.09);
+    transform: translate(3px, 3px);
+    box-shadow: 2px 2px 0 var(--main);
   }
 
   .ob-cta:disabled {
-    opacity: .42;
+    opacity: .48;
     cursor: default;
   }
 
@@ -871,9 +1089,10 @@ const CSS = `
 
   .ob-banner {
     padding: 14px 16px;
-    background: #F0DCD3;
-    border: 1px solid rgba(168,79,74,.2);
-    border-radius: 14px;
+    background: #FFE3E8;
+    border: var(--bw) solid var(--main);
+    border-radius: 5px;
+    box-shadow: 3px 3px 0 var(--main);
   }
 
   .ob-banner p {
@@ -903,8 +1122,7 @@ const CSS = `
   .ob-photox:focus-visible,
   .ob-hbtn:focus-visible,
   .ob-menuitem:focus-visible,
-  .ob-loc-btn:focus-visible,
-  .ob-loc-alt:focus-visible {
+  .ob-location-options .ob-chip:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 3px;
   }
@@ -940,20 +1158,636 @@ const CSS = `
       border-color: var(--accent);
     }
 
-    .ob-loc-btn:hover:not(:disabled) {
-      filter: brightness(.96);
-    }
-
-    .ob-loc-alt:hover:not(:disabled) {
-      background: var(--tint);
-      border-color: var(--accent);
-    }
   }
 
-  @media (min-width: 681px) {
+  @media (min-width: 601px) {
     .ob-fit {
       justify-content: center;
     }
+
+    .ob-root-name {
+      --ob-scene-width: clamp(250px, 38vw, 360px);
+    }
+
+    .ob-root-name .ob-head {
+      position: absolute;
+      top: 0;
+      right: 0;
+      z-index: 5;
+      width: calc(100% - var(--ob-scene-width));
+      justify-content: flex-end;
+      padding: max(22px, env(safe-area-inset-top)) clamp(24px, 4vw, 42px) 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+    }
+
+    .ob-root-name .ob-name-brand {
+      display: block;
+      position: fixed;
+      z-index: 5;
+      top: max(24px, env(safe-area-inset-top));
+      left: max(24px, env(safe-area-inset-left));
+      color: var(--main);
+      font-family: 'Bowlby One SC', var(--heavy);
+      font-size: clamp(36px, 4.6vw, 46px);
+      font-weight: 400;
+      letter-spacing: -.065em;
+      line-height: .92;
+      text-shadow: 2px 2px 0 ${T.yellow};
+    }
+
+    .ob-root-name .ob-name-brand-question {
+      display: inline-block;
+      margin-left: .015em;
+      color: ${T.orange};
+      transform: rotate(7deg) translateY(-.015em);
+      transform-origin: 60% 65%;
+    }
+
+    .ob-root-name .ob-name-scene {
+      display: block;
+      position: fixed;
+      inset: 0 auto 0 0;
+      z-index: 0;
+      width: calc(var(--ob-scene-width) + 2px);
+      overflow: hidden;
+      pointer-events: none;
+      background: var(--page);
+    }
+
+    .ob-root-name .ob-name-visual {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      filter: saturate(.92) contrast(.98) brightness(.97);
+    }
+
+    .ob-root-name .ob-name-frame {
+      position: absolute;
+      inset: 0;
+      -webkit-mask-image: linear-gradient(90deg, #000 62%, transparent 100%);
+      mask-image: linear-gradient(90deg, #000 62%, transparent 100%);
+    }
+
+    .ob-root-name .ob-name-frame img {
+      display: block;
+      width: 170%;
+      height: 100%;
+      max-width: none;
+      object-fit: cover;
+      object-position: center 58%;
+      transform: translateX(-41.176%);
+    }
+
+    .ob-root-name .ob-name-frame.is-fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--tint);
+    }
+
+    .ob-root-name .ob-name-frame svg {
+      display: block;
+      width: min(88%, 600px);
+      height: auto;
+      overflow: visible;
+    }
+
+    .ob-root-name .ob-fit {
+      width: calc(100% - var(--ob-scene-width));
+      max-width: none;
+      min-height: 100dvh;
+      margin: 0 0 0 var(--ob-scene-width);
+      padding: max(72px, env(safe-area-inset-top)) clamp(24px, 4vw, 48px) max(32px, env(safe-area-inset-bottom));
+      justify-content: center;
+      position: relative;
+      z-index: 1;
+    }
+
+    .ob-root-name .ob-screen-name {
+      width: 100%;
+      max-width: 500px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas:
+        "title"
+        "hint"
+        "field";
+      column-gap: 0;
+      row-gap: 20px;
+      align-content: center;
+    }
+
+    .ob-root-name .ob-screen-name .ob-title {
+      font-family: var(--body);
+      font-size: clamp(34px, 4.2vw, 46px);
+      font-weight: 800;
+      letter-spacing: -.055em;
+      line-height: 1.06;
+      text-transform: none;
+    }
+
+    .ob-root-name .ob-screen-name .ob-title::after {
+      display: none;
+    }
+
+    .ob-root-name .ob-screen-name .ob-field {
+      width: 100%;
+      max-width: none;
+      padding-top: 0;
+    }
+
+    .ob-root-name .ob-screen-name .ob-art {
+      display: none;
+    }
+
+    .ob-root-name .ob-screen-name .ob-input {
+      min-height: 74px;
+      border-radius: 14px;
+      box-shadow: 3px 3px 0 var(--main);
+      font-size: 20px;
+    }
+
+    .ob-root-name .ob-screen-name .ob-input:focus,
+    .ob-root-name .ob-screen-name .ob-input:focus-visible {
+      background: #FFF0F4;
+      border-color: var(--accent);
+      box-shadow: 4px 4px 0 var(--accent);
+    }
+
+    .ob-root-name .ob-actions {
+      width: 100%;
+      max-width: 500px;
+      height: 78px;
+      flex: 0 0 78px;
+      margin: 10px auto 0;
+      padding: 0;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition: opacity .525s ease, transform .6s ease, visibility 0s;
+    }
+
+    .ob-root-name.ob-name-ready .ob-actions {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    .ob-screen-photo {
+      max-width: 1120px;
+      grid-template-columns: minmax(0, 1fr) minmax(0, .9fr);
+      grid-template-areas:
+        "field title"
+        "field hint";
+      column-gap: clamp(34px, 7vw, 96px);
+      row-gap: 18px;
+      align-content: center;
+      align-items: center;
+    }
+
+    .ob-screen-photo .ob-title {
+      align-self: end;
+      font-family: var(--body);
+      font-size: clamp(34px, 4.2vw, 52px);
+      font-weight: 800;
+      line-height: 1.12;
+      letter-spacing: -.04em;
+      text-transform: none;
+    }
+
+    .ob-screen-photo .ob-title::after {
+      display: none;
+    }
+
+    .ob-screen-photo .ob-hint {
+      align-self: start;
+      font-size: 16px;
+      line-height: 1.75;
+    }
+
+    .ob-screen-photo .ob-field {
+      width: 100%;
+      max-width: 420px;
+      justify-self: center;
+      padding-top: 0;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-photo {
+      width: 100%;
+      max-height: min(56dvh, 540px);
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-actions {
+      width: calc((100% - clamp(34px, 7vw, 96px)) / 2);
+      margin-left: auto;
+    }
+  }
+
+
+  @media (min-width: 601px) {
+    .ob-root-name {
+      --tint: rgba(255,115,153,.24);
+    }
+
+    .ob-root-name::before {
+      top: auto;
+      right: -20%;
+      bottom: -35%;
+      width: min(65vw, 700px);
+    }
+
+    .ob-root:has(.ob-screen-photo) {
+      --accent: #171414;
+      --tint: rgba(23,20,20,.08);
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-cta {
+      color: #FFF9F4;
+    }
+
+    .ob-root-gender {
+      overflow-y: hidden;
+    }
+
+    .ob-root-split {
+      --ob-scene-width: 55vw;
+    }
+
+    .ob-root-split .ob-head {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: calc(100% - var(--ob-scene-width));
+      justify-content: flex-end;
+      background: transparent;
+      border-bottom: 0;
+      box-shadow: none;
+    }
+
+    .ob-root-split:not(.ob-root-name) .ob-head {
+      justify-content: space-between;
+      padding-left: clamp(28px, 4vw, 72px);
+    }
+
+    .ob-name-brand {
+      display: block;
+      position: fixed;
+      z-index: 5;
+      top: max(22px, env(safe-area-inset-top, 0px));
+      left: max(28px, env(safe-area-inset-left, 0px));
+      color: var(--main);
+      font-family: 'Bowlby One SC', var(--heavy);
+      font-size: clamp(40px, 3.6vw, 54px);
+      font-weight: 400;
+      letter-spacing: -.065em;
+      line-height: .92;
+      text-shadow: 2.5px 2.5px 0 ${T.yellow};
+    }
+
+    .ob-name-brand-question {
+      display: inline-block;
+      margin-left: .015em;
+      color: ${T.orange};
+      transform: rotate(7deg) translateY(-.015em);
+      transform-origin: 60% 65%;
+    }
+
+    .ob-root-split .ob-fit {
+      width: calc(100% - var(--ob-scene-width));
+      max-width: none;
+      min-height: 100dvh;
+      margin: 0 0 0 var(--ob-scene-width);
+      padding: max(40px, env(safe-area-inset-top)) clamp(28px, 4vw, 72px) max(34px, env(safe-area-inset-bottom));
+      justify-content: center;
+      position: relative;
+      z-index: 1;
+    }
+
+    .ob-root-split .ob-screen {
+      width: 100%;
+      max-width: 520px;
+      margin: 0 auto;
+      position: relative;
+      top: 0;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas:
+        "title"
+        "hint"
+        "field";
+      column-gap: 0;
+      row-gap: 18px;
+      align-content: center;
+    }
+
+    .ob-root-gender.ob-root-split .ob-fit {
+      height: calc(100dvh - 75px);
+      min-height: 0;
+      flex: 0 0 calc(100dvh - 75px);
+      padding-top: max(60px, env(safe-area-inset-top));
+      padding-bottom: 0;
+      transform: translateY(75px);
+    }
+
+    .ob-root-gender .ob-screen-gender {
+      transition: translate .45s cubic-bezier(.22, 1, .36, 1);
+    }
+
+    .ob-root-gender.ob-gender-ready .ob-screen-gender {
+      translate: 0 calc(-68px - max(16px, env(safe-area-inset-bottom)));
+    }
+
+    .ob-root-split .ob-title {
+      font-family: var(--body);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: -.055em;
+      line-height: 1.06;
+      text-transform: none;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-screen .ob-title {
+      font-size: clamp(34px, 4.2vw, 46px);
+    }
+
+    .ob-root-split .ob-title::after {
+      display: none;
+    }
+
+    .ob-screen-name .ob-input,
+    .ob-screen-dob .ob-input {
+      border-radius: 14px;
+      box-shadow: 3px 3px 0 var(--main);
+    }
+
+    .ob-screen-name .ob-input:focus,
+    .ob-screen-name .ob-input:focus-visible,
+    .ob-screen-dob .ob-input:focus,
+    .ob-screen-dob .ob-input:focus-visible {
+      background: #FFF0F4;
+      border-color: var(--accent);
+      box-shadow: 4px 4px 0 var(--accent);
+    }
+
+    .ob-root-split .ob-art {
+      display: none;
+    }
+
+    .ob-root-split .ob-actions {
+      width: 100%;
+      max-width: 520px;
+      margin-right: auto;
+      margin-left: auto;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-head {
+      position: absolute;
+      top: 0;
+      left: 55vw;
+      right: 0;
+      z-index: 10;
+      width: 45vw;
+      justify-content: space-between;
+      padding-left: clamp(28px, 4vw, 72px);
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-fit {
+      width: 100%;
+      max-width: none;
+      height: 100dvh;
+      min-height: 100dvh;
+      flex: 0 0 100dvh;
+      margin: 0;
+      padding: 0;
+      justify-content: flex-start;
+      gap: 0;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo {
+      width: 100%;
+      max-width: none;
+      height: 100dvh;
+      min-height: 100dvh;
+      margin: 0;
+      grid-template-columns: minmax(0, 55vw) minmax(0, 1fr);
+      grid-template-areas: "field title";
+      column-gap: clamp(32px, 6vw, 88px);
+      row-gap: 0;
+      align-content: center;
+      padding-right: clamp(32px, 6vw, 88px);
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo .ob-title {
+      align-self: center;
+      font-size: clamp(34px, 3.4vw, 48px);
+      letter-spacing: -.06em;
+      line-height: 1.04;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo .ob-hint {
+      align-self: start;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo .ob-field {
+      width: 100%;
+      max-width: none;
+      height: 100dvh;
+      justify-self: stretch;
+      align-self: stretch;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-photo {
+      width: 100%;
+      height: 100%;
+      max-height: none;
+      min-height: 100dvh;
+      aspect-ratio: auto;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-photo.filled {
+      border: 0;
+      box-shadow: none;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-photox {
+      top: max(22px, env(safe-area-inset-top, 0px));
+      right: max(28px, env(safe-area-inset-right, 0px));
+      width: 38px;
+      height: 38px;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-photomenu {
+      top: calc(max(22px, env(safe-area-inset-top, 0px)) + 46px);
+      right: max(28px, env(safe-area-inset-right, 0px));
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-photox svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-actions {
+      position: fixed;
+      right: clamp(32px, 6vw, 88px);
+      top: calc(50% + clamp(72px, 9vh, 96px));
+      z-index: 5;
+      width: calc(45vw - 2 * clamp(32px, 6vw, 88px));
+      max-width: 520px;
+      margin: 0;
+      padding: 0;
+    }
+
+    .ob-root-name .ob-actions,
+    .ob-root-dob .ob-actions {
+      height: 78px;
+      flex: 0 0 78px;
+      margin: 10px auto 0;
+      padding: 0;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition:
+        opacity .525s ease,
+        transform .6s ease,
+        visibility 0s;
+    }
+
+    .ob-root-name.ob-name-ready .ob-actions,
+    .ob-root-dob.ob-dob-ready .ob-actions {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0);
+      transition:
+        opacity .525s ease,
+        transform .6s ease,
+        visibility 0s;
+    }
+
+    .ob-name-scene {
+      display: block;
+      position: fixed;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 0;
+      width: calc(var(--ob-scene-width) + 2px);
+      overflow: visible;
+      pointer-events: none;
+      background: var(--page);
+    }
+
+    .ob-name-visual {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      filter: saturate(.92) contrast(.98) brightness(.97);
+      transform: scale(1);
+      transition: filter .6s cubic-bezier(.32,.72,0,1), transform .8s cubic-bezier(.32,.72,0,1);
+      will-change: transform, filter;
+    }
+
+    .ob-name-frame,
+    .ob-dob-frame {
+      position: absolute;
+      inset: 0;
+    }
+
+    .ob-name-frame:not(.is-fallback),
+    .ob-dob-frame:not(.is-fallback) {
+      -webkit-mask-image: linear-gradient(90deg, #000 62%, transparent 100%);
+      mask-image: linear-gradient(90deg, #000 62%, transparent 100%);
+    }
+
+    .ob-name-frame.is-fallback,
+    .ob-dob-frame.is-fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--tint);
+    }
+
+    .ob-name-frame img {
+      display: block;
+      width: 170%;
+      height: 100%;
+      max-width: none;
+      object-fit: cover;
+      object-position: center 58%;
+      transform: translateX(-41.176%);
+    }
+
+    .ob-root-gender .ob-dob-frame img {
+      width: 135%;
+      max-width: none;
+      transform: translateX(-14.074%);
+    }
+
+    .ob-dob-frame img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center 55%;
+    }
+
+    .ob-name-frame img.ob-scene-depth,
+    .ob-dob-frame img.ob-scene-depth {
+      position: absolute;
+      z-index: 1;
+      top: -5%;
+      left: -5%;
+      width: 110%;
+      height: 110%;
+      filter: blur(4px);
+      opacity: 0;
+      pointer-events: none;
+      -webkit-mask-image: radial-gradient(ellipse at center, transparent 38%, rgba(0, 0, 0, .72) 78%, #000 100%);
+      mask-image: radial-gradient(ellipse at center, transparent 38%, rgba(0, 0, 0, .72) 78%, #000 100%);
+      transition: opacity .45s ease;
+    }
+
+    .ob-name-frame img.ob-scene-depth {
+      left: 0;
+      width: 170%;
+      transform: translateX(-41.176%);
+    }
+
+    .ob-root-gender .ob-dob-frame img.ob-scene-depth {
+      left: 0;
+      width: 135%;
+      transform: translateX(-14.074%);
+    }
+
+    .ob-root-name.ob-name-ready .ob-scene-depth,
+    .ob-root-dob.ob-dob-ready .ob-scene-depth,
+    .ob-root-gender.ob-gender-ready .ob-scene-depth,
+    .ob-root-interestedin.ob-interestedin-ready .ob-scene-depth,
+    .ob-root-year.ob-year-ready .ob-scene-depth,
+    .ob-root-intent.ob-intent-ready .ob-scene-depth,
+    .ob-root-location.ob-location-ready .ob-scene-depth {
+      opacity: 1;
+    }
+
+    .ob-name-frame svg,
+    .ob-dob-frame svg {
+      display: block;
+      width: min(88%, 600px);
+      height: auto;
+      overflow: visible;
+    }
+
   }
 
   @media (min-width: 1050px) {
@@ -972,7 +1806,421 @@ const CSS = `
     }
   }
 
-  @media (max-width: 680px) {
+  @media (min-width: 601px) and (max-width: 1049px) {
+    .ob-root-split {
+      --ob-scene-width: 40vw;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-head {
+      left: 40vw;
+      width: 60vw;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo {
+      grid-template-columns: minmax(0, 42vw) minmax(0, 1fr);
+      column-gap: clamp(24px, 4vw, 48px);
+      padding-right: clamp(24px, 4vw, 48px);
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-actions {
+      right: clamp(24px, 4vw, 48px);
+      width: calc(60vw - 2 * clamp(24px, 4vw, 48px));
+    }
+  }
+
+  @media (min-width: 601px) and (max-width: 1049px) and (orientation: landscape) {
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo {
+      grid-template-columns: minmax(0, 40vw) minmax(0, 1fr);
+      column-gap: clamp(24px, 4vw, 48px);
+      padding-right: clamp(24px, 4vw, 48px);
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo .ob-field {
+      width: 42vw;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-photo,
+    .ob-root:has(.ob-screen-photo) .ob-photo.filled {
+      width: 100%;
+    }
+  }
+
+  @media (min-width: 601px) and (max-width: 1049px) and (orientation: portrait) {
+    .ob-root-split .ob-name-brand {
+      top: max(20px, env(safe-area-inset-top));
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) {
+      overflow-y: hidden;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-head {
+      left: 0;
+      right: 0;
+      width: 100%;
+      justify-content: flex-end;
+      gap: 14px;
+      padding: max(14px, env(safe-area-inset-top)) clamp(24px, 6vw, 48px) 0;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-name-scene {
+      inset: 0 0 auto;
+      width: 100%;
+      height: 60dvh;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-name-frame,
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-dob-frame {
+      -webkit-mask-image: linear-gradient(180deg, #000 76%, transparent 100%);
+      mask-image: linear-gradient(180deg, #000 76%, transparent 100%);
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-name-frame img:not(.ob-scene-depth),
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-dob-frame img:not(.ob-scene-depth) {
+      width: 100%;
+      transform: none;
+      object-position: center 58%;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-name-frame img.ob-scene-depth,
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-dob-frame img.ob-scene-depth {
+      left: 0;
+      width: 100%;
+      transform: none;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-fit {
+      width: 100%;
+      height: 40dvh;
+      min-height: 0;
+      flex: 0 0 40dvh;
+      margin: auto 0 0;
+      padding: clamp(16px, 2.5vh, 26px) clamp(24px, 6vw, 48px) max(24px, env(safe-area-inset-bottom));
+      position: absolute;
+      inset: 60dvh 0 0;
+      overflow: visible;
+      gap: 8px;
+      transform: none;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-screen {
+      width: 100%;
+      max-width: 500px;
+      min-height: 0;
+      position: absolute;
+      right: clamp(24px, 6vw, 48px);
+      bottom: calc(110px + max(24px, env(safe-area-inset-bottom)));
+      left: clamp(24px, 6vw, 48px);
+      flex: 0 0 auto;
+      margin: 0 auto;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas:
+        "title"
+        "hint"
+        "field";
+      align-content: center;
+      row-gap: clamp(8px, 1.6vh, 14px);
+      overflow: visible;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-screen .ob-title {
+      max-width: 100%;
+      font-size: 42px;
+      line-height: 1.06;
+    }
+
+    .ob-title-tablet-line {
+      display: block;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-screen .ob-hint {
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-field {
+      gap: 10px;
+      padding-top: 0;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-chip {
+      min-height: 54px;
+      padding: 12px 16px;
+      font-size: 16px;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-actions {
+      width: 100%;
+      max-width: 500px;
+      min-height: 78px;
+      position: absolute;
+      right: clamp(24px, 6vw, 48px);
+      bottom: max(16px, env(safe-area-inset-bottom));
+      left: clamp(24px, 6vw, 48px);
+      z-index: 10;
+      flex: 0 0 78px;
+      margin: 0 auto;
+      padding: 0;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-actions .ob-foot {
+      margin-top: 8px;
+    }
+
+    .ob-root-name {
+      overflow-y: hidden;
+    }
+
+    .ob-root-name .ob-screen-name .ob-title {
+      font-size: 42px;
+      max-width: 11em;
+    }
+
+    .ob-root-split.ob-root-name:not(:has(.ob-screen-photo)) .ob-screen-name .ob-title {
+      font-size: 42px;
+      max-width: 11em;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-screen-name .ob-title {
+      font-size: 42px;
+      max-width: 11em;
+    }
+
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-screen-dob .ob-title {
+      font-size: 42px;
+    }
+
+    .ob-root-split.ob-root-name:not(:has(.ob-screen-photo)) .ob-screen-name .ob-field {
+      gap: 17px;
+    }
+
+    .ob-root-name .ob-screen-name .ob-input {
+      min-height: 74px;
+    }
+
+    .ob-root-dob .ob-screen-dob .ob-dob {
+      height: 64px;
+    }
+
+    .ob-root-split.ob-keyboard-open:not(:has(.ob-screen-photo)) {
+      height: var(--ob-visible-height);
+      min-height: 0;
+      flex: 0 0 var(--ob-visible-height);
+      overflow-y: auto;
+    }
+
+    .ob-root-split.ob-keyboard-open:not(:has(.ob-screen-photo)) .ob-fit {
+      inset: var(--ob-scene-height) 0 0;
+      height: auto;
+      flex-basis: auto;
+      padding-top: 8px;
+      padding-bottom: 0;
+    }
+
+    .ob-root-split.ob-keyboard-open:not(:has(.ob-screen-photo)) .ob-screen {
+      bottom: calc(72px + max(28px, env(safe-area-inset-bottom)));
+    }
+
+    .ob-root-split.ob-keyboard-open:not(:has(.ob-screen-photo)) .ob-actions {
+      bottom: max(16px, env(safe-area-inset-bottom));
+    }
+
+    .ob-root-split.ob-keyboard-open:not(:has(.ob-screen-photo)) .ob-name-scene {
+      height: var(--ob-scene-height);
+    }
+
+    .ob-root-split.ob-keyboard-open:not(:has(.ob-screen-photo)) .ob-fit {
+      height: var(--ob-form-height);
+      flex-basis: var(--ob-form-height);
+      padding-top: 8px;
+      padding-bottom: max(28px, env(safe-area-inset-bottom));
+    }
+
+    .ob-root-split.ob-keyboard-open:not(:has(.ob-screen-photo)) .ob-screen {
+      row-gap: 8px;
+    }
+
+    .ob-root-split.ob-keyboard-open:not(:has(.ob-screen-photo)) .ob-screen .ob-title {
+      font-size: clamp(26px, 4vw, 34px);
+    }
+
+    .ob-root-name.ob-keyboard-open .ob-screen-name .ob-input {
+      height: 60px;
+      min-height: 60px;
+      padding-right: 18px;
+      padding-left: 18px;
+    }
+
+    .ob-root-dob.ob-keyboard-open .ob-screen-dob .ob-dob {
+      height: 54px;
+    }
+
+    .ob-root-dob.ob-keyboard-open .ob-age-slot {
+      height: 52px;
+      flex-basis: 52px;
+    }
+
+    .ob-root-split.ob-keyboard-open:not(:has(.ob-screen-photo)) .ob-actions {
+      height: 64px;
+      min-height: 64px;
+      margin-top: 4px;
+    }
+
+    .ob-root-split.ob-keyboard-open:not(:has(.ob-screen-photo)) .ob-cta {
+      min-height: 56px;
+      padding: 12px 18px;
+    }
+  }
+
+  @media (min-width: 601px) and (max-width: 1049px) and (orientation: portrait) {
+    .ob-root:has(.ob-screen-photo) {
+      overflow: hidden;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-head {
+      left: 0;
+      right: 0;
+      width: 100%;
+      justify-content: space-between;
+      padding: max(16px, env(safe-area-inset-top)) clamp(24px, 6vw, 48px) 0;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-name-brand {
+      top: max(20px, env(safe-area-inset-top));
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-fit {
+      height: 100dvh;
+      min-height: 100dvh;
+      flex-basis: 100dvh;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo {
+      height: 100dvh;
+      min-height: 100dvh;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: 75dvh minmax(0, 1fr);
+      grid-template-areas:
+        "field"
+        "title";
+      align-content: stretch;
+      align-items: stretch;
+      row-gap: 0;
+      padding: 0;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo .ob-field {
+      width: 100%;
+      max-width: none;
+      height: 75dvh;
+      min-height: 0;
+      justify-self: stretch;
+      align-self: stretch;
+      overflow: hidden;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-photo,
+    .ob-root:has(.ob-screen-photo) .ob-photo.filled {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      max-height: none;
+      aspect-ratio: auto;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+      -webkit-mask-image: none;
+      mask-image: none;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo .ob-title {
+      width: 100%;
+      max-width: 620px;
+      align-self: start;
+      justify-self: center;
+      position: relative;
+      top: -3dvh;
+      padding: clamp(20px, 4vh, 36px) clamp(24px, 6vw, 48px) 0;
+      font-size: 42px;
+      line-height: 1.06;
+      letter-spacing: -.055em;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-actions {
+      position: fixed;
+      top: auto;
+      right: clamp(24px, 6vw, 48px);
+      bottom: max(24px, env(safe-area-inset-bottom));
+      left: clamp(24px, 6vw, 48px);
+      width: auto;
+      max-width: 620px;
+      margin: 0 auto;
+      padding: 0;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-photox {
+      top: max(76px, calc(env(safe-area-inset-top) + 64px));
+      right: clamp(24px, 6vw, 48px);
+      z-index: 11;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-photomenu {
+      top: calc(max(76px, calc(env(safe-area-inset-top) + 64px)) + 46px);
+      right: clamp(24px, 6vw, 48px);
+    }
+  }
+
+  @media (min-width: 601px) and (max-width: 1049px) {
+    .ob-root-split .ob-name-frame.is-fallback,
+    .ob-root-split .ob-dob-frame.is-fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-mask-image: none;
+      mask-image: none;
+      background: var(--tint);
+    }
+
+    .ob-root-split .ob-name-frame.is-fallback > svg,
+    .ob-root-split .ob-dob-frame.is-fallback > svg {
+      position: relative;
+      z-index: 2;
+      display: block;
+      width: min(88%, 520px);
+      max-height: 52dvh;
+      height: auto;
+    }
+
+    .ob-root-split .ob-head {
+      left: 0;
+      right: 0;
+      width: 100%;
+      justify-content: space-between;
+      gap: 14px;
+      padding: max(16px, env(safe-area-inset-top)) clamp(24px, 6vw, 48px) 0;
+    }
+
+    .ob-root-split .ob-head > div:last-child {
+      margin-left: auto;
+    }
+  }
+
+  @media (min-width: 601px) and (max-width: 1049px) and (orientation: landscape) {
+    .ob-root-split:not(:has(.ob-screen-photo)) .ob-head {
+      right: 0;
+      left: var(--ob-scene-width);
+      width: calc(100% - var(--ob-scene-width));
+      justify-content: space-between;
+      padding-right: clamp(24px, 4vw, 48px);
+      padding-left: clamp(24px, 4vw, 48px);
+    }
+  }
+
+  @media (max-width: 600px) {
     .ob-head {
       padding-left: 17px;
       padding-right: 17px;
@@ -1026,7 +2274,7 @@ const CSS = `
       min-width: 175px;
       max-height: 148px;
       aspect-ratio: 1.65 / 1;
-      border-radius: 26px 26px 8px 26px;
+      border-radius: 15px 15px 6px 15px;
     }
 
     .ob-art::before {
@@ -1045,7 +2293,7 @@ const CSS = `
       height: 70px;
       padding: 0 18px;
       font-size: 20px;
-      border-radius: 15px;
+      border-radius: 11px 11px 5px 11px;
     }
 
     .ob-dob {
@@ -1061,7 +2309,7 @@ const CSS = `
     .ob-chip {
       min-height: 60px;
       padding: 15px 19px;
-      border-radius: 14px;
+      border-radius: 9px 9px 4px 9px;
       font-size: 16px;
     }
 
@@ -1070,7 +2318,7 @@ const CSS = `
       aspect-ratio: 4 / 5;
       max-height: 46.5dvh;
       min-height: min(285px, 46.5dvh);
-      border-radius: 21px;
+      border-radius: 14px 14px 6px 14px;
     }
 
     .ob-photoempty {
@@ -1089,7 +2337,7 @@ const CSS = `
 
     .ob-cta {
       min-height: 64px;
-      border-radius: 16px 16px 6px 16px;
+      border-radius: 11px 11px 5px 11px;
       font-size: 16px;
     }
 
@@ -1102,6 +2350,887 @@ const CSS = `
       right: -35%;
       top: 10%;
       filter: blur(65px);
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-head {
+      position: absolute;
+      right: 0;
+      left: 0;
+      width: 100%;
+      justify-content: space-between;
+      padding: max(12px, env(safe-area-inset-top)) 17px 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-photox {
+      top: calc(max(12px, env(safe-area-inset-top, 0px)) + 56px);
+      right: 17px;
+      z-index: 51;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-head > div:last-child {
+      margin-left: auto;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-name-scene {
+      display: block;
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 0;
+      width: 100%;
+      height: 100svh;
+      overflow: hidden;
+      pointer-events: none;
+      background: var(--page);
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-name-visual {
+      position: absolute;
+      inset: 0 0 auto;
+      height: 70svh;
+      overflow: hidden;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-name-scene::after {
+      content: '';
+      position: absolute;
+      right: 0;
+      top: calc(70svh - 8px);
+      left: 0;
+      z-index: 2;
+      height: 24px;
+      background: var(--page);
+      pointer-events: none;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-name-frame {
+      position: absolute;
+      inset: 0;
+      -webkit-mask-image: none;
+      mask-image: none;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-name-frame:not(.is-fallback)::after {
+      content: '';
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      height: clamp(36px, 7vh, 64px);
+      z-index: 2;
+      pointer-events: none;
+      background: linear-gradient(180deg, transparent, var(--page));
+      -webkit-backdrop-filter: blur(23.1px);
+      backdrop-filter: blur(23.1px);
+      -webkit-mask-image: linear-gradient(180deg, transparent, #000 43%);
+      mask-image: linear-gradient(180deg, transparent, #000 43%);
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-name-frame img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center 58%;
+      transform: none;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-name-frame.is-fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--tint);
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-name-frame.is-fallback > svg {
+      position: relative;
+      z-index: 2;
+      width: min(88%, 520px);
+      max-height: 52svh;
+      height: auto;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-name-brand {
+      display: block;
+      position: fixed;
+      z-index: 51;
+      top: max(18px, env(safe-area-inset-top));
+      left: 50%;
+      transform: translateX(-50%);
+      color: var(--main);
+      font-family: 'Bowlby One SC', var(--heavy);
+      font-size: 32px;
+      font-weight: 400;
+      letter-spacing: -.065em;
+      line-height: .92;
+      text-shadow: 2px 2px 0 ${T.yellow};
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-name-brand-question {
+      display: inline-block;
+      margin-left: .015em;
+      color: ${T.orange};
+      transform: rotate(7deg) translateY(-.015em);
+      transform-origin: 60% 65%;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-fit {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100svh;
+      min-height: 100svh;
+      flex: 0 0 100svh;
+      margin: 0;
+      padding: 0;
+      gap: 0;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-screen-name {
+      --ob-name-form-gap: clamp(8px, 1.6svh, 14px);
+      width: 100%;
+      max-width: none;
+      height: 100svh;
+      position: relative;
+      margin: 0;
+      padding: 0 17px;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: 70svh;
+      grid-template-areas:
+        "art";
+      align-content: start;
+      overflow: visible;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-screen-name .ob-art {
+      display: none;
+      width: calc(100% + 34px);
+      min-width: 0;
+      height: 70svh;
+      max-height: none;
+      aspect-ratio: auto;
+      justify-self: stretch;
+      align-self: stretch;
+      margin-left: -17px;
+      overflow: hidden;
+      background: var(--tint);
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-screen-name .ob-art::before,
+    .ob-root-name:has(.ob-screen-name) .ob-screen-name .ob-art::after {
+      display: none;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-screen-name .ob-art svg {
+      width: min(88%, 520px);
+      height: auto;
+      max-height: 52svh;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-screen-name .ob-title {
+      position: absolute;
+      right: 17px;
+      bottom: calc(max(16px, env(safe-area-inset-bottom)) + 64px + 74px + clamp(8px, 1.6vh, 14px) + 40px + 12dvh);
+      left: 17px;
+      width: auto;
+      max-width: 100%;
+      font-family: var(--body);
+      font-size: clamp(30px, 9.5vw, 39px);
+      font-weight: 800;
+      letter-spacing: -.055em;
+      line-height: 1.06;
+      text-transform: none;
+      transition: bottom .4s cubic-bezier(.22, 1, .36, 1);
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-screen-name .ob-title-tablet-line {
+      display: block;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-screen-name .ob-title::after {
+      display: none;
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-screen-name .ob-field {
+      position: absolute;
+      right: 17px;
+      bottom: calc(max(16px, env(safe-area-inset-bottom)) + 64px + 40px + 12dvh);
+      left: 17px;
+      width: auto;
+      gap: 0;
+      padding-top: 0;
+      transition: bottom .4s cubic-bezier(.22, 1, .36, 1);
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-screen-name .ob-input {
+      height: 74px;
+      min-height: 74px;
+    }
+
+    .ob-root-name:has(.ob-screen-name):not(.ob-name-ready) .ob-actions {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity .4s ease, visibility 0s linear .4s;
+    }
+
+    .ob-root-name.ob-name-ready:has(.ob-screen-name) .ob-actions {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transition: opacity .4s ease, visibility 0s;
+    }
+
+    .ob-root-name:has(.ob-screen-name):not(.ob-name-ready) .ob-screen-name .ob-title {
+      bottom: calc(max(16px, env(safe-area-inset-bottom)) + 69px + var(--ob-name-form-gap) + 4svh);
+    }
+
+    .ob-root-name:has(.ob-screen-name):not(.ob-name-ready) .ob-screen-name .ob-field {
+      bottom: calc(max(16px, env(safe-area-inset-bottom)) - 5px + 4svh);
+    }
+
+    .ob-root-name.ob-name-ready:has(.ob-screen-name) .ob-screen-name .ob-title {
+      bottom: calc(max(16px, env(safe-area-inset-bottom)) + 64px + 74px + clamp(8px, 1.6svh, 14px) + 40px - 2svh);
+    }
+
+    .ob-root-name.ob-name-ready:has(.ob-screen-name) .ob-screen-name .ob-field {
+      bottom: calc(max(16px, env(safe-area-inset-bottom)) + 64px + 40px - 2svh);
+    }
+
+    .ob-root-name:has(.ob-screen-name) .ob-actions {
+      position: fixed;
+      right: 17px;
+      bottom: max(16px, env(safe-area-inset-bottom));
+      left: 17px;
+      z-index: 20;
+      width: auto;
+      max-width: 500px;
+      margin: 0 auto;
+      padding: 0;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) {
+      overflow: hidden;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-head {
+      position: absolute;
+      top: 0;
+      right: 0;
+      left: 0;
+      z-index: 50;
+      width: 100%;
+      justify-content: space-between;
+      padding: max(12px, env(safe-area-inset-top)) 17px 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-name-brand {
+      display: block;
+      position: fixed;
+      z-index: 51;
+      top: max(18px, env(safe-area-inset-top));
+      left: 50%;
+      transform: translateX(-50%);
+      color: var(--main);
+      font-family: 'Bowlby One SC', var(--heavy);
+      font-size: 32px;
+      font-weight: 400;
+      letter-spacing: -.065em;
+      line-height: .92;
+      text-shadow: 2px 2px 0 ${T.yellow};
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-name-brand-question {
+      display: inline-block;
+      margin-left: .015em;
+      color: ${T.orange};
+      transform: rotate(7deg) translateY(-.015em);
+      transform-origin: 60% 65%;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-name-scene {
+      display: block;
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 0;
+      width: 100%;
+      height: calc(70dvh + 8px);
+      overflow: hidden;
+      pointer-events: none;
+      background: var(--page);
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-name-visual::after {
+      content: '';
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 5;
+      height: 8px;
+      background: var(--page);
+      pointer-events: none;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-name-visual {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-name-frame,
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-dob-frame {
+      position: absolute;
+      inset: 0;
+      -webkit-mask-image: none;
+      mask-image: none;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-name-frame:not(.is-fallback)::after,
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-dob-frame:not(.is-fallback)::after {
+      content: '';
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 2;
+      height: clamp(36px, 7vh, 64px);
+      pointer-events: none;
+      background: linear-gradient(180deg, transparent, var(--page));
+      -webkit-backdrop-filter: blur(23.1px);
+      backdrop-filter: blur(23.1px);
+      -webkit-mask-image: linear-gradient(180deg, transparent, #000 43%);
+      mask-image: linear-gradient(180deg, transparent, #000 43%);
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-name-frame img:not(.ob-scene-depth),
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-dob-frame img:not(.ob-scene-depth) {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center 58%;
+      transform: none;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-name-frame img.ob-scene-depth,
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-dob-frame img.ob-scene-depth {
+      top: -5%;
+      left: 0;
+      width: 100%;
+      height: 110%;
+      transform: none;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-name-frame.is-fallback,
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-dob-frame.is-fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--tint);
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-name-frame.is-fallback > svg,
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-dob-frame.is-fallback > svg {
+      position: relative;
+      z-index: 2;
+      display: block;
+      width: min(88%, 520px);
+      max-height: 52dvh;
+      height: auto;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-fit {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100dvh;
+      min-height: 100dvh;
+      flex: 0 0 100dvh;
+      margin: 0;
+      padding: 0;
+      gap: 0;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-screen {
+      position: absolute;
+      top: 70dvh;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      max-width: none;
+      max-height: 30dvh;
+      margin: 0;
+      padding: 10px 17px calc(88px + max(16px, env(safe-area-inset-bottom)));
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas:
+        "title"
+        "hint"
+        "field";
+      align-content: start;
+      row-gap: 8px;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-screen .ob-title {
+      max-width: 100%;
+      font-family: var(--body);
+      font-size: clamp(28px, 8vw, 34px);
+      font-weight: 800;
+      letter-spacing: -.055em;
+      line-height: 1.06;
+      text-transform: none;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-title-tablet-line {
+      display: block;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-title::after {
+      display: none;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-screen .ob-hint {
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-art {
+      display: none;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-field {
+      gap: 10px;
+      padding-top: 0;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-chip {
+      min-height: 50px;
+      padding: 12px 14px;
+      font-size: 15px;
+    }
+
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-actions {
+      position: fixed;
+      right: 17px;
+      bottom: max(16px, env(safe-area-inset-bottom));
+      left: 17px;
+      z-index: 20;
+      width: auto;
+      max-width: 500px;
+      margin: 0 auto;
+      padding: 0;
+    }
+
+    .ob-root-split.ob-root-dob:has(.ob-screen-dob) .ob-screen-dob {
+      display: block;
+      top: 0;
+      bottom: auto;
+      height: 100dvh;
+      max-height: none;
+      padding: 0 17px;
+      overflow: hidden;
+    }
+
+    .ob-root-split.ob-root-dob:has(.ob-screen-dob) .ob-screen-dob .ob-title {
+      position: absolute;
+      right: 17px;
+      bottom: calc(max(16px, env(safe-area-inset-bottom)) - 5px + 4dvh + 56px + 10px);
+      left: 17px;
+      width: auto;
+      max-width: 100%;
+      transition: bottom .4s cubic-bezier(.22, 1, .36, 1);
+    }
+
+    .ob-root-split.ob-root-dob:has(.ob-screen-dob) .ob-screen-dob .ob-field {
+      position: absolute;
+      right: 17px;
+      bottom: calc(max(16px, env(safe-area-inset-bottom)) - 5px + 4dvh);
+      left: 17px;
+      width: auto;
+      gap: 8px;
+      padding-top: 0;
+      transition: bottom .4s cubic-bezier(.22, 1, .36, 1);
+    }
+
+    .ob-root-split.ob-root-dob:has(.ob-screen-dob) .ob-screen-dob .ob-dob {
+      height: 56px;
+      min-height: 56px;
+    }
+
+    .ob-root-split.ob-root-dob:has(.ob-screen-dob) .ob-screen-dob .ob-age-slot {
+      height: 0;
+      flex-basis: 0;
+      overflow: hidden;
+    }
+
+    .ob-root-split.ob-root-dob:has(.ob-screen-dob):has(.ob-age) .ob-screen-dob .ob-title {
+      bottom: calc(max(16px, env(safe-area-inset-bottom)) - 5px + 4dvh + 56px + 8px + 72px + 10px);
+    }
+
+    .ob-root-split.ob-root-dob.ob-dob-ready:has(.ob-screen-dob) .ob-screen-dob .ob-title {
+      bottom: calc(max(16px, env(safe-area-inset-bottom)) + 56px + 12px + 100px + 4px);
+    }
+
+    .ob-root-split.ob-root-dob.ob-dob-ready:has(.ob-screen-dob) .ob-screen-dob .ob-field {
+      bottom: calc(max(16px, env(safe-area-inset-bottom)) + 56px + 12px);
+    }
+
+    .ob-root-split.ob-root-dob:has(.ob-screen-dob):has(.ob-age) .ob-screen-dob .ob-age-slot {
+      height: 72px;
+      flex-basis: 72px;
+      overflow: visible;
+    }
+
+    .ob-root-split.ob-root-dob.ob-dob-ready:has(.ob-screen-dob) .ob-screen-dob .ob-age-slot {
+      height: 36px;
+      flex-basis: 36px;
+    }
+
+    .ob-root-split.ob-root-dob:has(.ob-screen-dob) .ob-age {
+      padding: 6px 12px;
+    }
+
+    .ob-root-split.ob-root-dob:has(.ob-screen-dob) .ob-age-warning {
+      top: 42px;
+    }
+
+    .ob-root-split.ob-root-dob:has(.ob-screen-dob) .ob-actions {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity .4s ease, visibility 0s linear .4s;
+    }
+
+    .ob-root-split.ob-root-dob.ob-dob-ready:has(.ob-screen-dob) .ob-actions {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transition: opacity .4s ease, visibility 0s;
+    }
+
+    .ob-root-dob .ob-actions .ob-foot {
+      display: none;
+    }
+
+    .ob-root-split.ob-root-dob:has(.ob-screen-dob) .ob-actions .ob-cta {
+      height: 56px;
+      min-height: 56px;
+      padding: 12px 20px;
+    }
+
+    .ob-root-name.ob-keyboard-open:has(.ob-screen-name),
+    .ob-root-split.ob-root-dob.ob-keyboard-open:has(.ob-screen-dob) {
+      height: var(--ob-visible-height);
+      min-height: 0;
+      flex: 0 0 var(--ob-visible-height);
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior-y: contain;
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-y;
+    }
+
+    .ob-root-name.ob-keyboard-open:has(.ob-screen-name) .ob-name-scene,
+    .ob-root-split.ob-root-dob.ob-keyboard-open:has(.ob-screen-dob) .ob-name-scene {
+      position: absolute;
+      inset: 0 0 auto;
+      height: 70svh;
+    }
+
+    .ob-root-name.ob-keyboard-open:has(.ob-screen-name) .ob-name-brand,
+    .ob-root-split.ob-root-dob.ob-keyboard-open:has(.ob-screen-dob) .ob-name-brand {
+      position: absolute;
+    }
+
+    .ob-root-name.ob-keyboard-open:has(.ob-screen-name) .ob-fit,
+    .ob-root-split.ob-root-dob.ob-keyboard-open:has(.ob-screen-dob) .ob-fit {
+      position: relative;
+      inset: auto;
+      width: 100%;
+      height: 100svh;
+      min-height: 100svh;
+      flex: 0 0 100svh;
+      margin: 0;
+    }
+
+    .ob-root-split.ob-root-dob.ob-keyboard-open:has(.ob-screen-dob) .ob-screen-dob {
+      height: 100svh;
+      max-height: none;
+      overflow: visible;
+    }
+
+    .ob-root-name.ob-keyboard-open:has(.ob-screen-name) .ob-actions,
+    .ob-root-split.ob-root-dob.ob-keyboard-open:has(.ob-screen-dob) .ob-actions {
+      position: absolute;
+      bottom: max(16px, env(safe-area-inset-bottom));
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-head {
+      position: absolute;
+      right: 0;
+      left: 0;
+      width: 100%;
+      justify-content: space-between;
+      padding: max(12px, env(safe-area-inset-top)) 17px 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-name-brand {
+      display: block;
+      position: fixed;
+      z-index: 51;
+      top: max(18px, env(safe-area-inset-top));
+      left: 50%;
+      transform: translateX(-50%);
+      color: var(--main);
+      font-family: 'Bowlby One SC', var(--heavy);
+      font-size: 32px;
+      font-weight: 400;
+      letter-spacing: -.065em;
+      line-height: .92;
+      text-shadow: 2px 2px 0 ${T.yellow};
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-fit {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100dvh;
+      min-height: 100dvh;
+      flex: 0 0 100dvh;
+      margin: 0;
+      padding: 0;
+      gap: 0;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo {
+      grid-template-rows: minmax(0, 70dvh) auto;
+      grid-template-areas:
+        "field"
+        "title";
+      width: 100%;
+      min-height: 100dvh;
+      margin: 0;
+      padding: 0 17px;
+      align-content: stretch;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo .ob-field {
+      width: calc(100% + 34px);
+      height: 70dvh;
+      max-width: none;
+      margin-left: -17px;
+      padding-top: 0;
+      overflow: hidden;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo .ob-photo,
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo .ob-photo.filled {
+      width: 100%;
+      height: 100%;
+      max-height: none;
+      min-height: 0;
+      aspect-ratio: auto;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-screen-photo .ob-title {
+      position: relative;
+      top: -2dvh;
+      width: 100%;
+      max-width: none;
+      padding: 10px 0 90px;
+      font-family: var(--body);
+      font-size: clamp(28px, 8vw, 34px);
+      font-weight: 800;
+      letter-spacing: -.055em;
+      line-height: 1.06;
+      text-transform: none;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-title-tablet-line {
+      display: block;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-title::after {
+      display: none;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-actions {
+      position: fixed;
+      right: 17px;
+      bottom: max(16px, env(safe-area-inset-bottom));
+      left: 17px;
+      z-index: 20;
+      width: auto;
+      max-width: 500px;
+      margin: 0 auto;
+      padding: 0;
+    }
+
+    .ob-root:has(.ob-screen-photo) .ob-cta {
+      color: #FFF9F4;
+    }
+
+    .ob-root-gender {
+      overflow: hidden;
+    }
+
+    .ob-root-split.ob-root-gender:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-screen-gender {
+      top: auto;
+      right: 0;
+      bottom: max(40px, calc(env(safe-area-inset-bottom) + 24px));
+      left: 0;
+      height: auto;
+      max-height: none;
+      padding: 10px 17px 6px;
+      overflow: visible;
+      transition: translate .45s cubic-bezier(.22, 1, .36, 1);
+    }
+
+    .ob-root-split.ob-root-gender.ob-gender-ready:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-screen-gender {
+      translate: 0 -76px;
+    }
+
+    .ob-root-interestedin:has(.ob-screen-interestedin),
+    .ob-root-year:has(.ob-screen-year),
+    .ob-root-intent:has(.ob-screen-intent),
+    .ob-root-location:has(.ob-screen-location) {
+      overflow: hidden;
+    }
+
+    .ob-root-split.ob-root-interestedin .ob-screen-interestedin,
+    .ob-root-split.ob-root-year .ob-screen-year,
+    .ob-root-split.ob-root-intent .ob-screen-intent,
+    .ob-root-split.ob-root-location .ob-screen-location {
+      top: auto;
+      bottom: max(40px, calc(env(safe-area-inset-bottom) + 24px));
+      height: auto;
+      max-height: none;
+      padding: 10px 17px 0;
+      overflow: visible;
+      transition: translate .45s cubic-bezier(.22, 1, .36, 1);
+    }
+
+    .ob-root-split.ob-root-gender:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-fit,
+    .ob-root-split.ob-root-interestedin:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-fit,
+    .ob-root-split.ob-root-year:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-fit,
+    .ob-root-split.ob-root-intent:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-fit,
+    .ob-root-split.ob-root-location:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-fit {
+      z-index: 1;
+    }
+
+    .ob-root-split.ob-root-interestedin:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-screen-interestedin,
+    .ob-root-split.ob-root-year:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-screen-year,
+    .ob-root-split.ob-root-intent:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-screen-intent,
+    .ob-root-split.ob-root-location:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-screen-location {
+      top: auto;
+      height: auto;
+      max-height: none;
+      overflow: visible;
+    }
+
+    .ob-root-split.ob-root-interestedin .ob-screen-interestedin {
+      translate: 0 7dvh;
+    }
+
+    .ob-root-split.ob-root-year .ob-screen-year {
+      translate: 0 10dvh;
+    }
+
+    .ob-root-split.ob-root-intent .ob-screen-intent {
+      translate: 0 10dvh;
+    }
+
+    .ob-root-split.ob-root-gender:not(:has(.ob-screen-photo)) .ob-actions,
+    .ob-root-split.ob-root-interestedin .ob-actions,
+    .ob-root-split.ob-root-year .ob-actions,
+    .ob-root-split.ob-root-intent .ob-actions,
+    .ob-root-split.ob-root-location .ob-actions {
+      bottom: max(40px, calc(env(safe-area-inset-bottom) + 24px));
+    }
+
+    .ob-root-interestedin.ob-interestedin-ready .ob-screen-interestedin,
+    .ob-root-year.ob-year-ready .ob-screen-year,
+    .ob-root-intent.ob-intent-ready .ob-screen-intent,
+    .ob-root-location.ob-location-ready .ob-screen-location {
+      translate: 0 -76px;
+    }
+
+    .ob-root-interestedin.ob-interestedin-ready .ob-screen-interestedin {
+      translate: 0 calc(7dvh - 76px);
+    }
+
+    .ob-root-year.ob-year-ready .ob-screen-year {
+      translate: 0 calc(10dvh - 76px);
+    }
+
+    .ob-root-intent.ob-intent-ready .ob-screen-intent {
+      translate: 0 calc(10dvh - 76px);
+    }
+
+    .ob-root.ob-screen-transitioning.ob-gender-ready .ob-screen-gender,
+    .ob-root.ob-screen-transitioning.ob-location-ready .ob-screen-location {
+      translate: 0 -76px !important;
+    }
+
+    .ob-root.ob-screen-transitioning.ob-year-ready .ob-screen-year {
+      translate: 0 calc(10dvh - 76px) !important;
+    }
+
+    .ob-root.ob-screen-transitioning.ob-intent-ready .ob-screen-intent {
+      translate: 0 calc(10dvh - 76px) !important;
+    }
+
+    .ob-root.ob-screen-transitioning.ob-interestedin-ready .ob-screen-interestedin {
+      translate: 0 calc(7dvh - 76px) !important;
+    }
+
+  }
+
+  @media (min-width: 601px) and (max-width: 1049px) and (orientation: portrait) {
+    .ob-root-interestedin:has(.ob-screen-interestedin),
+    .ob-root-year:has(.ob-screen-year),
+    .ob-root-intent:has(.ob-screen-intent),
+    .ob-root-location:has(.ob-screen-location) {
+      overflow: hidden;
+    }
+
+    .ob-root-interestedin .ob-screen-interestedin,
+    .ob-root-year .ob-screen-year,
+    .ob-root-intent .ob-screen-intent,
+    .ob-root-location .ob-screen-location {
+      transition: translate .45s cubic-bezier(.22, 1, .36, 1);
+    }
+
+    .ob-root-interestedin.ob-interestedin-ready .ob-screen-interestedin,
+    .ob-root-year.ob-year-ready .ob-screen-year,
+    .ob-root-intent.ob-intent-ready .ob-screen-intent,
+    .ob-root-location.ob-location-ready .ob-screen-location {
+      translate: 0 -68px;
+    }
+
+    .ob-root.ob-screen-transitioning.ob-gender-ready .ob-screen-gender,
+    .ob-root.ob-screen-transitioning.ob-interestedin-ready .ob-screen-interestedin,
+    .ob-root.ob-screen-transitioning.ob-year-ready .ob-screen-year,
+    .ob-root.ob-screen-transitioning.ob-intent-ready .ob-screen-intent,
+    .ob-root.ob-screen-transitioning.ob-location-ready .ob-screen-location {
+      translate: 0 -68px !important;
     }
   }
 
@@ -1128,7 +3257,7 @@ const CSS = `
 
   }
 
-  @media (max-height: 700px) and (max-width: 680px) {
+  @media (max-height: 700px) and (max-width: 600px) {
     .ob-fit {
       padding-top: 21px;
     }
@@ -1140,6 +3269,8 @@ const CSS = `
     .ob-title {
       font-size: clamp(43px, 10vw, 58px);
     }
+
+
 
     .ob-title::after {
       margin-top: 9px;
@@ -1178,6 +3309,101 @@ const CSS = `
       animation: none !important;
     }
   }
+
+  .ob-root:has(.ob-screen-gender),
+  .ob-root:has(.ob-screen-interestedin),
+  .ob-root:has(.ob-screen-year),
+  .ob-root:has(.ob-screen-intent),
+  .ob-root:has(.ob-screen-location) {
+    overflow-y: hidden;
+    overscroll-behavior-y: none;
+  }
+
+  .ob-root:has(.ob-screen-gender) .ob-screen-gender,
+  .ob-root:has(.ob-screen-interestedin) .ob-screen-interestedin,
+  .ob-root:has(.ob-screen-year) .ob-screen-year,
+  .ob-root:has(.ob-screen-intent) .ob-screen-intent,
+  .ob-root:has(.ob-screen-location) .ob-screen-location {
+    overflow-y: hidden !important;
+    overscroll-behavior-y: none;
+    -webkit-overflow-scrolling: auto;
+  }
+
+  .ob-root.ob-screen-transitioning .ob-screen {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  .ob-root-name.ob-transitioning-from-dob .ob-screen-dob,
+  .ob-root-gender.ob-transitioning-from-dob .ob-screen-dob,
+  .ob-root-dob.ob-transitioning-from-gender .ob-screen-gender {
+    display: none !important;
+  }
+
+  .ob-root-dob.ob-transitioning-from-name .ob-screen-name {
+    display: none !important;
+  }
+
+  .ob-root.ob-screen-transitioning .ob-screen-name,
+  .ob-root.ob-screen-transitioning .ob-screen-dob,
+  .ob-root.ob-screen-transitioning .ob-screen-gender,
+  .ob-root.ob-screen-transitioning .ob-screen-interestedin,
+  .ob-root.ob-screen-transitioning .ob-screen-year,
+  .ob-root.ob-screen-transitioning .ob-screen-intent,
+  .ob-root.ob-screen-transitioning .ob-screen-location {
+    translate: 0 0 !important;
+  }
+
+  .ob-root.ob-screen-transitioning.ob-selection-flow-transitioning[data-transition-from="gender"] .ob-screen-gender,
+  .ob-root.ob-screen-transitioning.ob-selection-flow-transitioning[data-transition-from="interestedIn"] .ob-screen-interestedin,
+  .ob-root.ob-screen-transitioning.ob-selection-flow-transitioning[data-transition-from="year"] .ob-screen-year,
+  .ob-root.ob-screen-transitioning.ob-selection-flow-transitioning[data-transition-from="intent"] .ob-screen-intent {
+    display: none !important;
+  }
+
+  .ob-root-photo.ob-screen-transitioning[data-transition-from="intent"] .ob-screen-intent {
+    display: none !important;
+  }
+
+  .ob-root.ob-screen-transitioning .ob-actions {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0s, visibility 0s;
+  }
+
+  .ob-root.ob-screen-transitioning:has(.ob-screen-photo) .ob-actions {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0s, visibility 0s;
+  }
+
+  @media (max-width: 600px) {
+    .ob-root-name:has(.ob-screen-name) .ob-name-frame:not(.is-fallback)::after,
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-name-frame:not(.is-fallback)::after,
+    .ob-root-split:not(.ob-root-name):not(:has(.ob-screen-photo)) .ob-dob-frame:not(.is-fallback)::after {
+      height: clamp(81px, 15.75vh, 144px);
+      -webkit-backdrop-filter: blur(52px);
+      backdrop-filter: blur(52px);
+      -webkit-mask-image: linear-gradient(180deg, transparent, #000 20%);
+      mask-image: linear-gradient(180deg, transparent, #000 20%);
+    }
+
+    .ob-name-scene .ob-name-frame img:not(.ob-scene-depth),
+    .ob-name-scene .ob-dob-frame img:not(.ob-scene-depth) {
+      position: relative;
+      top: -1px;
+      height: calc(100% + 1px);
+    }
+
+    .ob-name-scene .ob-name-frame img.ob-scene-depth,
+    .ob-name-scene .ob-dob-frame img.ob-scene-depth {
+      position: absolute;
+    }
+  }
+
 `;
 
 const StepArtwork = ({ step }) => {
@@ -1338,39 +3564,41 @@ const StepArtwork = ({ step }) => {
 
 const useScreenVariants = (reduceMotion) => ({
   screen: {
-    enter: (direction) => reduceMotion
+    enter: (custom) => reduceMotion || custom?.instant
       ? { opacity: 1, x: 0, scale: 1 }
-      : { opacity: 0, x: direction * 65, scale: .97, filter: 'blur(3px)' },
-    center: {
+      : { opacity: 0, x: (typeof custom === 'number' ? custom : custom?.direction ?? 0) * 65, scale: .97, filter: 'blur(3px)' },
+    center: (custom) => ({
       opacity: 1,
       x: 0,
       scale: 1,
       filter: 'blur(0px)',
-      transition: {
+      transition: custom?.instant ? { duration: 0 } : {
         type: 'spring',
         stiffness: 300,
         damping: 29,
         staggerChildren: .055,
         delayChildren: .025,
       },
-    },
-    exit: (direction) => reduceMotion
-      ? { opacity: 0, transition: { duration: .12 } }
-      : {
+    }),
+    exit: (custom) => custom?.instant
+      ? { opacity: 1, x: 0, scale: 1, filter: 'blur(0px)', transition: { duration: 0 } }
+      : reduceMotion
+        ? { opacity: 0, transition: { duration: .12 } }
+        : {
           opacity: 0,
-          x: direction * -48,
+          x: (typeof custom === 'number' ? custom : custom?.direction ?? 0) * -48,
           scale: .985,
           filter: 'blur(2px)',
           transition: { duration: .18, ease: 'easeIn' },
         },
   },
   item: {
-    enter: () => reduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 12 },
-    center: {
+    enter: (custom) => reduceMotion || custom?.instant ? { opacity: 1, y: 0 } : { opacity: 0, y: 12 },
+    center: (custom) => ({
       opacity: 1,
       y: 0,
-      transition: { type: 'spring', stiffness: 400, damping: 30 },
-    },
+      transition: custom?.instant ? { duration: 0 } : { type: 'spring', stiffness: 400, damping: 30 },
+    }),
   },
 });
 
@@ -1431,22 +3659,43 @@ const compressImage = (file) =>
     img.src = src;
   });
 
-const Onboarding = ({ onComplete }) => {
+const Onboarding = ({ onComplete, onSignOut }) => {
   const reduceMotion = useReducedMotion();
   const config = useAppConfig();
-  const { logout, login } = useAuth();
+  const { login } = useAuth();
   const fileRef = useRef(null);
   const rootRef = useRef(null);
   const previewRef = useRef(null);
+  const photoControlRef = useRef(null);
+  const logoutDialogRef = useRef(null);
+  const draftSaveRef = useRef(Promise.resolve());
+  const nameInputEditedRef = useRef(false);
+  const draftInteractionRef = useRef(false);
   const V = useScreenVariants(reduceMotion);
 
   const [step, setStep] = useState(0);
   const [dir, setDir] = useState(0);
+  const [screenTransitioning, setScreenTransitioning] = useState(false);
+  const transitioningFromRef = useRef(null);
+  const transitioningToRef = useRef(null);
   const [uploading, setUploading] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [logoutSaving, setLogoutSaving] = useState(false);
+  const [logoutError, setLogoutError] = useState('');
+  const [photoMenuOpen, setPhotoMenuOpen] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [sceneInputFocused, setSceneInputFocused] = useState(false);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [namePhotoFailed, setNamePhotoFailed] = useState(false);
+  const [birthdayPhotoFailed, setBirthdayPhotoFailed] = useState(false);
+  const [genderPhotoFailed, setGenderPhotoFailed] = useState(false);
+  const [meetingPhotoFailed, setMeetingPhotoFailed] = useState(false);
+  const [chapterPhotoFailed, setChapterPhotoFailed] = useState(false);
+  const [intentPhotoFailed, setIntentPhotoFailed] = useState(false);
+  const [locationPhotoFailed, setLocationPhotoFailed] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -1467,11 +3716,12 @@ const Onboarding = ({ onComplete }) => {
       if (!res?.data || !Object.keys(res.data).length) return;
 
       const saved = res.data;
+      if (draftInteractionRef.current) return;
 
       setFormData((prev) => ({
         ...prev,
         ...saved,
-        name: prev.name || saved.name || '',
+        name: nameInputEditedRef.current ? prev.name : (prev.name || saved.name || ''),
         gender: prev.gender || saved.gender || '',
         year: prev.year || saved.year || '',
         dob: prev.dob || saved.dob || '',
@@ -1507,18 +3757,106 @@ const Onboarding = ({ onComplete }) => {
   }, [resumeDraft]);
 
   useEffect(() => {
-    const { name, gender, dob } = formData;
-    if (!name && !gender && !dob) return undefined;
+    const root = rootRef.current;
+    const visualViewport = window.visualViewport;
+    let keyboardBaseHeight = window.innerHeight;
+    const tabletPortrait = window.matchMedia(
+      '(min-width: 601px) and (max-width: 1049px) and (orientation: portrait)',
+    );
+    const phoneViewport = window.matchMedia('(max-width: 600px)');
+    let frame = 0;
+
+    const updateKeyboardLayout = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const nameInputFocused = step === 0
+          && phoneViewport.matches
+          && root?.contains(document.activeElement)
+          && document.activeElement.matches('.ob-screen-name input.ob-input');
+        const dobInputFocused = step === 1
+          && root?.contains(document.activeElement)
+          && document.activeElement.matches('.ob-screen-dob input.ob-dob');
+        const inputFocused = nameInputFocused || dobInputFocused;
+        const visibleHeight = visualViewport?.height ?? window.innerHeight;
+        const tabletKeyboardOpen = tabletPortrait.matches
+          && dobInputFocused
+          && (visibleHeight < 700 || window.innerHeight - visibleHeight > 120);
+        const phoneKeyboardOpen = phoneViewport.matches
+          && inputFocused
+          && (
+            keyboardBaseHeight - visibleHeight > 120
+            || window.innerHeight - visibleHeight > 120
+            || visibleHeight < 560
+          );
+        const isKeyboardOpen = tabletKeyboardOpen || phoneKeyboardOpen;
+
+        if (!inputFocused) {
+          keyboardBaseHeight = Math.max(window.innerHeight, visibleHeight);
+        }
+
+        if (isKeyboardOpen) {
+          root.style.setProperty('--ob-visible-height', `${visibleHeight}px`);
+          if (dobInputFocused && tabletPortrait.matches) {
+            root.style.setProperty('--ob-scene-height', `${visibleHeight * (phoneKeyboardOpen ? .22 : .28)}px`);
+            root.style.setProperty('--ob-form-height', `${visibleHeight * (phoneKeyboardOpen ? .78 : .72)}px`);
+          } else {
+            root.style.removeProperty('--ob-scene-height');
+            root.style.removeProperty('--ob-form-height');
+          }
+        } else {
+          root.classList.remove('ob-keyboard-open');
+          root.style.removeProperty('--ob-visible-height');
+          root.style.removeProperty('--ob-scene-height');
+          root.style.removeProperty('--ob-form-height');
+        }
+
+        setKeyboardOpen((wasOpen) => (
+          wasOpen === isKeyboardOpen ? wasOpen : isKeyboardOpen
+        ));
+      });
+    };
+
+    visualViewport?.addEventListener('resize', updateKeyboardLayout);
+    visualViewport?.addEventListener('scroll', updateKeyboardLayout);
+    window.addEventListener('resize', updateKeyboardLayout);
+    window.addEventListener('focusin', updateKeyboardLayout);
+    window.addEventListener('focusout', updateKeyboardLayout);
+    updateKeyboardLayout();
+
+    return () => {
+      cancelAnimationFrame(frame);
+      visualViewport?.removeEventListener('resize', updateKeyboardLayout);
+      visualViewport?.removeEventListener('scroll', updateKeyboardLayout);
+      window.removeEventListener('resize', updateKeyboardLayout);
+      window.removeEventListener('focusin', updateKeyboardLayout);
+      window.removeEventListener('focusout', updateKeyboardLayout);
+      root?.style.removeProperty('--ob-visible-height');
+      root?.style.removeProperty('--ob-scene-height');
+      root?.style.removeProperty('--ob-form-height');
+    };
+  }, [step]);
+
+  const saveDraft = useCallback((draft, draftStep) => {
+    const save = draftSaveRef.current
+      .catch(() => {})
+      .then(() => api.put('/users/onboarding/save', {
+        step: draftStep + 1,
+        data: { ...draft, __step: draftStep },
+      }));
+
+    draftSaveRef.current = save;
+    return save;
+  }, []);
+
+  useEffect(() => {
+    if (!formData.name.trim() && !formData.gender && !formData.dob) return undefined;
 
     const t = setTimeout(() => {
-      api.put('/users/onboarding/save', {
-        step: step + 1,
-        data: { ...formData, __step: step },
-      }).catch(() => {});
+      saveDraft(formData, step).catch(() => {});
     }, 800);
 
     return () => clearTimeout(t);
-  }, [formData, step]);
+  }, [formData, saveDraft, step]);
 
   useEffect(() => {
     if (!menuOpen) return undefined;
@@ -1531,9 +3869,60 @@ const Onboarding = ({ onComplete }) => {
     return () => window.removeEventListener('keydown', onKey);
   }, [menuOpen]);
 
-  const update = (patch) => setFormData((f) => ({ ...f, ...patch }));
+  useEffect(() => {
+    if (!logoutConfirmOpen) return undefined;
+
+    const onKey = (event) => {
+      if (event.key === 'Escape') {
+        if (!logoutSaving) setLogoutConfirmOpen(false);
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+
+      const buttons = logoutDialogRef.current?.querySelectorAll('button');
+      if (!buttons?.length) return;
+      const firstButton = buttons[0];
+      const lastButton = buttons[buttons.length - 1];
+
+      if (event.shiftKey && document.activeElement === firstButton) {
+        event.preventDefault();
+        lastButton.focus();
+      } else if (!event.shiftKey && document.activeElement === lastButton) {
+        event.preventDefault();
+        firstButton.focus();
+      }
+    };
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [logoutConfirmOpen, logoutSaving]);
+
+  useEffect(() => {
+    if (!photoMenuOpen) return undefined;
+
+    const closePhotoMenu = (event) => {
+      if (event.key === 'Escape') setPhotoMenuOpen(false);
+    };
+    const dismissOutside = (event) => {
+      if (!photoControlRef.current?.contains(event.target)) setPhotoMenuOpen(false);
+    };
+
+    document.addEventListener('keydown', closePhotoMenu);
+    document.addEventListener('pointerdown', dismissOutside);
+    return () => {
+      document.removeEventListener('keydown', closePhotoMenu);
+      document.removeEventListener('pointerdown', dismissOutside);
+    };
+  }, [photoMenuOpen]);
+
+  const update = (patch) => {
+    draftInteractionRef.current = true;
+    setFormData((f) => ({ ...f, ...patch }));
+  };
 
   const toggleIn = (field, item, max = null) => {
+    draftInteractionRef.current = true;
     setFormData((f) => {
       const arr = f[field] || [];
       const on = arr.includes(item);
@@ -1545,9 +3934,9 @@ const Onboarding = ({ onComplete }) => {
         return f;
       }
 
-      const next = field === 'interestedIn'
-        ? ['Everyone']
-        : (item === 'Everyone' ? [] : arr.filter((i) => i !== 'Everyone'));
+      const next = item === 'Everyone'
+        ? []
+        : arr.filter((i) => i !== 'Everyone');
 
       return { ...f, [field]: [...next, item] };
     });
@@ -1567,15 +3956,22 @@ const Onboarding = ({ onComplete }) => {
   const age = (() => {
     if (dobY.length !== 4 || dobM.length !== 2 || dobD.length !== 2) return null;
 
+    const year = Number(dobY);
+    const month = Number(dobM);
+    const day = Number(dobD);
+    const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+    if (year < 1 || month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]) {
+      return null;
+    }
+
     const today = new Date();
-    const birth = new Date(`${dobY}-${dobM}-${dobD}`);
+    let a = today.getFullYear() - year;
+    const birthdayHasPassed = today.getMonth() + 1 > month
+      || (today.getMonth() + 1 === month && today.getDate() >= day);
 
-    if (Number.isNaN(birth.getTime())) return null;
-
-    let a = today.getFullYear() - birth.getFullYear();
-    const m = today.getMonth() - birth.getMonth();
-
-    return (m < 0 || (m === 0 && today.getDate() < birth.getDate())) ? a - 1 : a;
+    return birthdayHasPassed ? a : a - 1;
   })();
 
   const setDob = (part, raw) => {
@@ -1621,14 +4017,32 @@ const Onboarding = ({ onComplete }) => {
   }, []);
 
   const pickPhoto = () => {
+    setPhotoMenuOpen(false);
     triggerHaptic('light');
     fileRef.current?.click();
   };
 
   const removePhoto = () => {
-    triggerHaptic('light');
     clearPreview();
     update({ photos: [] });
+    setPhotoMenuOpen(false);
+    setError('');
+  };
+
+  const confirmLogout = async () => {
+    if (logoutSaving) return;
+
+    setLogoutSaving(true);
+    setLogoutError('');
+
+    try {
+      await saveDraft(formData, step);
+      triggerHaptic('medium');
+      onSignOut();
+    } catch {
+      setLogoutError('We couldn’t save your progress. Please try again before logging out.');
+      setLogoutSaving(false);
+    }
   };
 
   const onFile = async (e) => {
@@ -1680,6 +4094,7 @@ const Onboarding = ({ onComplete }) => {
   const grantLocation = useCallback(async () => {
     if (locBusy) return;
 
+    draftInteractionRef.current = true;
     setLocBusy(true);
     setLocError('');
 
@@ -1689,12 +4104,13 @@ const Onboarding = ({ onComplete }) => {
     if (res.ok) {
       setFormData((f) => ({ ...f, currentLatLng: res.latLng }));
       setLocationReading(true);
+      setLocDeclined(false);
       return;
     }
 
     setLocError(
       res.reason === LOCATION_UNAVAILABLE.DENIED
-        ? 'Location permission was declined.'
+        ? 'Location access is blocked or was denied. Allow Location in your browser’s site settings, then retry.'
         : res.reason === LOCATION_UNAVAILABLE.INSECURE
           ? 'Location needs a secure (https) connection.'
           : "We couldn't get a location reading.",
@@ -1720,7 +4136,18 @@ const Onboarding = ({ onComplete }) => {
 
       await api.delete('/users/onboarding/clear').catch(() => {});
 
-      const stored = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
+      let stored = {};
+      try {
+        const cachedUser = localStorage.getItem('matchalize_user');
+        if (cachedUser) {
+          const parsedUser = JSON.parse(cachedUser);
+          if (parsedUser && typeof parsedUser === 'object' && !Array.isArray(parsedUser)) {
+            stored = parsedUser;
+          }
+        }
+      } catch (storageError) {
+        console.warn('Could not read the cached user after onboarding publish.', storageError);
+      }
       const updated = res?.user || res?.data?.user || res || {
         ...stored,
         isSetup: true,
@@ -1740,37 +4167,105 @@ const Onboarding = ({ onComplete }) => {
   };
 
   const scrollToTop = () => {
-    rootRef.current?.scrollTo({
-      top: 0,
-      behavior: reduceMotion ? 'auto' : 'smooth',
-    });
+    const root = rootRef.current;
+    if (!root) return;
+
+    root.scrollTop = 0;
+    root.scrollLeft = 0;
+    root.classList.remove('ob-keyboard-open');
+    root.style.removeProperty('--ob-visible-height');
+    root.style.removeProperty('--ob-scene-height');
+    root.style.removeProperty('--ob-form-height');
+    setKeyboardOpen(false);
+    if (root.contains(document.activeElement)) {
+      document.activeElement.blur();
+    }
   };
 
   const next = () => {
+    draftInteractionRef.current = true;
     if (!stepDone(step)) {
       triggerHaptic('heavy');
       return;
     }
 
+    const nextStep = Math.min(step + 1, STEPS.length - 1);
     triggerHaptic('light');
     setError('');
     setDir(1);
-    setStep((s) => Math.min(s + 1, STEPS.length - 1));
+    transitioningFromRef.current = STEPS[step].key;
+    transitioningToRef.current = STEPS[nextStep].key;
+    setScreenTransitioning(true);
+    setStep(nextStep);
     scrollToTop();
   };
 
   const back = () => {
+    draftInteractionRef.current = true;
+    const previousStep = Math.max(step - 1, 0);
     triggerHaptic('light');
     setError('');
     setDir(-1);
-    setStep((s) => Math.max(0, s - 1));
+    transitioningFromRef.current = STEPS[step].key;
+    transitioningToRef.current = STEPS[previousStep].key;
+    setScreenTransitioning(true);
+    setStep(previousStep);
     scrollToTop();
   };
 
   const s = STEPS[step];
+  const stackedTitleMap = {
+    year: ['What chapter', 'are you in, huh?'],
+    intent: ['What are you hoping', 'to find, huh?'],
+  };
+  const stackedTitle = stackedTitleMap[s.key] || null;
+  const tabletTitleLinesMap = {
+    name: ['What do your friends ', 'call you, huh?'],
+    dob: ['When’s your ', 'birthday, huh?'],
+    gender: ['How do you describe ', 'your gender, huh?'],
+    interestedIn: ['Who are you open ', 'to meeting, huh?'],
+    photo: ['Give them a face to ', 'remember, huh?'],
+    location: ['Which location ', 'should we use, huh?'],
+  };
+  const tabletTitleLines = tabletTitleLinesMap[s.key] || null;
+  const hasSplitScene = SCENE_STEP_KEYS.includes(s.key);
+  const hasSplitLayout = hasSplitScene || s.key === 'photo';
+  const hasScenePhoto = SCENE_STEP_KEYS.includes(s.key);
+  const scenePhoto = s.key === 'location'
+    ? campusTownPhoto
+    : s.key === 'dob' ? campusBirthdayPhoto
+      : s.key === 'gender' ? identifyCampusPhoto
+        : s.key === 'interestedIn' ? meetCampusPhoto
+          : s.key === 'year' ? chapterCampusPhoto
+            : s.key === 'intent' ? findCampusPhoto : campusNamePhoto;
+  const isSceneFallback = !hasScenePhoto
+    || (s.key === 'dob' ? birthdayPhotoFailed
+      : s.key === 'gender' ? genderPhotoFailed
+        : s.key === 'interestedIn' ? meetingPhotoFailed
+          : s.key === 'year' ? chapterPhotoFailed
+          : s.key === 'intent' ? intentPhotoFailed
+            : s.key === 'location' ? locationPhotoFailed
+            : s.key === 'name' ? namePhotoFailed
+          : false);
   const isLast = step === STEPS.length - 1;
-
+  const transitioningBetweenGenderDob = screenTransitioning
+    && ((transitioningFromRef.current === 'gender' && s.key === 'dob')
+      || (transitioningFromRef.current === 'dob' && s.key === 'gender'));
+  const transitioningFromNameToDob = screenTransitioning
+    && transitioningFromRef.current === 'name'
+    && s.key === 'dob';
+  const transitioningBetweenSelectionScreens = screenTransitioning
+    && SELECTION_FLOW_STEP_KEYS.includes(transitioningFromRef.current)
+    && SELECTION_FLOW_STEP_KEYS.includes(s.key);
+  const transitionCustom = dir;
   const genders = config?.genders || ['Male', 'Female', 'Non-binary', 'Other'];
+  const genderOptions = [
+    ...genders
+      .filter((gender) => gender !== 'Other' && gender !== 'Another identity')
+      .map((gender) => ({ value: gender, label: gender })),
+    { value: 'Other', label: 'Another identity' },
+    { value: 'Prefer not to say', label: 'Prefer not to say' },
+  ];
   const showOptions = [...genders, 'Everyone'];
   const intentOptions = config?.intents || [];
 
@@ -1795,8 +4290,80 @@ const Onboarding = ({ onComplete }) => {
   );
 
   return (
-    <div className={`ob-root ob-root-${s.key.toLowerCase()}`} ref={rootRef}>
+    <div
+      className={`ob-root ob-root-${s.key.toLowerCase()}${hasSplitLayout ? ' ob-root-split' : ''}${keyboardOpen && (s.key === 'dob' || s.key === 'name') ? ' ob-keyboard-open' : ''}${screenTransitioning ? ' ob-screen-transitioning' : ''}${transitioningBetweenSelectionScreens ? ' ob-selection-flow-transitioning' : ''}${transitioningFromNameToDob ? ' ob-transitioning-from-name' : ''}${screenTransitioning && transitioningFromRef.current === 'dob' && (s.key === 'name' || s.key === 'gender') ? ' ob-transitioning-from-dob' : ''}${screenTransitioning && transitioningFromRef.current === 'gender' && s.key === 'dob' ? ' ob-transitioning-from-gender' : ''}${screenTransitioning && SCENE_STEP_KEYS.includes(transitioningFromRef.current) ? ' ob-scene-fade-transitioning' : ''}${s.key === 'gender' && formData.gender ? ' ob-gender-ready' : ''}${s.key === 'interestedIn' && formData.interestedIn.length > 0 ? ' ob-interestedin-ready' : ''}${s.key === 'year' && formData.year ? ' ob-year-ready' : ''}${s.key === 'intent' && formData.intent.length > 0 ? ' ob-intent-ready' : ''}${s.key === 'location' && stepDone(step) ? ' ob-location-ready' : ''}${formData.photos[0] ? ' ob-photo-ready' : ''}${uploading ? ' ob-photo-uploading' : ''}${sceneInputFocused && s.key === 'dob' ? ' ob-dob-focused' : ''}${s.key === 'name' && formData.name.trim() ? ' ob-name-ready' : ''}${s.key === 'dob' && stepDone(step) ? ' ob-dob-ready' : ''}`}
+      data-transition-from={screenTransitioning ? transitioningFromRef.current || undefined : undefined}
+      ref={rootRef}
+    >
       <style>{CSS}</style>
+      {(hasSplitScene || s.key === 'photo') && (
+        <div className="ob-name-brand" aria-label="huh?">
+          huh<span className="ob-name-brand-question">?</span>
+        </div>
+      )}
+      <AnimatePresence initial={false}>
+        {hasSplitScene && (
+          <motion.div
+            key="onboarding-scene"
+            className="ob-name-scene"
+            aria-hidden="true"
+            initial={reduceMotion ? false : { opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, transition: { duration: .18, ease: 'easeIn' } }}
+          >
+            <div className="ob-name-visual">
+              <AnimatePresence initial={false} mode="sync">
+                <motion.div
+                  key={`${s.key}-${isSceneFallback ? 'fallback' : 'photo'}`}
+                  className={`${s.key === 'name' ? 'ob-name-frame' : 'ob-dob-frame'}${isSceneFallback ? ' is-fallback' : ''}`}
+                  initial={reduceMotion ? false : { opacity: 0, scale: 1.035 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: .985 }}
+                  transition={{ duration: reduceMotion ? .01 : .55, ease: [0.22, 1, .36, 1] }}
+                >
+                  {isSceneFallback ? (
+                    <>
+                      <StepArtwork step={s.key} />
+                      <div className="ob-name-backdrop-art" aria-hidden="true">
+                        <StepArtwork step={s.key} />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {hasScenePhoto && (
+                        <div className="ob-name-backdrop-art" aria-hidden="true">
+                          <StepArtwork step={s.key} />
+                        </div>
+                      )}
+                      <img
+                        src={scenePhoto}
+                        alt=""
+                        draggable="false"
+                        onError={() => {
+                          if (s.key === 'dob') setBirthdayPhotoFailed(true);
+                          else if (s.key === 'gender') setGenderPhotoFailed(true);
+                          else if (s.key === 'interestedIn') setMeetingPhotoFailed(true);
+                          else if (s.key === 'year') setChapterPhotoFailed(true);
+                          else if (s.key === 'intent') setIntentPhotoFailed(true);
+                          else if (s.key === 'location') setLocationPhotoFailed(true);
+                          else setNamePhotoFailed(true);
+                        }}
+                      />
+                      <img
+                        className="ob-scene-depth"
+                        src={scenePhoto}
+                        alt=""
+                        aria-hidden="true"
+                        draggable="false"
+                      />
+                    </>
+                  )}
+                </motion.div>
+              </AnimatePresence>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <header className="ob-head">
         {step > 0 ? (
@@ -1808,9 +4375,7 @@ const Onboarding = ({ onComplete }) => {
           >
             <ChevronLeft size={22} strokeWidth={2.4} />
           </button>
-        ) : (
-          <span className="ob-headspacer" />
-        )}
+        ) : null}
 
         <div style={{ position: 'relative' }}>
           <button
@@ -1846,10 +4411,8 @@ const Onboarding = ({ onComplete }) => {
                     type="button"
                     className="ob-menuitem"
                     onClick={() => {
-                      if (window.confirm('Log out? Your progress is saved as a draft.')) {
-                        triggerHaptic('medium');
-                        logout();
-                      }
+                      setMenuOpen(false);
+                      setLogoutConfirmOpen(true);
                     }}
                   >
                     <LogOut size={16} strokeWidth={2.4} />
@@ -1862,45 +4425,140 @@ const Onboarding = ({ onComplete }) => {
         </div>
       </header>
 
+      <AnimatePresence>
+        {logoutConfirmOpen && (
+          <motion.div
+            className="ob-confirm-backdrop"
+            role="presentation"
+            initial={reduceMotion ? false : { opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0 }}
+            transition={{ duration: .16 }}
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !logoutSaving) {
+                setLogoutConfirmOpen(false);
+              }
+            }}
+          >
+            <motion.div
+              ref={logoutDialogRef}
+              className="ob-confirm-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="ob-logout-title"
+              aria-describedby="ob-logout-copy"
+              initial={reduceMotion ? false : { opacity: 0, y: 12, scale: .97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8, scale: .98 }}
+              transition={{ duration: .18, ease: 'easeOut' }}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="ob-confirm-icon" aria-hidden="true">
+                <LogOut size={21} strokeWidth={2.4} />
+              </div>
+              <h2 id="ob-logout-title" className="ob-confirm-title">Leaving so soon?</h2>
+              <p id="ob-logout-copy" className="ob-confirm-copy">
+                We’ll save your onboarding progress before logging you out.
+              </p>
+              {logoutError && (
+                <p className="ob-confirm-copy" role="alert" style={{ color: T.red, marginTop: -12 }}>
+                  {logoutError}
+                </p>
+              )}
+              <div className="ob-confirm-actions">
+                <button
+                  type="button"
+                  className="ob-confirm-button ob-confirm-stay"
+                  autoFocus
+                  disabled={logoutSaving}
+                  onClick={() => setLogoutConfirmOpen(false)}
+                >
+                  Stay here
+                </button>
+                <button
+                  type="button"
+                  className="ob-confirm-button ob-confirm-logout"
+                  disabled={logoutSaving}
+                  onClick={confirmLogout}
+                >
+                  {logoutSaving ? 'Saving…' : 'Save & log out'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="ob-fit">
-        <AnimatePresence mode="wait" custom={dir} initial={false}>
+        <AnimatePresence
+          mode={transitioningFromNameToDob
+            || transitioningBetweenGenderDob
+            || transitioningBetweenSelectionScreens
+            || (screenTransitioning && transitioningFromRef.current === 'dob' && s.key === 'name')
+            ? 'sync'
+            : 'wait'}
+          custom={transitionCustom}
+          initial={false}
+        >
           <motion.div
             key={s.key}
             className={`ob-screen ob-screen-${s.key.toLowerCase()}`}
-            custom={dir}
+            custom={transitionCustom}
             variants={V.screen}
             initial="enter"
             animate="center"
             exit="exit"
+            onAnimationComplete={() => {
+              if (transitioningToRef.current === s.key) {
+                transitioningFromRef.current = null;
+                transitioningToRef.current = null;
+                setScreenTransitioning(false);
+              }
+            }}
           >
-            <motion.h1 className="ob-title" variants={V.item}>
-              {s.title}
+            <motion.h1 className="ob-title" custom={transitionCustom} variants={V.item}>
+              {stackedTitle ? (
+                stackedTitle.map((line) => (
+                  <span className="ob-title-line" key={line}>{line}</span>
+                ))
+              ) : tabletTitleLines ? (
+                tabletTitleLines.map((line) => (
+                  <span className="ob-title-tablet-line" key={line}>{line}</span>
+                ))
+              ) : (
+                s.title
+              )}
             </motion.h1>
 
             {s.hint && (
-              <motion.p className="ob-hint" variants={V.item}>
+              <motion.p className="ob-hint" custom={transitionCustom} variants={V.item}>
                 {s.hint}
               </motion.p>
             )}
 
             {s.key !== 'photo' && (
-              <motion.div className="ob-art" variants={V.item}>
+              <motion.div className="ob-art" custom={transitionCustom} variants={V.item}>
                 <StepArtwork step={s.key} />
               </motion.div>
             )}
 
-            <motion.div className="ob-field" variants={V.item}>
+            <motion.div className="ob-field" custom={transitionCustom} variants={V.item}>
               {s.key === 'name' && (
                 <input
                   className="ob-input"
                   value={formData.name}
-                  onChange={(e) => update({ name: e.target.value.slice(0, 60) })}
+                  onChange={(e) => {
+                    nameInputEditedRef.current = true;
+                    update({ name: e.target.value.slice(0, 60) });
+                  }}
                   placeholder="Your name"
                   autoCapitalize="words"
                   autoCorrect="off"
                   spellCheck="false"
                   autoComplete="given-name"
                   aria-label="Your name"
+                  onFocus={() => setSceneInputFocused(true)}
+                  onBlur={() => setSceneInputFocused(false)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') next();
                   }}
@@ -1916,6 +4574,12 @@ const Onboarding = ({ onComplete }) => {
                       style={{ flex: 1, minWidth: 0 }}
                       value={dobD}
                       onChange={(e) => setDob('d', e.target.value)}
+                      onFocus={() => setSceneInputFocused(true)}
+                      onBlur={(e) => {
+                        if (!e.relatedTarget?.classList.contains('ob-dob')) {
+                          setSceneInputFocused(false);
+                        }
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === 'Backspace' && !dobD) return;
                         if (e.key === 'Enter' && age) next();
@@ -1934,6 +4598,12 @@ const Onboarding = ({ onComplete }) => {
                       style={{ flex: 1, minWidth: 0 }}
                       value={dobM}
                       onChange={(e) => setDob('m', e.target.value)}
+                      onFocus={() => setSceneInputFocused(true)}
+                      onBlur={(e) => {
+                        if (!e.relatedTarget?.classList.contains('ob-dob')) {
+                          setSceneInputFocused(false);
+                        }
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === 'Backspace' && !dobM) dayRef.current?.focus();
                         if (e.key === 'Enter' && age) next();
@@ -1952,6 +4622,12 @@ const Onboarding = ({ onComplete }) => {
                       style={{ flex: 1, minWidth: 0 }}
                       value={dobY}
                       onChange={(e) => setDob('y', e.target.value)}
+                      onFocus={() => setSceneInputFocused(true)}
+                      onBlur={(e) => {
+                        if (!e.relatedTarget?.classList.contains('ob-dob')) {
+                          setSceneInputFocused(false);
+                        }
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === 'Backspace' && !dobY) monRef.current?.focus();
                         if (e.key === 'Enter' && age) next();
@@ -1963,19 +4639,37 @@ const Onboarding = ({ onComplete }) => {
                     />
                   </div>
 
-                  {age !== null && (
-                    <span className={`ob-age${age >= 18 && age <= 40 ? ' ok' : ''}`}>
-                      Age {age}
-                    </span>
-                  )}
+                  <div className="ob-age-slot">
+                    {age !== null && (
+                      <>
+                        <span className={`ob-age${age >= 18 && age <= 40 ? ' ok' : ''}`}>
+                          Age {age}
+                        </span>
+                      {(age < 18 || age > 40) && (
+                          <span className="ob-age-warning" role="status">
+                          {age < 18
+                            ? 'You must be 18 or older to join.'
+                            : 'You must be 40 or younger to join.'}
+                        </span>
+                      )}
+                      </>
+                    )}
+                  </div>
                 </>
               )}
 
               {s.key === 'photo' && (
                 <>
                   {(formData.photos[0] || preview) ? (
-                    <div className="ob-photo filled">
-                      <img src={formData.photos[0] || preview} alt="Your photo" />
+                    <div ref={photoControlRef} className="ob-photo filled">
+                      <img
+                        className="ob-photo-image"
+                        src={formData.photos[0] || preview}
+                        alt="Your photo"
+                      />
+                      {preview && (
+                        <img className="ob-photo-blur" src={preview} alt="" aria-hidden="true" />
+                      )}
 
                       {uploading && (
                         <span className="ob-uploading">
@@ -1996,11 +4690,29 @@ const Onboarding = ({ onComplete }) => {
                           <button
                             type="button"
                             className="ob-photox"
-                            onClick={removePhoto}
-                            aria-label="Remove photo"
+                            onClick={() => setPhotoMenuOpen((open) => !open)}
+                            aria-label="Edit your photo"
+                            aria-expanded={photoMenuOpen}
+                            title="Edit your photo"
                           >
-                            <X size={18} strokeWidth={2.4} />
+                            <Pencil size={13} strokeWidth={2.8} />
                           </button>
+                          {photoMenuOpen && (
+                            <div className="ob-photomenu" role="group" aria-label="Photo actions">
+                              <button type="button" onClick={pickPhoto}>
+                                <Pencil size={13} aria-hidden="true" />
+                                Replace
+                              </button>
+                              <button
+                                type="button"
+                                className="ob-photomenu-remove"
+                                onClick={removePhoto}
+                              >
+                                <X size={14} aria-hidden="true" />
+                                Remove
+                              </button>
+                            </div>
+                          )}
                         </>
                       )}
                     </div>
@@ -2033,19 +4745,21 @@ const Onboarding = ({ onComplete }) => {
 
               {s.key === 'gender' && (
                 <div className="ob-chips">
-                  {genders.map((g) => (
+                  {genderOptions.map(({ value, label }) => (
                     <button
-                      key={g}
+                      key={value}
                       type="button"
-                      className={`ob-chip${formData.gender === g ? ' on' : ''}`}
-                      aria-pressed={formData.gender === g}
+                      className={`ob-chip${formData.gender === value ? ' on' : ''}`}
+                      aria-pressed={formData.gender === value}
                       onClick={() => {
-                        update({ gender: g });
+                        update({ gender: formData.gender === value ? '' : value });
                         triggerHaptic('light');
                       }}
                     >
-                      {formData.gender === g && <Check size={17} strokeWidth={2.5} />}
-                      {g}
+                      {formData.gender === value && (
+                        <Check size={17} strokeWidth={2.5} aria-hidden="true" />
+                      )}
+                      {label}
                     </button>
                   ))}
                 </div>
@@ -2079,7 +4793,7 @@ const Onboarding = ({ onComplete }) => {
                       className={`ob-chip${formData.year === y ? ' on' : ''}`}
                       aria-pressed={formData.year === y}
                       onClick={() => {
-                        update({ year: y });
+                        update({ year: formData.year === y ? '' : y });
                         triggerHaptic('light');
                       }}
                     >
@@ -2111,62 +4825,58 @@ const Onboarding = ({ onComplete }) => {
 
               {s.key === 'location' && (
                 <div className="ob-location">
-                  {locationReading ? (
+                  {locationReading && (
                     <p className="ob-location-ok">
                       <Check size={17} strokeWidth={2.5} />
                       <span>
-                        Location shared. We'll show you people near you first.
+                        We’ll use your current location to help you find nearby college students.
                       </span>
                     </p>
-                  ) : locDeclined ? (
-                    <>
-                      <p className="ob-location-ok">
-                        <Check size={17} strokeWidth={2.5} />
-                        <span>
-                          No problem — we'll rank your feed using your college location.
-                        </span>
-                      </p>
+                  )}
+                  {locDeclined && (
+                    <p className="ob-location-ok">
+                      <Check size={17} strokeWidth={2.5} />
+                      <span>
+                        We’ll use your college location to help you find nearby college students.
+                      </span>
+                    </p>
+                  )}
 
-                      <p className="ob-location-copy">
-                        You can switch to your real location any time in Settings.
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="ob-location-copy">
-                        We use a rounded location to help you discover people nearby,
-                        beyond your campus. Your exact location is never shown to anyone.
-                      </p>
+                  <div className="ob-chips ob-location-options">
+                    <button
+                      type="button"
+                      className={`ob-chip${locationReading ? ' on' : ''}`}
+                      aria-pressed={locationReading}
+                      onClick={grantLocation}
+                      disabled={locBusy}
+                    >
+                      {locationReading && <Check size={17} strokeWidth={2.5} />}
+                      {locBusy ? 'Finding you…' : 'Share my location'}
+                    </button>
 
-                      <button
-                        type="button"
-                        className="ob-loc-btn"
-                        onClick={grantLocation}
-                        disabled={locBusy}
-                      >
-                        {locBusy ? 'Finding you…' : 'Use my location'}
-                      </button>
+                    <button
+                      type="button"
+                      className={`ob-chip${locDeclined ? ' on' : ''}`}
+                      aria-pressed={locDeclined}
+                      onClick={() => {
+                        draftInteractionRef.current = true;
+                        setLocDeclined(true);
+                        setLocationReading(false);
+                        setFormData((current) => ({ ...current, currentLatLng: null }));
+                        setLocError('');
+                        triggerHaptic('light');
+                      }}
+                      disabled={locBusy}
+                    >
+                      {locDeclined && <Check size={17} strokeWidth={2.5} />}
+                      Use my college location
+                    </button>
+                  </div>
 
-                      <button
-                        type="button"
-                        className="ob-loc-alt"
-                        onClick={() => {
-                          setLocDeclined(true);
-                          setLocError('');
-                          triggerHaptic('light');
-                        }}
-                        disabled={locBusy}
-                      >
-                        Use my college location instead
-                      </button>
-
-                      {locError && (
-                        <p className="ob-loc-note">
-                          {locError} You can turn this on later in Settings, or use
-                          your college location instead.
-                        </p>
-                      )}
-                    </>
+                  {locError && (
+                    <p className="ob-loc-note" role="status">
+                      {locError} You can retry or use your college location.
+                    </p>
                   )}
                 </div>
               )}
@@ -2184,7 +4894,7 @@ const Onboarding = ({ onComplete }) => {
               onClick={publish}
               disabled={!allDone || uploading || publishing}
             >
-              {publishing ? 'Publishing…' : 'Publish & start matching'}
+              {publishing ? 'Getting things ready…' : 'Start matching'}
               <ChevronRight size={20} strokeWidth={2.5} />
             </button>
           ) : (

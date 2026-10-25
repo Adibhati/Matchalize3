@@ -4,12 +4,13 @@ import Block from '../models/Block.js';
 import Alignment from '../models/Alignment.js';
 import User from '../models/User.js';
 import Interaction from '../models/Interaction.js';
+import Setting from '../models/Setting.js';
 import { protect } from '../middleware/auth.js';
 import { REPORT_REASONS } from '../models/Report.js';
-import { sendPushNotification } from '../utils/push.js';
-import { addToQueue } from '../utils/queue.js';
+import { destructiveActionLimiter } from '../middleware/rateLimiters.js';
 
 const router = express.Router();
+const DEFAULT_REPORT_REVIEW_THRESHOLD = 3;
 
 // @route   GET /api/report/reasons
 // @desc    Get available report reasons
@@ -19,7 +20,7 @@ router.get('/reasons', protect, (req, res) => {
 });
 
 // @route   POST /api/report/:userId
-// @desc    Report a user (auto-suspend after 3 unique reporters)
+// @desc    Report a user (flag for admin review after distinct-reporter threshold)
 // @access  Private
 router.post('/:userId', protect, async (req, res) => {
   const { reason, details } = req.body;
@@ -34,59 +35,40 @@ router.post('/:userId', protect, async (req, res) => {
   }
 
   try {
-    // '+suspendedReason' only lifts that field's default exclusion — the rest
-    // of the document still comes back, so the escalation below does not write
-    // undefined over any other field.
-    const reported = await User.findById(reportedId).select('+suspendedReason');
+    const reported = await User.findById(reportedId);
     if (!reported) return res.status(404).json({ message: 'User not found' });
 
-    // Dismissed-aware report: a dismissed report can be re-opened by the same
-    // reporter; an active one still rejects duplicates (keeps the unique index valid).
-    const existingReport = await Report.findOne({ reporter: req.user._id, reported: reportedId });
-    let report;
-    if (existingReport && existingReport.status === 'dismissed') {
-      existingReport.reason = reason;
-      existingReport.details = details || '';
-      existingReport.status = 'pending';
-      existingReport.createdAt = new Date();
-      report = await existingReport.save();
-    } else if (existingReport) {
-      return res.status(409).json({ message: 'Already reported this user' });
-    } else {
-      report = await Report.create({
-        reporter: req.user._id,
-        reported: reportedId,
-        reason,
-        details: details || '',
-      });
+    const reviewThresholdSetting = await Setting.findOne({ key: 'reportReviewThreshold' }).lean();
+    const reviewThreshold = reviewThresholdSetting?.value ?? DEFAULT_REPORT_REVIEW_THRESHOLD;
+    if (!Number.isInteger(reviewThreshold) || reviewThreshold < 1 || reviewThreshold > 1000) {
+      throw new Error('Invalid reportReviewThreshold setting');
     }
 
-    // Escalation: count only non-dismissed reports so admin dismissals work
-    const activeReportCount = await Report.countDocuments({
+    const report = await Report.create({
+      reporter: req.user._id,
+      reported: reportedId,
+      reason,
+      details: details || '',
+    });
+
+    // Repeated reports are retained as separate moderation evidence, but only
+    // distinct reporters contribute to automatic escalation.
+    const activeReporterIds = await Report.distinct('reporter', {
       reported: reportedId,
       status: { $ne: 'dismissed' },
     });
+    const activeReportCount = activeReporterIds.length;
 
-    // Escalate only. Never auto-clear a restriction an admin applied.
-    if (activeReportCount >= 5) {
-      reported.suspended = true;
-      reported.suspendedAt = reported.suspendedAt || new Date();
-      reported.suspendedReason = reported.suspendedReason || 'Multiple community reports';
+    // Reports can flag an account for review, but suspension requires an admin.
+    if (activeReportCount >= reviewThreshold) {
       reported.shadowbannedAt = reported.shadowbannedAt || new Date();
-      reported.contentFrozen = false;
-      await reported.save();
-    } else if (activeReportCount >= 3) {
-      reported.shadowbannedAt = reported.shadowbannedAt || new Date();
+      reported.shadowbanScore = Math.max(reported.shadowbanScore || 0, 5);
       reported.contentFrozen = true;
       await reported.save();
     }
-    // activeReportCount < 3 → leave the account as an admin last set it.
 
     res.status(201).json({ message: 'Report submitted', reportId: report._id });
   } catch (error) {
-    if (error.code === 11000) {
-      return res.status(409).json({ message: 'Already reported this user' });
-    }
     console.error(error);
     res.status(500).json({ message: 'Server error submitting report' });
   }
@@ -95,7 +77,7 @@ router.post('/:userId', protect, async (req, res) => {
 // @route   POST /api/block/:userId
 // @desc    Block a user
 // @access  Private
-router.post('/block/:userId', protect, async (req, res) => {
+router.post('/block/:userId', protect, destructiveActionLimiter, async (req, res) => {
   const blockedId = req.params.userId;
 
   if (blockedId === req.user._id.toString()) {
@@ -115,34 +97,40 @@ router.post('/block/:userId', protect, async (req, res) => {
     // Deactivate any existing alignment
     const match = await Alignment.findOne({
       users: { $all: [req.user._id, blockedId] },
-      isActive: true,
     });
     if (match) {
-      match.isActive = false;
-      await match.save();
+      if (match.isActive) {
+        match.isActive = false;
+        await match.save();
+      }
     }
 
-    // Create permanent exclusion so they never appear in each other's Discover deck
-    await Interaction.create([
-      { actorId: req.user._id, targetId: blockedId, actionType: 'archive', cooldownExpiresAt: null, origin: 'block' },
-      { actorId: blockedId, targetId: req.user._id, actionType: 'archive', cooldownExpiresAt: null, origin: 'block' },
+    // Upsert both exclusions. Preserve an existing unmatch/pass archive's origin
+    // so unblocking cannot accidentally remove its permanent Discover exclusion.
+    await Promise.all([
+      Interaction.updateOne(
+        { actorId: req.user._id, targetId: blockedId, actionType: 'archive' },
+        { $setOnInsert: { cooldownExpiresAt: null, origin: 'block' } },
+        { upsert: true }
+      ),
+      Interaction.updateOne(
+        { actorId: blockedId, targetId: req.user._id, actionType: 'archive' },
+        { $setOnInsert: { cooldownExpiresAt: null, origin: 'block' } },
+        { upsert: true }
+      ),
     ]);
 
     const io = req.app.get('io');
     if (io) {
-      io.to(blockedId).emit('unmatch-notification', { alignmentId: match?._id });
+      if (match) {
+        const alignmentId = match._id.toString();
+        io.in(alignmentId).socketsLeave(alignmentId);
+        io.to(req.user._id.toString()).emit('unmatch-notification', { alignmentId });
+        io.to(blockedId).emit('unmatch-notification', { alignmentId });
+      } else {
+        io.to(blockedId).emit('unmatch-notification', { alignmentId: null });
+      }
     }
-
-    // In-app (socket 'unmatch-notification') + push already notify the blocked user.
-    // No Notification DB row is created — the model is purpose-built for letter interactions.
-    // Deliberately does NOT name who blocked them. A named notification confirms
-    // both that a block happened and that the blocker is still active on the
-    // platform. A generic message keeps the block indistinguishable from an
-    // ordinary unmatch.
-    addToQueue(() => sendPushNotification(blockedId, {
-      title: 'Matchalize',
-      body: 'This conversation is no longer available.',
-    }));
 
     res.status(200).json({ message: 'User blocked' });
   } catch (error) {

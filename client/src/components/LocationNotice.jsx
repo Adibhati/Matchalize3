@@ -17,38 +17,8 @@ const t = neu;
  * feed while the UI implies it is location-ranked, which is the failure that
  * made distance look broken.
  *
- * ── WHY IT NO LONGER SITS THERE FOREVER ──
- * The previous shape was permanently pinned and undismissable, on the reasoning
- * that a banner people swipe away is how someone stops noticing their feed
- * stopped changing. That reasoning was right about DISMISSAL and wrong about
- * persistence: a permanent bar over the feed is wallpaper, and wallpaper is
- * read by nobody. Nothing was ever decided from it.
- *
- * The fix is an expiry rather than a concession. It arrives on entry, says the
- * whole thing in two lines, and leaves. Someone who never registers it still
- * gets it again on their next app open — which is more often than "never", and
- * the only nudge that isn't a nag.
- *
- * ── WHY IT RETURNS ON EVERY TAB SWITCH ──
- * The tab switch remounts this screen (`AppShell` keys the page wrapper on
- * `activeTab`), so "mount" already means "the user came back to the feed". No
- * visibility API, no focus listener, no timer bookkeeping.
- *
- * The 3-minute throttle is the one guard. Tab-switching is free and fast;
- * without it, someone checking matches ten times in a minute gets ten pills,
- * which is nagging rather than reminding.
- *
- * ── WHY ONE CASE NEVER AUTO-HIDES ──
- * A browser that has permanently blocked location will never prompt again — not
- * this app, not on refresh, not ever. That is the browser's decision, and it
- * means the "turn it on in your settings" copy is the only actionable
- * instruction the user will ever get. Auto-hiding it after five seconds would
- * leave someone with a campus-ranked feed and no route out of it.
- *
- * Push notifications were rejected for the same reason as the auto-hide
- * exception: a notification cannot deliver a permission grant, and muting
- * notifications to escape the nagging costs the user their match and message
- * alerts.
+ * The college-fallback reminder stays visible until the user dismisses it.
+ * The active-location confirmation is informational, appears once, then leaves.
  *
  * ── WHY THERE ARE TWO VARIANTS ──────────────────────────────────────────────
  * `fallback` warns that the deck is campus-ordered. `active` confirms that it
@@ -70,10 +40,7 @@ const t = neu;
  */
 
 const AUTO_HIDE_MS = 5000;
-/* Minimum gap between two unprompted appearances within one session. */
-const THROTTLE_MS = 3 * 60 * 1000;
 const SESSION_SEEN_KEY = 'matchalize_notice_seen';
-const SESSION_AT_KEY = 'matchalize_notice_at';
 /* localStorage, not sessionStorage — the opposite choice from SESSION_SEEN_KEY,
    and for the same reason in reverse. The confirmation is a one-time statement
    that the location feature is working; a session key would bring it back on
@@ -101,9 +68,9 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  /* Set when the browser refuses permanently. That is the one state with no
-     auto-hide, because it is the one state where dismissal hides the only way
-     forward. */
+  const [success, setSuccess] = useState('');
+  /* Set when the browser refuses permanently so expanded copy can explain how
+     to change the browser permission. */
   const [locked, setLocked] = useState(false);
 
   const hideTimer = useRef(null);
@@ -131,12 +98,12 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
   /* ── decide whether to appear on this mount ── */
   useEffect(() => {
     if (isActive) {
-      /* Once. Ever. If it had a session key it would return on every launch,
-         which turns a confirmation into a recurring notification about
-         something that is working. It auto-hides like the warning does, and
-         takes no dismiss control — there is nothing to dismiss, because
-         nothing is being asked. */
-      if (localRead(ACTIVE_ACK_KEY)) return;
+      /* The active confirmation appears once and auto-hides. */
+      if (localRead(ACTIVE_ACK_KEY)) {
+        clearTimeout(hideTimer.current);
+        setVisible(false);
+        return undefined;
+      }
       localWrite(ACTIVE_ACK_KEY, String(Date.now()));
       setVisible(true);
       hideTimer.current = setTimeout(() => setVisible(false), AUTO_HIDE_MS);
@@ -145,36 +112,14 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
 
     if (sessionRead(SESSION_SEEN_KEY)) return;
 
-    const lastAt = Number(sessionRead(SESSION_AT_KEY));
-    const now = Date.now();
-    /* No previous stamp means the first appearance of the session, so it always
-       shows. A missing stamp must not be read as "just shown" — that would
-       silently skip the very first reminder after a fresh sign-up, which is the
-       one moment it matters most. */
-    if (lastAt && now - lastAt < THROTTLE_MS) return;
-
-    sessionWrite(SESSION_AT_KEY, String(now));
     setVisible(true);
+    return undefined;
+  }, [isActive, localRead, localWrite, sessionRead]);
 
-    /* Starts closed. The two-line form carries the whole fact; expansion is for
-       the explanation, not for the headline. */
-    hideTimer.current = setTimeout(() => setVisible(false), AUTO_HIDE_MS);
-
-    return () => clearTimeout(hideTimer.current);
-  }, [isActive, localRead, localWrite, sessionRead, sessionWrite]);
-
-  /* ── expanding cancels the auto-hide; collapsing restarts it ── */
+  /* Expanding the college-fallback reminder never starts a dismissal timer. */
   const toggle = useCallback(() => {
     clearTimeout(hideTimer.current);
-    setOpen((prev) => {
-      const next = !prev;
-      if (!next) {
-        /* Collapsing again means they read it and went back, so it still has
-           something left to say. Restart the clock. */
-        hideTimer.current = setTimeout(() => setVisible(false), AUTO_HIDE_MS);
-      }
-      return next;
-    });
+    setOpen((prev) => !prev);
   }, []);
 
   const dismiss = useCallback(() => {
@@ -182,14 +127,15 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
     setVisible(false);
     setOpen(false);
     sessionWrite(SESSION_SEEN_KEY, '1');
-    sessionWrite(SESSION_AT_KEY, String(Date.now()));
   }, [sessionWrite]);
 
   /* ── request a real reading ── */
   const ask = useCallback(async () => {
     if (busy) return;
+    clearTimeout(hideTimer.current);
     setBusy(true);
     setError('');
+    setSuccess('');
     const res = await readLocationOnce();
 
     if (!res.ok) {
@@ -208,16 +154,30 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
       return;
     }
 
+    let saved;
     try {
-      const saved = await api.put('/users/location', { latLng: res.latLng, source: 'gps' });
-      triggerHaptic('medium');
+      saved = await api.put('/users/location', { latLng: res.latLng, source: 'gps' });
+    } catch {
+      setBusy(false);
+      setError("Couldn't save your location. Try again.");
+      return;
+    }
+
+    triggerHaptic('medium');
+    setSuccess(saved?.moved
+      ? 'Your Deck is updating around your new area.'
+      : 'Your location is saved. Nearby profiles will be prioritized.');
+    setBusy(false);
+
+    try {
       /* The server's `moved` flag is the authority — it already deleted the
          viewer's deck session when the anchor changed. We forward it so the
          parent can rebuild in place without a full reload. */
       await onLocationChanged?.(!!saved?.moved);
-    } catch {
-      setBusy(false);
-      setError("Couldn't save your location. Try again.");
+      hideTimer.current = setTimeout(() => setVisible(false), AUTO_HIDE_MS);
+    } catch (error) {
+      console.error('Location saved, but the Deck could not update:', error);
+      setError("Your location was saved, but the Deck couldn't refresh. Try reopening it.");
     }
   }, [busy, onLocationChanged]);
 
@@ -226,6 +186,7 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
       {visible && (
         <motion.div
           key="loc-notice"
+          className="location-notice"
           initial={{ opacity: 0, y: -14 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -14 }}
@@ -233,14 +194,9 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
           role="status"
           aria-live="polite"
           style={{
-            position: 'absolute',
-            top: 12,
-            left: 12,
-            right: 12,
-            zIndex: 34,
-            width: 'calc(100% - 24px)',
-            maxWidth: 430,
-            marginInline: 'auto',
+            position: 'fixed',
+            top: 'max(16px, env(safe-area-inset-top))',
+            zIndex: 99999,
             boxSizing: 'border-box',
             borderRadius: t.radius.md,
             background: t.card,
@@ -249,6 +205,24 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
             overflow: 'hidden',
           }}
         >
+          <style>{`
+            .location-notice {
+              left: max(16px, env(safe-area-inset-left));
+              right: max(16px, env(safe-area-inset-right));
+              width: auto;
+              max-width: 430px;
+              margin-inline: auto;
+            }
+
+            @media (min-width: 600px) {
+              .location-notice {
+                left: auto;
+                right: max(24px, env(safe-area-inset-right));
+                width: min(430px, calc(100vw - 48px));
+                margin-inline: 0;
+              }
+            }
+          `}</style>
           <div style={{ padding: '10px 12px' }}>
             {/* Headline + sub-line. Both lines carry the whole fact on their
                 own — someone who never expands still learns their feed is
@@ -272,9 +246,9 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
                     : "Your feed isn't using your live location"}
                 </div>
                 <div style={{ marginTop: 2, fontFamily: t.fontBody, fontSize: 12.5, color: t.ink2, lineHeight: 1.35 }}>
-                  {isActive
+                  {success || (isActive
                     ? `People near you show up first, not just near ${COLLEGE_LABEL}`
-                    : `Sorted according to ${COLLEGE_LABEL}`}
+                    : `Sorted according to ${COLLEGE_LABEL}`)}
                 </div>
               </div>
             </div>
@@ -289,6 +263,8 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
                 the line above them says they do. */}
             {!isActive && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+              {!success && (
+              <>
               <button
                 type="button"
                 onClick={ask}
@@ -333,13 +309,14 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
               >
                 {open ? <ChevronUp size={15} strokeWidth={2.6} /> : <ChevronDown size={15} strokeWidth={2.6} />}
               </button>
+              </>
+              )}
 
               <div style={{ flex: 1 }} />
 
               <button
                 type="button"
                 onClick={dismiss}
-                disabled={locked}
                 aria-label="Dismiss"
                 style={{
                   display: 'flex',
@@ -350,8 +327,7 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
                   border: 'none',
                   background: 'transparent',
                   color: t.ink3,
-                  cursor: locked ? 'default' : 'pointer',
-                  opacity: locked ? 0.4 : 1,
+                  cursor: 'pointer',
                 }}
               >
                 <X size={14} strokeWidth={2.6} />
@@ -388,7 +364,6 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
                   <button
                     type="button"
                     onClick={dismiss}
-                    disabled={locked}
                     style={{
                       marginTop: 10,
                       border: 'none',
@@ -398,8 +373,7 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
                       fontFamily: t.fontBody,
                       fontSize: 12,
                       textDecoration: 'underline',
-                      cursor: locked ? 'default' : 'pointer',
-                      opacity: locked ? 0.4 : 1,
+                      cursor: 'pointer',
                     }}
                   >
                     Not now
@@ -409,22 +383,6 @@ const LocationNotice = ({ college = '', variant = 'fallback', onLocationChanged 
             )}
           </AnimatePresence>
 
-          {/* Draining hairline. Only while collapsed, and only while it is
-              actually going to leave on its own — drawing it while the notice is
-              expanded or pinned would promise a departure that never comes. */}
-          {!open && !locked && !isActive && (
-            <motion.div
-              key="loc-notice-drain"
-              initial={{ scaleX: 1 }}
-              animate={{ scaleX: 0 }}
-              transition={{ duration: AUTO_HIDE_MS / 1000, ease: 'linear' }}
-              style={{
-                height: 2,
-                background: t.yellow,
-                transformOrigin: 'left center',
-              }}
-            />
-          )}
         </motion.div>
       )}
     </AnimatePresence>

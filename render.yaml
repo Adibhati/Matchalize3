@@ -69,6 +69,11 @@ services:
       - key: FRONTEND_URL
         sync: false
 
+      # Used only when local-disk uploads are enabled instead of Cloudinary.
+      # The server never derives persisted upload URLs from an incoming Host.
+      - key: API_URL
+        sync: false
+
       # ── MongoDB Atlas SRV string. Password must be urlencoded, and the
       #    literal "<password>" placeholder must be replaced.
       - key: MONGODB_URI

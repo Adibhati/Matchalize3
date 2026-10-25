@@ -272,7 +272,7 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
               className="tactile-result-btn"
               onClick={() => {
                 triggerHaptic('medium');
-                onJumpTo(m._id);
+                onJumpTo(m);
                 onClose();
               }}
               style={{

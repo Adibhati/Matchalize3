@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 
-// 768px is the standard breakpoint where we switch from mobile to desktop layouts
-const DESKTOP_BREAKPOINT = 768; 
+// Keep tablet widths on the touch-first app layout; desktop begins at 1200px.
+const DESKTOP_BREAKPOINT = 1200;
 
 export const useIsDesktop = () => {
   const [isDesktop, setIsDesktop] = useState(

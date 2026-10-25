@@ -13,7 +13,8 @@ import ShadowbanBanner from '../components/ShadowbanBanner';
 import LearnMoreSheet from '../components/LearnMoreSheet';
 import { toast } from '../utils/toast';
 import { PROMPT_ANSWER_MAX, PROMPT_QUESTION_MAX } from '../utils/promptLimits.js';
-import { readScore, bandFor } from '../utils/ladder.js';
+import { readScore, bandFor, readLadder, getScoreOpportunities } from '../utils/ladder.js';
+import { useIsDesktop } from '../utils/useIsDesktop';
 import neu from '../styles/neu';
 
 // Server-side caps mirrored from models/User.js (and FIELD_LIMITS in
@@ -27,7 +28,7 @@ const PROFILE_LIMITS = {
   bio: 160,
 };
 import {
-  Sparkle, X, Pencil, Camera, Plus, CheckCircle2, Calendar,
+  Sparkle, X, Pencil, Camera, Plus, CheckCircle2, Calendar, Info,
 } from 'lucide-react';
 
 /**
@@ -97,6 +98,7 @@ const TOP_GAP = 16;
 const BOTTOM_GAP = 16;
 const PEEK_PAD = 10;
 const PEEK_FALLBACK = 148;
+const HANDLE_PEEK_HEIGHT = 20;
 
 /* How far below the header's bottom edge the sheet must be for the header to
    start ducking. Small lead, so the header is fully clear on arrival. */
@@ -124,22 +126,24 @@ const F = {
    this file no longer uses but other callers of neu still do). */
 const C = {
   ...neu,
-  ink: '#111211',
-  ink2: '#383832',
-  ink3: '#77766F',
-  paper: '#F1EDE2',
-  card: '#F8F5EC',
-  desk: '#111211',
-  yellow: '#E0A15E',
-  coral: '#C96F68',
-  green: '#779477',
-  pink: '#A3A3A1',
-  red: '#A84F4A',
-  hair: 'rgba(17,18,17,.22)',
-  line: 'rgba(241,237,226,.2)',
+  ink: '#171414',
+  ink2: '#393130',
+  ink3: '#6E6160',
+  paper: '#FFF9F4',
+  card: '#FFFCF8',
+  desk: '#FFF9F4',
+  yellow: '#FFE76A',
+  coral: '#FF7399',
+  green: '#B8F0C7',
+  pink: '#C8A7FF',
+  sky: '#8ED8F5',
+  lavender: '#C8B6F2',
+  intent: '#F5B7C8',
+  amber: '#F5B942',
+  red: '#D9485D',
+  hair: 'rgba(23,20,20,.22)',
+  line: 'rgba(23,20,20,.22)',
 };
-
-const TILE = ['coral', 'yellow', 'green', 'pink'];
 
 const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
 
@@ -159,13 +163,21 @@ const PROFILE_CSS = `
     --coral: ${C.coral};
     --green: ${C.green};
     --pink: ${C.pink};
+    --topic-name: ${C.coral};
+    --topic-gender: ${C.green};
+    --topic-meeting: ${C.sky};
+    --topic-year: ${C.lavender};
+    --topic-intent: ${C.intent};
+    --topic-location: ${C.amber};
+    --topic-photo: ${C.ink};
+    --topic-birthday: ${C.yellow};
     --red: ${C.red};
-    --bw: 1px;
-    --r: 8px;
+    --bw: 2px;
+    --r: 16px;
     --ease: cubic-bezier(.2,0,0,1);
 
     position: relative; width: 100%; height: 100%; overflow: hidden;
-    background: #111211;
+    background: #FFF9F4;
     font-family: ${F.body}; color: var(--ink);
     -webkit-font-smoothing: antialiased;
   }
@@ -173,26 +185,286 @@ const PROFILE_CSS = `
 
   .pc-heroWrap { position: absolute; inset: 0; z-index: 0; transform-origin: 50% 30%; will-change: transform, opacity; }
   .pc-hero { width: 100%; height: 100%; object-fit: cover; display: block;
-    opacity: 0; transition: opacity .4s ease-out; -webkit-user-drag: none; }
-  .pc-hero.is-loaded { opacity: 1; }
+    opacity: 1; -webkit-user-drag: none; }
   .pc-shade { position: absolute; inset: 0; pointer-events: none;
-    background: linear-gradient(to top, rgba(17,18,17,.65) 0%, rgba(17,18,17,.08) 44%, rgba(17,18,17,.20) 100%); }
+    background: linear-gradient(to top, rgba(23,20,20,.54) 0%, rgba(23,20,20,.07) 45%, rgba(23,20,20,.13) 100%); }
 
   /* SMOOTHNESS: own compositor layer + paint containment, so the shadow
      and all children never force full-page repaints while dragging */
   .pc-sheet { position: absolute; left: ${SIDE_MARGIN}px; right: ${SIDE_MARGIN}px; top: 0; z-index: 30;
-    background: var(--paper); border: var(--bw) solid var(--ink); border-radius: 15px 15px 4px 4px;
-    box-shadow: 0 14px 32px rgba(0,0,0,.22);
-    transform: translateZ(0); backface-visibility: hidden;
-    contain: layout paint style;
+    background: var(--paper); border: var(--bw) solid var(--ink); border-radius: 24px 24px 14px 14px;
+    box-shadow: 6px 6px 0 var(--ink);
+    backface-visibility: hidden;
     touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
     padding: 12px 18px calc(26px + env(safe-area-inset-bottom));
     display: flex; flex-direction: column; gap: 19px; will-change: transform; }
   .pc-sheet:active { cursor: grabbing; }
   .pc-sheet img { -webkit-user-drag: none; }
 
-  .pc-grabber { width: 42px; height: 4px; border-radius: 0; margin: 0 auto 0; flex-shrink: 0;
-    background: var(--ink-3); transition: none; }
+  @media (min-width: 768px) {
+    .pc-root.pc-desktop {
+      display: grid;
+      grid-template-columns: minmax(0, 43fr) minmax(0, 57fr);
+      gap: 18px;
+      width: min(100%, 920px);
+      max-width: 920px;
+      height: 100%;
+      margin: 0 auto;
+      padding: 16px;
+      box-sizing: border-box;
+      overflow: visible;
+      background: transparent;
+    }
+
+    .pc-root.pc-desktop > .pc-profile-banner {
+      position: absolute !important;
+      inset: 0 0 auto;
+      z-index: 45 !important;
+    }
+
+    .pc-root.pc-desktop .pc-heroWrap {
+      position: relative;
+      inset: auto;
+      grid-column: 1;
+      width: auto;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      border: var(--bw) solid var(--ink);
+      border-radius: 24px;
+      box-shadow: 6px 6px 0 var(--ink);
+    }
+
+    .pc-root.pc-desktop .pc-sheet {
+      position: relative;
+      inset: auto;
+      grid-column: 2;
+      width: auto;
+      height: 100%;
+      min-height: 0;
+      max-height: 100%;
+      overflow-x: hidden;
+      overflow-y: auto;
+      scrollbar-gutter: stable;
+      overscroll-behavior: contain;
+      touch-action: pan-y;
+      cursor: default;
+      border: var(--bw) solid var(--ink);
+      border-radius: 24px;
+      box-shadow: 6px 6px 0 var(--ink);
+      padding: 24px 28px 32px;
+      gap: 22px;
+      user-select: text;
+      -webkit-user-select: text;
+      scrollbar-width: auto;
+      scrollbar-color: auto;
+    }
+
+    .pc-root.pc-desktop .pc-sheet::-webkit-scrollbar {
+      display: block;
+      width: 12px;
+    }
+
+    .pc-root.pc-desktop .pc-sheet::-webkit-scrollbar-track {
+      margin: 24px 4px;
+      background: transparent;
+    }
+
+    .pc-root.pc-desktop .pc-sheet::-webkit-scrollbar-thumb {
+      border: 4px solid var(--paper);
+      border-radius: 999px;
+      background: var(--ink-3);
+      background-clip: padding-box;
+    }
+
+    .pc-root.pc-desktop .pc-sheet:active {
+      cursor: default;
+    }
+
+    .pc-root.pc-desktop .pc-grabber {
+      display: none;
+    }
+
+    .pc-root.pc-desktop .pc-notetext {
+      font-size: 10px;
+      margin-bottom: 0;
+    }
+
+    .pc-root.pc-desktop .pc-name {
+      font-size: clamp(36px, 3vw, 52px);
+      line-height: 1.05;
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+    }
+
+    .pc-root.pc-desktop .pc-meta {
+      font-size: clamp(10px, .85vw, 13px);
+      padding-left: 9px;
+    }
+
+    .pc-root.pc-desktop .pc-sec {
+      gap: 2px;
+    }
+
+    .pc-root.pc-desktop .pc-shead {
+      gap: 11px;
+      margin-bottom: 14px;
+      padding-bottom: 10px;
+    }
+
+    .pc-root.pc-desktop .pc-mark {
+      width: 12px;
+      height: 12px;
+    }
+
+    .pc-root.pc-desktop .pc-stitle {
+      font-size: clamp(11px, .9vw, 14px);
+    }
+
+    .pc-root.pc-desktop .pc-scount {
+      font-size: clamp(10px, .8vw, 12px);
+    }
+
+    .pc-root.pc-desktop .pc-card {
+      border-radius: 18px;
+      box-shadow: 5px 5px 0 var(--ink);
+    }
+
+    .pc-root.pc-desktop .pc-card.padded {
+      padding: 18px;
+    }
+
+    .pc-root.pc-desktop .pc-grid {
+      gap: 18px 16px;
+    }
+
+    .pc-root.pc-desktop .pc-cell {
+      gap: 11px;
+    }
+
+    .pc-root.pc-desktop .pc-tile {
+      width: 38px;
+      height: 38px;
+      border-radius: 11px;
+    }
+
+    .pc-root.pc-desktop .pc-tile svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .pc-root.pc-desktop .pc-clabel {
+      font-size: clamp(9px, .72vw, 11px);
+    }
+
+    .pc-root.pc-desktop .pc-cval {
+      font-size: clamp(15px, 1.15vw, 18px);
+    }
+
+    .pc-root.pc-desktop .pc-num {
+      font-size: clamp(58px, 5vw, 72px);
+    }
+
+    .pc-root.pc-desktop .pc-bio {
+      padding-right: 0;
+      font-size: clamp(16px, 1.25vw, 19px);
+      line-height: 1.65;
+    }
+
+    .pc-root.pc-desktop .pc-pills {
+      gap: 11px;
+      padding-right: 0;
+    }
+
+    .pc-root.pc-desktop .pc-chip {
+      padding: 9px 13px;
+      border-radius: 12px;
+      font-size: clamp(10px, .78vw, 12px);
+    }
+
+    .pc-root.pc-desktop .pc-prompt {
+      padding: 19px;
+      border-radius: 18px;
+    }
+
+    .pc-root.pc-desktop .pc-promptq {
+      font-size: clamp(11px, .82vw, 13px);
+    }
+
+    .pc-root.pc-desktop .pc-prompta {
+      font-size: clamp(18px, 1.3vw, 21px);
+    }
+
+    .pc-root.pc-desktop .pc-ph {
+      padding: 7px;
+      border-radius: 17px;
+    }
+
+    .pc-root.pc-desktop .pc-ph-in {
+      border-radius: 12px;
+    }
+
+    .pc-root.pc-desktop .pr-slotbtn:not(.inline) {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      transform: none;
+      box-shadow: 3px 3px 0 var(--ink);
+    }
+
+    .pc-root.pc-desktop .pr-slotbtn.inline {
+      width: 38px;
+      height: 38px;
+      transform: none;
+      border-radius: 10px;
+    }
+
+    .pc-root.pc-desktop .pr-herobtn {
+      top: 20px;
+      right: 20px;
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      transform: none;
+      box-shadow: 3px 3px 0 var(--ink);
+    }
+
+    .pc-root.pc-desktop .pr-herobtn svg,
+    .pc-root.pc-desktop .pr-slotbtn svg {
+      width: 18px;
+      height: 18px;
+    }
+  }
+
+  @media (min-width: 768px) and (max-width: 1100px) {
+    .pc-root.pc-desktop {
+      grid-template-columns: minmax(0, 40fr) minmax(0, 60fr);
+      gap: 12px;
+      padding: 12px;
+    }
+
+    .pc-root.pc-desktop .pc-sheet {
+      padding: 24px 18px 30px;
+      gap: 22px;
+    }
+
+    .pc-root.pc-desktop .pc-name {
+      font-size: 36px;
+    }
+
+    .pc-root.pc-desktop .pc-card.padded {
+      padding: 15px;
+    }
+
+    .pc-root.pc-desktop .pc-grid {
+      gap: 14px 10px;
+    }
+  }
+
+  .pc-grabber { width: 42px; height: 5px; border-radius: 999px; margin: 0 auto; flex-shrink: 0;
+    background: var(--ink); transition: none; }
   .pc-sheet:active .pc-grabber { background: var(--coral); }
 
   .pc-notetext { display: block; text-align: center; margin-bottom: 4px;
@@ -203,32 +475,41 @@ const PROFILE_CSS = `
   .pc-idrow { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
   .pc-name { font-family: ${F.heavy}; font-size: 39px; font-weight: 800; letter-spacing: -.025em;
     line-height: .92; color: var(--ink); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    background-image: linear-gradient(180deg, transparent 77%, rgba(224,161,94,.78) 77%);
     padding: 0 6px 5px 0; }
   .pc-age { font-family: ${F.body}; font-weight: 600; font-size: .65em;
-    letter-spacing: 0; color: var(--ink-2); }
-  /* The deck carries college/distance here; this sheet has neither (the campus
-     is privacy-gated and distance is meaningless for your own card), so the year
-     takes the same mono line. */
+    letter-spacing: 0; color: var(--topic-birthday); }
   .pc-meta { font-family: ${F.mono}; font-size: 9px; font-weight: 700; letter-spacing: .075em;
-    text-transform: uppercase; color: var(--ink-2); font-variant-numeric: tabular-nums;
-    margin: 10px 0 0; display: flex; align-items: center; flex-wrap: wrap; row-gap: 4px; }
+    text-transform: uppercase; color: var(--ink-2); margin: 10px 0 0;
+    border-left: 3px solid var(--topic-location); padding-left: 7px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.6; }
 
   .pc-sec { display: flex; flex-direction: column; flex-shrink: 0; position: relative; }
   .pc-shead { display: flex; align-items: center; gap: 9px; margin: 0 0 12px;
-    padding-bottom: 8px; border-bottom: 1px solid var(--hair); }
-  .pc-mark { width: 9px; height: 9px; flex-shrink: 0; border: 1px solid var(--ink); border-radius: 0; }
+    padding-bottom: 8px; border-bottom: 1.5px solid var(--ink); }
+  .pc-mark { width: 10px; height: 10px; flex-shrink: 0; border: 2px solid var(--ink); border-radius: 3px; }
   .pc-mark.yellow { background: var(--yellow); }
   .pc-mark.coral { background: var(--coral); }
   .pc-mark.green { background: var(--green); }
   .pc-mark.pink { background: var(--pink); }
+  .pc-mark.sky { background: var(--topic-meeting); }
+  .pc-mark.lavender { background: var(--topic-year); }
+  .pc-mark.intent { background: var(--topic-intent); }
+  .pc-mark.amber { background: var(--topic-location); }
+  .pc-mark.ink { background: var(--topic-photo); }
+  .pc-mark.neutral { background: var(--ink-3); }
+  .pc-mark.sky { background: var(--topic-meeting); }
+  .pc-mark.lavender { background: var(--topic-year); }
+  .pc-mark.intent { background: var(--topic-intent); }
+  .pc-mark.amber { background: var(--topic-location); }
+  .pc-mark.ink { background: var(--topic-photo); }
+  .pc-mark.neutral { background: var(--ink-3); }
   .pc-stitle { font-family: ${F.mono}; font-size: 10px; font-weight: 700; letter-spacing: .14em;
     text-transform: uppercase; color: var(--ink); }
   .pc-scount { margin-left: auto; font-family: ${F.mono}; font-size: 9px; font-weight: 400; color: var(--ink-3);
     font-variant-numeric: tabular-nums; }
 
-  .pc-card { background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px;
-    box-shadow: none; position: relative; }
+  .pc-card { background: var(--card); border: var(--bw) solid var(--ink); border-radius: 16px;
+    box-shadow: 4px 4px 0 var(--ink); position: relative; }
   .pc-card.padded { padding: 15px; }
 
   /* '.pc-compat' was the compatibility score block's positioning hook.
@@ -247,18 +528,20 @@ const PROFILE_CSS = `
   .pc-statust { font-family: ${F.mono}; font-size: 10px; font-weight: 700; letter-spacing: .12em;
     text-transform: uppercase; color: var(--ink-2); text-align: right; line-height: 1.7; }
   .pc-star { color: var(--coral); font-size: 12px; }
-  .pc-bar { height: 12px; border: var(--bw) solid var(--ink); border-radius: 3px; background: var(--paper);
+  .pc-bar { height: 12px; border: var(--bw) solid var(--ink); border-radius: 8px; background: var(--paper);
     overflow: hidden; margin-top: 14px; }
   .pc-barfill { width: 100%; height: 100%; background: var(--yellow); transform-origin: left center; }
 
   .pc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px 12px; }
   .pc-cell { display: flex; align-items: center; gap: 9px; min-width: 0; }
-  .pc-tile { width: 31px; height: 31px; flex-shrink: 0; border: var(--bw) solid var(--ink); border-radius: 3px;
-    display: flex; align-items: center; justify-content: center; color: var(--ink); }
+  .pc-tile { width: 31px; height: 31px; flex-shrink: 0; border: var(--bw) solid var(--ink); border-radius: 9px;
+    box-shadow: 2px 2px 0 var(--ink); display: flex; align-items: center; justify-content: center; color: var(--ink); }
   .pc-tile.yellow { background: var(--yellow); }
   .pc-tile.coral { background: var(--coral); }
   .pc-tile.green { background: var(--green); }
   .pc-tile.pink { background: var(--pink); }
+  .pc-tile.lavender { background: var(--topic-year); }
+  .pc-tile.sky { background: var(--topic-meeting); }
   .pc-cellinfo { min-width: 0; }
   .pc-clabel { font-family: ${F.mono}; font-size: 8px; font-weight: 700; letter-spacing: .12em;
     text-transform: uppercase; color: var(--ink-3); }
@@ -272,11 +555,14 @@ const PROFILE_CSS = `
     margin: 0; word-break: break-word; text-wrap: pretty; padding-right: 38px; }
 
   .pc-pills { display: flex; flex-wrap: wrap; gap: 8px; padding-right: 38px; }
-  .pc-chip { display: inline-block; padding: 7px 11px; border: var(--bw) solid var(--ink); border-radius: 999px;
+  .pc-chip { display: inline-block; padding: 7px 11px; border: var(--bw) solid var(--ink); border-radius: 10px;
     font-family: ${F.mono}; font-size: 9px; font-weight: 700; letter-spacing: .075em; text-transform: uppercase;
-    background: var(--card); color: var(--ink); transition: background .12s ease, color .12s ease; }
-  .pc-chip.acc { background: var(--yellow); }
-  .pc-chip:active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+    background: var(--card); color: var(--ink); box-shadow: 3px 3px 0 var(--ink);
+    transition: background .12s ease, color .12s ease, box-shadow .12s ease, transform .12s ease; }
+  .pc-chip.acc { background: var(--topic-intent); }
+  .pc-chip.meeting { background: var(--topic-meeting); }
+  .pc-chip:active { filter: brightness(.94); color: var(--ink); border-color: var(--ink);
+    box-shadow: 1px 1px 0 var(--ink); transform: translate(2px, 2px); }
 
   /* prompt card: question is the SETUP, answer is the PAYOFF — so the answer
      carries the type weight. */
@@ -288,13 +574,13 @@ const PROFILE_CSS = `
     margin: 0; word-break: break-word; overflow-wrap: anywhere; text-wrap: pretty;
     padding-right: 38px; transition: none; }
   .pc-prompt:active .pc-prompta { color: var(--paper); }
-  .pc-prompt:active .pc-promptq { color: rgba(241,237,226,.6); }
+  .pc-prompt:active .pc-promptq { color: rgba(255,249,244,.72); }
 
-  .pc-ph { background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px;
-    box-shadow: none; padding: 5px; position: relative;
+  .pc-ph { background: var(--card); border: var(--bw) solid var(--ink); border-radius: 15px;
+    box-shadow: 4px 4px 0 var(--ink); padding: 5px; position: relative;
     transition: border-color .12s ease; }
   .pc-ph:active { border-color: var(--coral); }
-  .pc-ph-in { border-radius: 2px; overflow: hidden; aspect-ratio: 1 / 1; background: var(--hair); }
+  .pc-ph-in { border-radius: 10px; overflow: hidden; aspect-ratio: 1 / 1; background: var(--hair); }
   .pc-ph-in.wide { aspect-ratio: 16 / 10; }
   .pc-ph-in img { width: 100%; height: 100%; object-fit: cover; display: block;
     opacity: 0; transition: opacity .3s ease-out; -webkit-user-drag: none; }
@@ -305,6 +591,7 @@ const PROFILE_CSS = `
     display: flex; align-items: center; justify-content: center; cursor: pointer;
     width: 30px; height: 30px; background: var(--yellow); border: var(--bw) solid var(--ink);
     border-radius: 4px; color: var(--ink);
+    transform: scale(.6);
     transition: background .12s ease, color .12s ease;
     -webkit-tap-highlight-color: transparent; }
   .pr-slotbtn:active { background: var(--ink); color: var(--paper); }
@@ -315,15 +602,144 @@ const PROFILE_CSS = `
      stays on cards and photos, where it has a surface to sit on and a single
      job to advertise. */
   .pr-slotbtn.inline { position: static; width: 28px; height: 28px; flex-shrink: 0;
-    background: transparent; border-radius: 4px; }
+    background: transparent; border-radius: 4px; transform: scale(.6); }
+  .pc-info-btn {
+    width: 30px;
+    height: 30px;
+    margin-left: auto;
+    background: var(--yellow);
+    border: var(--bw) solid var(--ink);
+    border-radius: 9px;
+    box-shadow: 2px 2px 0 var(--ink);
+    transform: none;
+  }
   .pr-slotbtn.inline:hover { background: var(--yellow); }
   .pr-slotbtn.inline:active { background: var(--ink); color: var(--paper); }
+  .pc-info-btn:hover { background: var(--card); }
+  .pc-info-btn:active { background: var(--ink); color: var(--paper); box-shadow: none; transform: translate(2px, 2px); }
+
+  .pr-strength-dialog {
+    width: min(100%, 440px);
+    max-height: min(80dvh, 680px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    color: var(--ink);
+    background: var(--paper);
+    border: var(--bw) solid var(--ink);
+    border-radius: 16px;
+    box-shadow: 4px 4px 0 var(--ink);
+  }
+
+  .pr-strength-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex: 0 0 auto;
+    padding: 18px;
+    border-bottom: 1.5px solid var(--ink);
+  }
+
+  .pr-strength-title {
+    margin: 0;
+    font-family: ${F.heavy};
+    font-size: 25px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -.02em;
+    text-transform: uppercase;
+  }
+
+  .pr-strength-total {
+    margin: 8px 0 0;
+    font-family: ${F.mono};
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .04em;
+  }
+
+  .pr-strength-close {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink);
+    background: var(--card);
+    border: var(--bw) solid var(--ink);
+    border-radius: 9px;
+    box-shadow: 2px 2px 0 var(--ink);
+    cursor: pointer;
+  }
+
+  .pr-strength-content {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 16px 18px;
+  }
+
+  .pr-strength-intro {
+    margin: 0 0 16px;
+    font-family: ${F.body};
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  .pr-strength-options {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .pr-strength-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    min-height: 48px;
+    padding: 10px 12px;
+    text-align: left;
+    color: var(--ink);
+    background: var(--card);
+    border: var(--bw) solid var(--ink);
+    border-radius: 10px;
+    box-shadow: 3px 3px 0 var(--ink);
+    cursor: pointer;
+    font-family: ${F.body};
+    font-size: 13px;
+    font-weight: 600;
+    transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+  }
+
+  .pr-strength-option:hover { background: var(--yellow); }
+  .pr-strength-option:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
+  .pr-strength-points {
+    flex-shrink: 0;
+    font-family: ${F.mono};
+    font-weight: 700;
+    color: var(--ink-2);
+  }
+
+  .pr-strength-note {
+    margin: 0;
+    padding: 12px 18px 16px;
+    border-top: 1px solid var(--hair);
+    flex: 0 0 auto;
+    font-family: ${F.body};
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--ink-2);
+  }
 
   /* hero variant — same tile, anchored to the hero's top-right */
   .pr-herobtn { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 68px); right: 20px; z-index: 5;
     display: flex; align-items: center; justify-content: center; cursor: pointer;
     width: 30px; height: 30px; background: var(--yellow); border: var(--bw) solid var(--ink);
-    border-radius: 4px; color: var(--ink);
+    border-radius: 4px; color: var(--ink); transform: scale(.6);
     transition: background .12s ease, color .12s ease;
     -webkit-tap-highlight-color: transparent; }
   .pr-herobtn:active { background: var(--ink); color: var(--paper); }
@@ -404,16 +820,16 @@ const PROFILE_CSS = `
     animation: prSweep 1.05s cubic-bezier(.5,0,.5,1) infinite; }
 
   .pr-input, .pr-select, .pr-textarea { width: 100%; box-sizing: border-box;
-    padding: 13px 14px; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 5px;
+    padding: 13px 14px; background: var(--card); border: var(--bw) solid var(--ink); border-radius: 10px;
     font-family: ${F.body}; font-size: 14px; font-weight: 500; color: var(--ink); outline: none; }
   .pr-textarea { resize: none; line-height: 1.55; }
   .pr-input:focus, .pr-select:focus, .pr-textarea:focus { border-color: var(--coral); }
 
-  .pr-chipbtn { padding: 9px 15px; border: var(--bw) solid var(--ink); border-radius: 999px;
+  .pr-chipbtn { padding: 9px 15px; border: var(--bw) solid var(--ink); border-radius: 10px;
     font-family: ${F.mono}; font-size: 11px; font-weight: 700; letter-spacing: .08em;
     text-transform: uppercase; background: var(--card); color: var(--ink); cursor: pointer;
     transition: background .12s ease, color .12s ease; -webkit-tap-highlight-color: transparent; }
-  .pr-chipbtn.on { background: var(--coral); color: #fff; }
+  .pr-chipbtn.on { background: var(--topic-intent); color: var(--ink); box-shadow: 2px 2px 0 var(--ink); }
   .pr-chipbtn:disabled { opacity: .35; cursor: not-allowed; }
   .pr-chipbtn:active:not(:disabled) { background: var(--ink); color: var(--paper); }
 
@@ -445,10 +861,91 @@ const PROFILE_CSS = `
     letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); }
 
   /* ── drawer commit bar: sticky, always reachable above the keyboard ── */
-  .pr-drawerfoot { display: flex; gap: 10px; padding: 14px 20px;
-    padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  .pr-drawerfoot { display: flex; gap: 12px; padding: 12px 18px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
     border-top: var(--bw) solid var(--ink); background: var(--paper); flex-shrink: 0; }
   .pr-drawerfoot .pr-slam { flex: 1; }
+
+  .pr-editor {
+    position: fixed;
+    z-index: 1101;
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    width: auto;
+    max-height: calc(100dvh - env(safe-area-inset-top, 0px) - 24px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--paper);
+    border: var(--bw) solid var(--ink);
+    border-radius: 24px 24px 14px 14px;
+    box-shadow: 6px 6px 0 var(--ink);
+  }
+
+  .pr-editor-grabber {
+    width: 42px;
+    height: 5px;
+    flex: 0 0 5px;
+    margin: 12px auto 0;
+    border-radius: 999px;
+    background: var(--ink);
+  }
+
+  .pr-editor-head {
+    min-height: 56px;
+    padding: 8px 18px 12px;
+    border-bottom: 1.5px solid var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    box-sizing: border-box;
+  }
+
+  .pr-editor-title {
+    font-family: ${F.heavy};
+    font-size: 20px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -.02em;
+    color: var(--ink);
+    text-transform: uppercase;
+  }
+
+  .pr-editor-close {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--card);
+    border: var(--bw) solid var(--ink);
+    border-radius: 10px;
+    box-shadow: 2px 2px 0 var(--ink);
+    cursor: pointer;
+    color: var(--ink);
+  }
+
+  .pr-editor-body {
+    min-height: 0;
+    max-height: 55dvh;
+    flex: 0 1 auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    box-sizing: border-box;
+  }
+
+  .pr-drawerfoot .pr-slam {
+    min-height: 46px;
+    border-radius: 10px;
+    box-shadow: 3px 3px 0 var(--ink);
+  }
 
   /* ── header duck: literal easing, no var() dependency ── */
   [data-deck-header] { transition: transform .3s cubic-bezier(.2,0,0,1), opacity .3s ease;
@@ -459,13 +956,13 @@ const PROFILE_CSS = `
   @media (hover: hover) and (pointer: fine) {
     .pr-slotbtn:hover, .pr-herobtn:hover { background: var(--yellow); color: var(--ink); }
     .pc-prompt:hover { background: #E9E4D8; }
-    .pc-chip:hover { background: rgba(224,161,94,.2); }
-    .pc-chip.acc:hover { background: var(--yellow); }
+    .pc-chip:hover { filter: brightness(.96); }
     .pc-ph:hover { border-color: var(--coral); }
   }
 
   .pc-sheet:focus-visible, .pr-slotbtn:focus-visible, .pr-herobtn:focus-visible,
-  .pc-prompt:focus-visible { outline: 2px solid var(--coral); outline-offset: 3px; }
+  .pc-prompt:focus-visible, .pr-strength-close:focus-visible,
+  .pr-strength-option:focus-visible { outline: 2px solid var(--coral); outline-offset: 3px; }
 
   @media (max-width: 390px) {
     .pc-sheet { padding-left: 14px; padding-right: 14px; gap: 17px; }
@@ -507,7 +1004,7 @@ const FieldCell = ({ icon: Icon, color, label, value }) => (
    gives its kebab) rather than floating over the row as an absolute corner
    tile, which would sit on top of the right-aligned count. Sections whose body
    is a real .pc-card keep the absolute corner tile instead. */
-const SectionHead = ({ mark = 'yellow', count, onEdit, editLabel, children }) => (
+const SectionHead = ({ mark = 'yellow', count, onEdit, editLabel, onInfo, infoLabel, children }) => (
   <div className="pc-shead">
     <span className={`pc-mark ${mark}`} aria-hidden="true" />
     <span className="pc-stitle">{children}</span>
@@ -515,6 +1012,11 @@ const SectionHead = ({ mark = 'yellow', count, onEdit, editLabel, children }) =>
     {onEdit && (
       <button className="pr-slotbtn inline" aria-label={editLabel} title={editLabel} onClick={onEdit}>
         <Pencil size={12} strokeWidth={2.8} />
+      </button>
+    )}
+    {onInfo && (
+      <button className="pr-slotbtn inline pc-info-btn" aria-label={infoLabel} title={infoLabel} onClick={onInfo}>
+        <Info size={14} strokeWidth={2.5} />
       </button>
     )}
   </div>
@@ -642,6 +1144,7 @@ const MAX_INTERESTS = 10;
 
 const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocused }) => {  const config = useAppConfig();
   const queryClient = useQueryClient();
+  const isWideDesktop = useIsDesktop();
   const rootRef = useRef(null);
   const sheetRef = useRef(null);
   const idRef = useRef(null);
@@ -651,7 +1154,8 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
   const [userData, setUserData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(null);
-  const [heroLoaded, setHeroLoaded] = useState(false);
+  const isWideDesktopRef = useRef(isWideDesktop);
+  isWideDesktopRef.current = isWideDesktop;
 
   const [drawerConfig, setDrawerConfig] = useState(null); // { type, slot }
   // Pending edits for the open drawer, seeded from userData on open and written
@@ -694,6 +1198,16 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
 
   const { user: authUser, refreshUser } = useAuth();
   const [showLearnMore, setShowLearnMore] = useState(false);
+  const [scoreInfoOpen, setScoreInfoOpen] = useState(false);
+
+  useEffect(() => {
+    if (!scoreInfoOpen) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setScoreInfoOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [scoreInfoOpen]);
 
   // Always-fresh mirror of userData. Async handlers (photo upload, prompt
   // commit) read this instead of the render closure, so two edits in quick
@@ -716,8 +1230,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
     onClick: () => { window.location.href = 'mailto:support@matchalize.com'; },
   };
 
-  const contentFrozen = userData?.contentFrozen ?? authUser?.contentFrozen ?? false;
-  const shadowbanScore = userData?.shadowbanScore ?? authUser?.shadowbanScore ?? 0;
+  const contentFrozen = userData?.isUnderReview ?? authUser?.isUnderReview ?? false;
 
   /* True when the draft differs from what's on the server. Drives both the Save
      button's enabled state and the discard-on-close guard.
@@ -770,6 +1283,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
 
   const openEditDrawer = (cfg) => {
     if (contentFrozen) { toast.error(contentFreezeMessage, contentFreezeAction); return; }
+    hideHeaderForProfileOverlay();
     setDraft(seedDraft(cfg));
     setDrawerConfig(cfg);
   };
@@ -791,6 +1305,15 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
     setHeroTray(false);
     setPhotoSlot(slot);
     fileInputRef.current?.click();
+  };
+
+  const openScoreOpportunity = (action) => {
+    setScoreInfoOpen(false);
+    if (action.type === 'photo') openPhotoSlot(action.slot);
+    else if (action.type === 'prompt') openEditDrawer({ type: 'prompt', slot: action.slot });
+    else if (action.type === 'bio' || action.type === 'interests') {
+      openEditDrawer({ type: action.type });
+    }
   };
 
   const cancelUpload = () => {
@@ -837,29 +1360,21 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
      runs, a pre-existing user has no score and reads 0 — correct, because an
      unbackfilled document genuinely has nothing computed for it yet. */
   const targetScore = readScore(userData);
+  const scoreOpportunities = getScoreOpportunities(userData, config);
 
   /* ── geometry ── */
   const [rootH, setRootH] = useState(0);
   const [sheetH, setSheetH] = useState(0);
 
-  /* True only once the actual card tree is on screen.
-     The measure effects need a dep that flips when the sheet first EXISTS,
-     because while the fetch is in flight the component renders the
-     "Loading your card…" screen, so sheetRef is null and the effect bails out
-     with no observer attached. It must NOT key on `userData` itself: that object
-     gets a new identity on every optimistic save and every PUT response, so
-     keying on it tore down the ResizeObserver mid-entrance and reopened the
-     re-clamp window — which is what made the slide-up land differently
-     depending on whether you refreshed or switched tabs. */
+  /* True only once the actual card tree is on screen. The measure effects need
+     a dep that flips when the sheet first EXISTS, because while the fetch is in
+     flight the component renders the loading screen and sheetRef is null. It
+     must NOT key on userData itself because optimistic saves replace its object
+     identity and would unnecessarily restart the ResizeObserver. */
   const cardMounted = !loading && Boolean(userData) && !fetchError;
   const rootHRef = useRef(0);
   const sheetHRef = useRef(0);
-  const entranceTimer = useRef(null);
-  const entranceUntil = useRef(0);        // timestamp: re-clamp stays off until here
-  /* Set-once marker for the sheet entrance, mirroring the deck card.
-     Identity of the profile the entrance has already played for; nulled on
-     teardown so a remount replays it. */
-  const entranceDoneFor = useRef(null);
+  const initialSheetPositioned = useRef(false);
   /* Set once the strength-bar placement has happened for a given profile. */
   const focusPlacedFor = useRef(null);
   /* Mirrors `focusStrength` for the measure pass to read. A ref, not the prop
@@ -872,17 +1387,21 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
   const peekHRef = useRef(0);
 
   const computeBounds = (h, w) => {
-    if (!h || !w) return { lo: 0, hi: 0, ready: false, short: true };
+    if (!h || !w) return { lo: 0, hi: 0, collapsedHi: 0, ready: false, short: true };
+    if (isWideDesktopRef.current) {
+      return { lo: 0, hi: 0, collapsedHi: 0, ready: true, short: true };
+    }
     const lo = Math.min(TOP_GAP, h - BOTTOM_GAP - w);
     const peek = peekHRef.current || PEEK_FALLBACK;
     const short = w <= h - BOTTOM_GAP - TOP_GAP;
     const hi = Math.max(lo, h - BOTTOM_GAP - (short ? w : peek));
-    return { lo, hi, ready: true, short };
+    const collapsedHi = Math.max(hi, h - BOTTOM_GAP - HANDLE_PEEK_HEIGHT);
+    return { lo, hi, collapsedHi, ready: true, short };
   };
 
   /* SMOOTHNESS FIX: bounds now computed in an effect (not on every render),
      and memoized so the drag handlers read stable values */
-  const boundsRef = useRef({ lo: 0, hi: 0, ready: false });
+  const boundsRef = useRef({ lo: 0, hi: 0, collapsedHi: 0, ready: false });
   /* The "Profile strength" section, for the focus-on-arrival glide. */
   const strengthRef = useRef(null);
 
@@ -903,23 +1422,6 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
     const p = clamp((hi - y) / (hi - lo), 0, 1);
     return 1 - 0.4 * p;
   });
-
-  /* ── entrance ──
-     Opacity + scale only. This used to animate `filter: blur(12px) → 0` on the
-     hero wrapper, which re-rasterises a full-bleed photo every frame and — worse —
-     because `filter` creates a containing block, the wrapper's own edit pencil was
-     blurred along with the image for the whole 500ms. `will-change: transform,
-     filter` also promoted the layer permanently. Both now compositor-only. */
-  const entranceOpacity = useMotionValue(0);
-  const entranceScale = useTransform(entranceOpacity, [0, 1], [0.92, 1]);
-  const combinedPhotoOpacity = useTransform(
-    [entranceOpacity, photoOpacity],
-    ([entrance, drag]) => entrance * drag
-  );
-  const combinedPhotoScale = useTransform(
-    [entranceScale, photoScale],
-    ([entrance, drag]) => entrance * drag
-  );
 
   /* ── glide helpers ── */
   const reduceMotion = useReducedMotion();
@@ -980,10 +1482,9 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
      updates on reload actively works against the thing it is measuring.
 
      The original reason for keying on the id was that this effect used to
-     contain `entranceOpacity.set(0)`, so any re-run reset the photo and made
-     it fade out and back in on every keystroke. Entrance now lives in its own
-     effect below keyed on reduceMotion alone, so re-running THIS one only
-     re-animates the number — the photo is untouched.
+     contain photo entrance behavior, so any re-run reset the photo and made
+     it fade out and back in on every keystroke. Photo entrance behavior has
+     been removed, so re-running THIS one only re-animates the number.
 
      No `scoreMV.set(0)` either: the motion value starts at 0, so mount still
      counts up from zero, and later changes animate from the current value
@@ -992,7 +1493,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
   useEffect(() => {
     if (!userData) return undefined;
     // The 250ms hold is only for the first count-up, so it lands after the
-    // card entrance. Applying it to every update would make the bar feel like
+    // initial render. Applying it to every update would make the bar feel like
     // it was lagging a quarter-second behind each edit.
     const isFirst = firstScoreRun.current;
     firstScoreRun.current = false;
@@ -1001,49 +1502,6 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
       : { duration: 1.2, delay: isFirst ? 0.25 : 0, ease: [0.22, 1, 0.36, 1] });
     return () => c.stop();
   }, [targetScore, reduceMotion, userData?._id]);
-
-  /* ── entrance animation: photo fade-in + slight scale-up ──
-     Keyed on reduceMotion ALONE, so it plays exactly once per mount and is never
-     replayed by a data update. The deck card keys this the same way. */
-  useEffect(() => {
-    if (reduceMotion) {
-      entranceOpacity.set(1);
-      return undefined;
-    }
-    const controls = animate(entranceOpacity, 1, { duration: 0.5, ease: 'easeOut' });
-    return () => controls.stop();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reduceMotion]);
-
-  /* An image restored from cache can be `complete` before React attaches onLoad,
-     in which case onLoad never fires and the hero sits at opacity 0 — a blank
-     photo strip. That is a "sometimes the card doesn't come in" case, and it is
-     exactly the refresh-vs-tab-switch difference. The deck guards it the same way. */
-  const heroSrc = userData?.photos?.[0];
-  useEffect(() => {
-    if (heroImgRef.current?.complete) setHeroLoaded(true);
-  }, [heroSrc]);
-
-  /* ── SHEET ENTRANCE ──
-     The sheet starts a full screen-height below the fold, then glides up 300ms
-     later — identical to the deck card.
-
-     Deliberately a useLayoutEffect, not useEffect: the sheet becomes visible as
-     soon as it is measured, and yMV still sits at 0 until an effect parks it. A
-     passive effect runs AFTER paint, so the sheet briefly painted at y=0 —
-     covering the photo, which is what made it look like it arrived before the
-     photo. A layout effect runs before paint, so it is parked and never flashes.
-
-     Deliberately NOT driven from measure(): ResizeObserver timing varies on a
-     real device, so the entrance could start before the geometry settled and
-     then be cancelled by the next observer tick. Keyed on the profile and gated
-     on real measurements, it fires exactly once per card. The timer is stored
-     and cleared, so switching profiles mid-entrance cannot leave a stale glide
-     pointing at the previous card's rest position. */
-  const cancelEntrance = useCallback(() => {
-    if (entranceTimer.current) { clearTimeout(entranceTimer.current); entranceTimer.current = null; }
-    entranceUntil.current = 0;
-  }, []);
 
   /* ── measure root + sheet ── */
   useLayoutEffect(() => {
@@ -1070,14 +1528,6 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
       const bounds = computeBounds(h, w);
       boundsRef.current = bounds;                 // ← computed HERE, once per measure
 
-      /* ── ENTRANCE, here in the measure pass ──
-         Identical to the deck card. The sheet is positioned by the SAME layout
-         effect that measures it, so the park can neither be missed nor reordered
-         against the measurement. Driven from a separate effect it raced this
-         one and the sheet painted at y=0 — covering the whole photo — for ~300ms
-         before the park landed, which read as the sheet arriving before the
-         photo. Gated on a set-once ref rather than a dep array so it plays
-         exactly once per mount, on every mount, instead of once per dep change. */
       const id = userDataRef.current?._id ?? null;
       const focusing = focusStrengthRef.current && focusPlacedFor.current !== id;
 
@@ -1091,57 +1541,20 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
         return clamp(b.hi - el.offsetTop, b.lo, b.hi);
       };
 
-      /* ── ENTRANCE, here in the measure pass ──
-         Identical to the deck card. The sheet is positioned by the SAME layout
-         effect that measures it, so the park can neither be missed nor reordered
-         against the measurement. Driven from a separate effect it raced this
-         one and the sheet painted at y=0 — covering the whole photo — for ~300ms
-         before the park landed, which read as the sheet arriving before the
-         photo. Gated on a set-once ref rather than a dep array so it plays
-         exactly once per mount, on every mount, instead of once per dep change.
-
-         The entrance still PLAYS when we've been asked to show Profile strength —
-         only its destination changes, from the rest/peek position to the bar.
-         Skipping it entirely left the sheet at y=0, so it slid DOWN into place,
-         which reads as the sheet being pushed down rather than rising to reveal
-         the section. The reveal is the point, so we keep the motion and retarget
-         it. */
-      if (entranceDoneFor.current !== id) {
-        entranceDoneFor.current = id;
-        cancelEntrance();
-        entranceUntil.current = performance.now() + 900;   // self-expiring guard
-        yMV.set(h);                                        // park below the fold
-        entranceTimer.current = setTimeout(() => {
-          entranceTimer.current = null;
-          /* Re-read geometry at glide time: fonts/images may have settled since,
-             and a stale peek lands the sheet at the wrong rest position. */
-          const hh = rootHRef.current, ww = sheetHRef.current;
-          const b = (hh && ww) ? computeBounds(hh, ww) : bounds;
-          /* If we're focusing but the bar hasn't been measured yet, fall back to
-             the rest position WITHOUT marking it placed — the focus block below
-             then lands on the bar as soon as it exists, instead of the flag
-             claiming success on a peek position. */
-          const dest = focusing ? focusDest(b) : b.hi;
-          entranceUntil.current = 0;
-          glideTo(dest ?? b.hi, 'glide');
-          if (focusing && dest != null) {
-            focusPlacedFor.current = id;
-            onStrengthFocused?.();
-          }
-        }, 300);
-        return;
+      if (!initialSheetPositioned.current) {
+        yMV.set(bounds.hi);
+        initialSheetPositioned.current = true;
       }
 
       /* ── FOCUS: land on Profile strength ──
-         Placed HERE, in the measure pass, rather than from a separate effect.
-         The effect version raced this one: it fired on the first frame when
-         `boundsRef` was still `{ready:false}`, did nothing, and had no second
-         chance — so the sheet sat at the entrance's rest position and the scroll
-         either never happened or got overwritten. Here, bounds are computed two
-         lines above and are guaranteed current.
+             Placed HERE, in the measure pass, rather than from a separate effect.
+             The effect version raced this one: it fired on the first frame when
+             `boundsRef` was still `{ready:false}`, did nothing, and had no second
+             chance — so the sheet stayed at its default position. Here, bounds are
+             computed above and are guaranteed current.
 
-         Set-once, same as the entrance: a later resize re-measures, and without
-         this guard every photo upload would yank the sheet back to the score
+             Set-once: a later resize re-measures, and without
+             this guard every photo upload would yank the sheet back to the score
          after the user had scrolled away from it. */
       if (focusing) {
         const dest = focusDest(bounds);
@@ -1155,28 +1568,23 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
         // measure(), and this is where the placement finally lands.
       }
 
-      /* Stay out of the way while the entrance glide is in flight. A TIMESTAMP
-         rather than a boolean, so a dropped timer can never wedge the re-clamp
-         off permanently. */
-      if (performance.now() < entranceUntil.current) return;
       /* Only intervene when genuinely out of bounds, and never mid-glide. A
          blanket yMV.set() here snapped the sheet the instant content resized —
          which is what a save, a photo upload or a font settling all do — and it
          did so with no epsilon test, so sub-pixel drift fought the glide and
          killed the slide. */
       const cur = yMV.get();
-      const target = clamp(cur, bounds.lo, bounds.hi);
+      const target = clamp(cur, bounds.lo, bounds.collapsedHi);
       if (Math.abs(target - cur) > 0.5) { stopGlide(); yMV.set(target); }
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
-    /* Cancel the entrance wholesale and forget that it ran, so a remount
-       (StrictMode's double-invoke, or returning to the tab) re-does it from
-       scratch. Only zeroing the timestamp used to leave the pending timer alive
-       while reopening the re-clamp, which yanked the sheet to rest ~20ms in and
-       killed the slide. */
-    return () => { ro.disconnect(); cancelEntrance(); entranceDoneFor.current = null; focusPlacedFor.current = null; };
+    return () => {
+      ro.disconnect();
+      initialSheetPositioned.current = false;
+      focusPlacedFor.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardMounted]);
 
@@ -1193,9 +1601,9 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
    * composed into `draft` in React state, and the whole drawer lands as one PUT.
    */
   const updateProfile = async (updates) => {
-    if (contentFrozen) { toast.error(contentFreezeMessage, contentFreezeAction); return; }
+    if (contentFrozen) { toast.error(contentFreezeMessage, contentFreezeAction); return false; }
     const current = userDataRef.current;
-    if (!current) return;
+    if (!current) return false;
 
     // Apply the change locally first so the UI responds immediately, and keep the
     // pre-patch snapshot so a failed save can be rolled back rather than left
@@ -1212,20 +1620,22 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
       const updated = await api.put('/users/profile', payload);
       // A newer save has started since this one — its response carries the newer
       // state, so don't let this older snapshot clobber it.
-      if (seq !== saveSeq.current) return;
+      if (seq !== saveSeq.current) return false;
       setUserData(prev => ({ ...prev, ...updated }));
       queryClient.invalidateQueries({ queryKey: ['matches'] });
       triggerHaptic('light');
       // Keep AuthContext and localStorage in sync so Matches, Chat and the
       // deck's "me" detection stop rendering the pre-edit profile.
       refreshUser();
+      return true;
     } catch (err) {
-      if (seq !== saveSeq.current) return;
+      if (seq !== saveSeq.current) return false;
       setUserData(snapshot); // don't leave the UI lying about what's saved
       // api.js already toasted the server's message when there was one; only a
       // non-toasted error (a real network drop) needs local copy. Never use
       // err.message here — on a network drop it is "Failed to fetch".
       if (!err?.toasted) toast.error('Could not save. Please try again.');
+      return false;
     }
   };
 
@@ -1331,6 +1741,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
     if (!sheet) return;
 
     const onDown = (e) => {
+      if (isWideDesktopRef.current) return;
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       if (drag.current) return;
       stopGlide();
@@ -1343,7 +1754,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
       const d = drag.current;
       if (!d || e.pointerId !== d.id) return;
       if (e.pointerType === 'mouse' && e.buttons === 0) { finish(e, false); return; }
-      const { lo, hi, ready } = boundsRef.current;
+      const { lo, collapsedHi, ready } = boundsRef.current;
       if (!ready) return;
       const dy = e.clientY - d.lastY;
       d.lastY = e.clientY;
@@ -1357,9 +1768,9 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
       if (raw < lo) {
         const over = lo - raw;
         yMV.set(lo - over * RUBBER);
-      } else if (raw > hi) {
-        const over = raw - hi;
-        yMV.set(hi + over * RUBBER);
+      } else if (raw > collapsedHi) {
+        const over = raw - collapsedHi;
+        yMV.set(collapsedHi + over * RUBBER);
       } else {
         yMV.set(raw);
       }
@@ -1371,12 +1782,16 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
       if (e && e.pointerId !== undefined && e.pointerId !== d.id) return;
       const vel = withMomentum ? d.vel : 0;
       drag.current = null;
-      const { lo, hi, ready } = boundsRef.current;
+      const { lo, hi, collapsedHi, ready } = boundsRef.current;
       if (!ready) return;
       const y = yMV.get();
-      if (y < lo || y > hi) { glideTo(clamp(y, lo, hi), 'bounce'); return; }
-      const projected = clamp(y + vel * MOMENTUM_MS, lo, hi);
-      if (Math.abs(projected - y) > 1) glideTo(projected, 'glide');
+      if (y < lo || y > collapsedHi) { glideTo(clamp(y, lo, collapsedHi), 'bounce'); return; }
+      const projected = clamp(y + vel * MOMENTUM_MS, lo, collapsedHi);
+      const collapseThreshold = hi + (collapsedHi - hi) / 2;
+      const target = projected > hi
+        ? (projected >= collapseThreshold ? collapsedHi : hi)
+        : projected;
+      if (Math.abs(target - y) > 1) glideTo(target, 'glide');
     };
 
     const onUp = (e) => finish(e, true);
@@ -1399,28 +1814,40 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
       dragged.current = false;
       e.preventDefault();
       e.stopPropagation();
+      return;
     }
+    const { hi, collapsedHi, ready } = boundsRef.current;
+    if (ready && yMV.get() >= hi + (collapsedHi - hi) / 2) glideTo(hi, 'glide');
+  };
+
+  const onPhotoClick = (e) => {
+    if (e.target instanceof Element && e.target.closest('button')) return;
+    const { hi, collapsedHi, ready } = boundsRef.current;
+    if (!ready || yMV.get() < hi + (collapsedHi - hi) / 2) return;
+    glideTo(hi, 'glide');
   };
 
   useEffect(() => {
     const sheet = sheetRef.current;
     if (!sheet) return;
     const onWheel = (e) => {
-      const { lo, hi, ready } = boundsRef.current;
+      if (isWideDesktopRef.current) return;
+      const { lo, collapsedHi, ready } = boundsRef.current;
       if (!ready) return;
       e.preventDefault();
-      glideTo(clamp(yMV.get() - e.deltaY, lo, hi), 'wheel');
+      glideTo(clamp(yMV.get() - e.deltaY, lo, collapsedHi), 'wheel');
     };
     sheet.addEventListener('wheel', onWheel, { passive: false });
     return () => sheet.removeEventListener('wheel', onWheel);
   }, [cardMounted]);
 
   const onSheetKeyDown = (e) => {
-    const { lo, hi, ready } = boundsRef.current;
+    if (isWideDesktopRef.current) return;
+    const { lo, hi, collapsedHi, ready } = boundsRef.current;
     if (!ready) return;
     const step = 90;
     if (e.key === 'ArrowUp') { e.preventDefault(); glideTo(clamp(yMV.get() - step, lo, hi), 'glide'); }
-    if (e.key === 'ArrowDown') { e.preventDefault(); glideTo(clamp(yMV.get() + step, lo, hi), 'glide'); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); glideTo(clamp(yMV.get() + step, lo, collapsedHi), 'glide'); }
   };
 
   /* ════ HEADER DUCK ════
@@ -1444,6 +1871,8 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
      actually moves. */
   const headerTriggerRef = useRef(null);
   const headerHiddenRef = useRef(false);
+  const headerWasHiddenBeforeOverlayRef = useRef(false);
+  const profileOverlayOpenRef = useRef(false);
   const onHeaderHiddenRef = useRef(onHeaderHiddenChange);
   useEffect(() => { onHeaderHiddenRef.current = onHeaderHiddenChange; });
 
@@ -1452,6 +1881,25 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
     headerHiddenRef.current = hidden;
     onHeaderHiddenRef.current?.(hidden);
   }, []);
+
+  const hideHeaderForProfileOverlay = useCallback(() => {
+    if (profileOverlayOpenRef.current) return;
+    profileOverlayOpenRef.current = true;
+    headerWasHiddenBeforeOverlayRef.current = headerHiddenRef.current;
+    setHeaderHidden(true);
+  }, [setHeaderHidden]);
+
+  useEffect(() => {
+    const overlayOpen = Boolean(drawerConfig || scoreInfoOpen);
+    if (overlayOpen && !profileOverlayOpenRef.current) {
+      profileOverlayOpenRef.current = true;
+      headerWasHiddenBeforeOverlayRef.current = headerHiddenRef.current;
+      setHeaderHidden(true);
+    } else if (!overlayOpen && profileOverlayOpenRef.current) {
+      profileOverlayOpenRef.current = false;
+      if (!headerWasHiddenBeforeOverlayRef.current) setHeaderHidden(false);
+    }
+  }, [drawerConfig, scoreInfoOpen, setHeaderHidden]);
 
   const measureHeaderTrigger = useCallback(() => {
     if (headerHiddenRef.current) return;          // never measure mid-animation
@@ -1470,6 +1918,14 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
   }, []);
 
   useMotionValueEvent(yMV, 'change', (y) => {
+    if (profileOverlayOpenRef.current) {
+      if (!headerHiddenRef.current) setHeaderHidden(true);
+      return;
+    }
+    if (isWideDesktopRef.current) {
+      if (headerHiddenRef.current) setHeaderHidden(false);
+      return;
+    }
     const trigger = headerTriggerRef.current;
     if (trigger == null) return;
     /* Two fixed numbers — the two directions cannot disagree. */
@@ -1503,7 +1959,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
 
   if (loading || (!userData && !fetchError)) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#111211' }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: C.desk }}>
         <p style={{ fontFamily: F.mono, fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: C.ink3 }}>
           Loading your card…
         </p>
@@ -1526,7 +1982,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
       <div style={{
         flex: 1, display: 'flex', flexDirection: 'column', gap: 16,
         alignItems: 'center', justifyContent: 'center',
-        backgroundColor: '#111211', padding: 24, textAlign: 'center',
+        backgroundColor: C.desk, padding: 24, textAlign: 'center',
       }}>
         <p style={{ fontFamily: F.mono, fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: C.red }}>
           Card unavailable
@@ -1555,6 +2011,8 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
      85 could be called Exemplary while the deck still had it locked, so these
      two numbers and the gate have to come from the same source. */
   const scoreBand = bandFor(targetScore, config);
+  const interactionThreshold = readLadder(config).interact;
+  const pointsToInteract = Math.max(0, interactionThreshold - targetScore);
   const completion =
     scoreBand === 'aspirational'
       ? 'Exemplary'
@@ -1579,32 +2037,32 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
   );
 
   return (
-    <div ref={rootRef} className="pc-root">
+    <div ref={rootRef} className={`pc-root${isWideDesktop ? ' pc-desktop' : ''}`}>
       <style>{PROFILE_CSS}</style>
       <input type="file" accept="image/*" ref={fileInputRef} style={{ display: 'none' }} onChange={handlePhotoSelect} />
 
-      <div style={{ position: 'relative', zIndex: 45 }}>
-        <ShadowbanBanner score={shadowbanScore} onLearnMore={() => setShowLearnMore(true)} />
+      <div className="pc-profile-banner" style={{ position: 'relative', zIndex: 45 }}>
+        <ShadowbanBanner isUnderReview={contentFrozen} onLearnMore={() => setShowLearnMore(true)} />
         {showLearnMore && <LearnMoreSheet onClose={() => setShowLearnMore(false)} />}
       </div>
 
-      {/* ════ PHOTO — full-bleed background, entrance fade + drag recede ════ */}
+      {/* ════ PHOTO — full-bleed background with drag recede ════ */}
       <motion.div
         className="pc-heroWrap"
-        style={{ scale: combinedPhotoScale, opacity: combinedPhotoOpacity }}
+        onClick={onPhotoClick}
+        style={{ scale: photoScale, opacity: photoOpacity }}
       >
         <img
           ref={heroImgRef}
           src={userData.photos?.[0] || FALLBACK_IMG}
           alt="Your portrait"
           draggable={false}
-          onLoad={() => setHeroLoaded(true)}
           onError={(e) => {
             const img = e.currentTarget;
             if (!img.dataset.err) { img.dataset.err = '1'; img.src = FALLBACK_IMG; }
           }}
           decoding="async"
-          className={`pc-hero${heroLoaded ? ' is-loaded' : ''}`}
+          className="pc-hero"
         />
         <div className="pc-shade" aria-hidden="true" />
         {/* The pencil and its tray are one dismiss target: the ref spans both, so
@@ -1661,14 +2119,16 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
         onKeyDown={onSheetKeyDown}
         tabIndex={0}
         role="region"
-        aria-label="Your profile — drag or use arrow keys to move the card"
+        aria-label={isWideDesktop
+          ? 'Your profile'
+          : 'Your profile — drag or use arrow keys to move the card'}
       >
         {/* the note — plain text at the top of the sheet, no background */}
-        <span className="pc-notetext">As others see you</span>
         <div className="pc-grabber" aria-hidden="true" />
+        <span className="pc-notetext">As others see you</span>
 
-        {/* IDENTITY — one edit button. Age is inline in the name, matching the
-            deck card exactly; the year stays on its own mono line below. */}
+        {/* IDENTITY — one edit button. Keep the campus badge here consistent
+            with the deck, and honor the owner's college visibility setting. */}
         <div ref={idRef} className="pc-id">
           <div className="pc-idrow">
             <div style={{ minWidth: 0 }}>
@@ -1681,12 +2141,23 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
               <Pencil size={13} strokeWidth={2.8} />
             </button>
           </div>
-          <p className="pc-meta">{userData.year || '—'}</p>
+          {userData.showCollege !== false && userData.college && (
+            <p className="pc-meta">{userData.college}</p>
+          )}
         </div>
 
         {/* PROFILE STRENGTH — score lives HERE and nowhere else; not editable */}
         <div className="pc-sec" ref={strengthRef}>
-          <SectionHead mark="yellow">Profile strength</SectionHead>
+          <SectionHead
+            mark="yellow"
+            onInfo={() => {
+              hideHeaderForProfileOverlay();
+              setScoreInfoOpen(true);
+            }}
+            infoLabel="How profile strength works"
+          >
+            Profile strength
+          </SectionHead>
           <div className="pc-card padded">
             <div className="pc-strengthhead">
               <div className="pc-scorehead">
@@ -1713,15 +2184,15 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
 
         {/* VITALS — one edit button on the card */}
         <div className="pc-sec">
-          <SectionHead mark="coral">Vitals</SectionHead>
+          <SectionHead mark="lavender">Vitals</SectionHead>
           <div className="pc-card padded">
             {/* Two cells, not four. Hostel and Branch were removed — hostel was the only
        location signal and the discover deck is no longer campus-scoped, and
        neither field moves the ladder. The grid keeps its 2×2 shape so the
        remaining cells stay in the same place. */}
             <div className="pc-grid">
-              <FieldCell icon={Calendar} color={TILE[1]} label="Year" value={userData.year || '—'} />
-              <FieldCell icon={Sparkle} color={TILE[3]} label="Pronouns" value={userData.pronouns || '—'} />
+              <FieldCell icon={Calendar} color="lavender" label="Year" value={userData.year || '—'} />
+              <FieldCell icon={Sparkle} color="green" label="Pronouns" value={userData.pronouns || '—'} />
             </div>
             <button className="pr-slotbtn" aria-label="Edit vitals" title="Edit vitals" onClick={() => openEditDrawer({ type: 'vitals' })}>
               <Pencil size={13} strokeWidth={2.8} />
@@ -1733,7 +2204,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
             removing the section and its edit button. Bare text, not a card, so it
             matches the deck. */}
         <div className="pc-sec">
-          <SectionHead mark="green" onEdit={() => openEditDrawer({ type: 'bio' })} editLabel="Edit about">About</SectionHead>
+          <SectionHead mark="neutral" onEdit={() => openEditDrawer({ type: 'bio' })} editLabel="Edit about">About</SectionHead>
           {userData.bio ? (
             <p className="pc-bio">{userData.bio}</p>
           ) : (
@@ -1743,7 +2214,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
 
         {/* SEEKING — bare chips, matching the deck */}
         <div className="pc-sec">
-          <SectionHead mark="pink" onEdit={() => openEditDrawer({ type: 'intent' })} editLabel="Edit seeking">Seeking</SectionHead>
+          <SectionHead mark="intent" onEdit={() => openEditDrawer({ type: 'intent' })} editLabel="Edit seeking">Seeking</SectionHead>
           <div className="pc-pills">
             {(userData.intent?.length ? userData.intent : ['Connection']).map((it, i) => (
               <span key={`${it}-${i}`} className="pc-chip acc">{it}</span>
@@ -1770,7 +2241,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
             Prompt slots render whether or not they hold a question: clearing one
             used to unmount the card and take its edit button with it. */}
         <div className="pc-sec">
-          <SectionHead mark="coral" count={exhibitsCount}>Exhibits</SectionHead>
+          <SectionHead mark="ink" count={exhibitsCount}>Exhibits</SectionHead>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             <PromptSlot slot={0} prompt={prompts[0]} onEdit={() => openEditDrawer({ type: 'prompt', slot: 0 })} />
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
@@ -1784,6 +2255,86 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
         </div>
       </motion.div>
 
+      <AnimatePresence>
+        {scoreInfoOpen && (
+          <motion.div
+            initial={reduceMotion ? false : { opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={reduceMotion ? { opacity: 1 } : { opacity: 0 }}
+            transition={reduceMotion ? { duration: 0 } : { duration: 0.18 }}
+            onClick={() => setScoreInfoOpen(false)}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 1100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 18,
+              background: 'rgba(12,12,14,.68)',
+            }}
+          >
+            <motion.div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="profile-strength-title"
+              initial={reduceMotion ? false : { opacity: 0, y: 12, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: 8, scale: 0.98 }}
+              transition={reduceMotion ? { duration: 0 } : { duration: 0.18 }}
+              onClick={(event) => event.stopPropagation()}
+              className="pr-strength-dialog"
+            >
+              <div className="pr-strength-head">
+                <div>
+                  <h2 id="profile-strength-title" className="pr-strength-title">Profile strength</h2>
+                  <p className="pr-strength-total">{targetScore}/100 points</p>
+                </div>
+                <button
+                  type="button"
+                  className="pr-strength-close"
+                  aria-label="Close profile strength details"
+                  autoFocus
+                  onClick={() => setScoreInfoOpen(false)}
+                >
+                  <X size={16} strokeWidth={3} />
+                </button>
+              </div>
+
+              <div className="pr-strength-content">
+                <p className="pr-strength-intro">
+                  {pointsToInteract > 0
+                    ? `Add ${pointsToInteract} more ${pointsToInteract === 1 ? 'point' : 'points'} to unlock reactions at ${interactionThreshold}.`
+                    : `Reactions are unlocked at ${interactionThreshold}. Add more public profile content to keep building your profile.`}
+                </p>
+
+                <div className="pr-strength-options">
+                  {scoreOpportunities.length ? scoreOpportunities.map((opportunity) => (
+                    <button
+                      key={opportunity.key}
+                      type="button"
+                      className="pr-strength-option"
+                      onClick={() => openScoreOpportunity(opportunity.action)}
+                    >
+                      <span>{opportunity.label}</span>
+                      <span className="pr-strength-points">+{opportunity.points}</span>
+                    </button>
+                  )) : (
+                    <p style={{ margin: 0, fontFamily: F.body, fontSize: 13, lineHeight: 1.5 }}>
+                      You’ve filled every score-earning profile slot.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <p className="pr-strength-note">
+                Only public profile content earns points. Required details and private matching preferences do not.
+              </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* ════ EDIT DRAWERS ════
           Every drawer edits a local `draft` and writes on Save. Dismissing via ✕,
           the backdrop or the Cancel button all go through requestCloseDrawer, so
@@ -1794,23 +2345,24 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
             <motion.div
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               onClick={requestCloseDrawer}
-              style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(12,12,14,.62)', zIndex: 100 }}
+              style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(12,12,14,.62)', zIndex: 1100 }}
             />
             <motion.div
               initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-              style={{ position: 'fixed', bottom: 0, left: 0, right: 0, height: '80dvh', backgroundColor: C.paper, borderTop: `1px solid ${C.ink}`, borderRadius: '15px 15px 0 0', zIndex: 101, display: 'flex', flexDirection: 'column', boxShadow: '0 -14px 32px rgba(0,0,0,.22)' }}
+              className="pr-editor"
             >
-              <div style={{ padding: '16px 20px', borderBottom: `1px solid ${C.ink}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontFamily: F.heavy, fontSize: 18, fontWeight: 800, color: C.ink, letterSpacing: '-.02em', textTransform: 'uppercase' }}>
+              <div className="pr-editor-grabber" aria-hidden="true" />
+              <div className="pr-editor-head">
+                <span className="pr-editor-title">
                   {drawerConfig.type === 'interests' ? 'Edit interests' : drawerConfig.type === 'intent' ? 'Edit seeking' : drawerConfig.type === 'prompt' ? 'Edit question' : drawerConfig.type === 'vitals' ? 'Edit vitals' : drawerConfig.type === 'identity' ? 'Edit basics' : 'Edit about'}
                 </span>
-                <button onClick={requestCloseDrawer} aria-label="Close editor" style={{ width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: `1px solid ${C.ink}`, borderRadius: 4, cursor: 'pointer', color: C.ink }}>
+                <button className="pr-editor-close" onClick={requestCloseDrawer} aria-label="Close editor">
                   <X size={16} strokeWidth={3} />
                 </button>
               </div>
 
-              <div ref={drawerBodyRef} style={{ padding: 22, overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div ref={drawerBodyRef} className="pr-editor-body">
                 {drawerConfig.type === 'identity' && (
                   <>
                     <DraftField value={draft.name} onChange={(v) => setDraft((d) => ({ ...d, name: v }))} max={PROFILE_LIMITS.name} placeholder="Name" />
@@ -1843,50 +2395,59 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
                   </>
                 )}
 
-                {/* Campus badge — privacy opt-out for the deck card.
-                    Server STRIPS the college from every deck payload when this is
-                    false (routes/discover.js), so turning it off means the data
-                    never leaves the database, not that it's hidden in the UI. */}
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={userData.showCollege !== false}
-                  onClick={() => {
-                    const next = !(userData.showCollege !== false);
-                    triggerHaptic('light');
-                    updateProfile({ showCollege: next });
-                    toast.success(next ? 'Others can now see your college.' : 'Your college is now hidden from the feed.');
-                  }}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-                    width: '100%', marginTop: 18, padding: '14px 0', border: 'none',
-                    borderTop: `1px solid ${C.hair}`, background: 'transparent',
-                    cursor: 'pointer', textAlign: 'left',
-                  }}
-                >
-                  <span>
-                    <span style={{ fontFamily: F.body, fontSize: 14.5, fontWeight: 700, color: C.ink, display: 'block' }}>
-                      Campus badge
-                    </span>
-                    <span style={{ fontFamily: F.body, fontSize: 12, fontWeight: 500, color: C.ink2, marginTop: 3, display: 'block', lineHeight: 1.4 }}>
-                      {userData.showCollege !== false
-                        ? `Showing "${userData.college || 'your college'}" on your card`
-                        : 'Hidden. Nobody can see which college you attend.'}
-                    </span>
-                  </span>
-                  <span style={{
-                    width: 46, height: 26, flexShrink: 0, borderRadius: 999,
-                    border: `1px solid ${C.ink}`, position: 'relative',
-                    background: userData.showCollege !== false ? C.yellow : C.hair,
-                  }}>
-                    <span style={{
-                      position: 'absolute', top: 3, left: userData.showCollege !== false ? 23 : 3,
-                      width: 18, height: 18, borderRadius: '50%', background: C.card,
-                      border: `1px solid ${C.ink}`, boxSizing: 'border-box',
-                      transition: 'left 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
-                    }} />
-                  </span>
-                </button>
+                {drawerConfig.type === 'identity' && (
+                  <>
+                    {/* Campus badge — privacy opt-out for the deck card.
+                        Server STRIPS the college from every deck payload when this is
+                        false (routes/discover.js), so turning it off means the data
+                        never leaves the database, not that it's hidden in the UI. */}
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={userData.showCollege !== false}
+                      onClick={() => {
+                        const next = !(userData.showCollege !== false);
+                        triggerHaptic('light');
+                        updateProfile({ showCollege: next }).then((saved) => {
+                          if (saved) {
+                            toast.success(next
+                              ? 'Others can now see your college.'
+                              : 'Your college is now hidden from the feed.');
+                          }
+                        });
+                      }}
+                      style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+                        width: '100%', marginTop: 18, padding: '14px 0', border: 'none',
+                        borderTop: `1px solid ${C.hair}`, background: 'transparent',
+                        cursor: 'pointer', textAlign: 'left',
+                      }}
+                    >
+                      <span>
+                        <span style={{ fontFamily: F.body, fontSize: 14.5, fontWeight: 700, color: C.ink, display: 'block' }}>
+                          Campus badge
+                        </span>
+                        <span style={{ fontFamily: F.body, fontSize: 12, fontWeight: 500, color: C.ink2, marginTop: 3, display: 'block', lineHeight: 1.4 }}>
+                          {userData.showCollege !== false
+                            ? `Showing "${userData.college || 'your college'}" on your card`
+                            : 'Hidden. Nobody can see which college you attend.'}
+                        </span>
+                      </span>
+                      <span style={{
+                        width: 46, height: 26, flexShrink: 0, borderRadius: 999,
+                        border: `1px solid ${C.ink}`, position: 'relative',
+                        background: userData.showCollege !== false ? C.yellow : C.hair,
+                      }}>
+                        <span style={{
+                          position: 'absolute', top: 3, left: userData.showCollege !== false ? 23 : 3,
+                          width: 18, height: 18, borderRadius: '50%', background: C.card,
+                          border: `1px solid ${C.ink}`, boxSizing: 'border-box',
+                          transition: 'left 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
+                        }} />
+                      </span>
+                    </button>
+                  </>
+                )}
 
                 {drawerConfig.type === 'bio' && (
                   <DraftField multiline value={draft.bio} onChange={(v) => setDraft((d) => ({ ...d, bio: v }))} max={PROFILE_LIMITS.bio} placeholder="Write about yourself…" minHeight={150} />
@@ -1905,7 +2466,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
                         <button
                           key={i}
                           className={`pr-chipbtn${draft.question === promptText ? ' on' : ''}`}
-                          style={{ borderRadius: 4, textAlign: 'left', textTransform: 'none', fontFamily: F.body, fontSize: 13.5, fontWeight: 600, letterSpacing: 0 }}
+                          style={{ borderRadius: 10, textAlign: 'left', textTransform: 'none', fontFamily: F.body, fontSize: 13.5, fontWeight: 600, letterSpacing: 0 }}
                           onClick={() => {
                             setDraft((d) => {
                               if (d.question === promptText) return d;

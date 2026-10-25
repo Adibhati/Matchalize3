@@ -7,12 +7,16 @@ import Message from '../models/Message.js';
 import Setting from '../models/Setting.js';
 import College from '../models/College.js';
 import CollegeRequest from '../models/CollegeRequest.js';
+import ModerationLedger from '../models/ModerationLedger.js';
+import { fingerprintModerationEmail } from '../utils/moderationLedger.js';
 import { normaliseDomain } from '../utils/collegeDomain.js';
 import { sendCollegeLive } from '../utils/email.js';
 import { adminProtect } from '../middleware/admin.js';
 
 const router = express.Router();
 router.use(adminProtect);
+const DEFAULT_REPORT_REVIEW_THRESHOLD = 3;
+const RETIRED_MODERATION_SETTING_KEYS = ['shadowbanThreshold', 'autoShadowban'];
 
 // ─── Helpers ───
 function escapeRegex(str) {
@@ -23,8 +27,7 @@ const VALID_REPORT_STATUSES = ['pending', 'reviewed', 'dismissed', 'actioned'];
 const ALLOWED_SETTING_KEYS = new Set([
   'supportEmail',
   'maintenanceMode',
-  'shadowbanThreshold',
-  'autoShadowban',
+  'reportReviewThreshold',
   'appConfig',
 ]);
 
@@ -313,6 +316,12 @@ router.put('/users/:id', async (req, res) => {
       .select('name email suspended suspendedReason shadowbannedAt adminNotes');
     if (!user) return res.status(404).json({ message: 'User not found' });
 
+    if (shadowbanned === false && user.email) {
+      await ModerationLedger.deleteOne({
+        emailFingerprint: fingerprintModerationEmail(user.email),
+      });
+    }
+
     if (suspended) {
       const io = req.app.get('io');
       if (io) {
@@ -345,13 +354,21 @@ router.post('/users/:id/disconnect', async (req, res) => {
       return res.status(400).json({ message: 'Invalid user id' });
     }
 
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { lastLogoutAt: new Date() },
+      { new: true, select: '_id' }
+    );
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
     const io = req.app.get('io');
     if (io) {
       io.to(req.params.id.toString()).emit('force-disconnect', {
         reason: 'Admin forced disconnect',
       });
+      io.in(req.params.id.toString()).disconnectSockets(true);
     }
-    res.json({ message: 'Disconnect signal sent' });
+    res.json({ message: 'User disconnected' });
   } catch (err) {
     res.status(500).json({ message: 'Failed to disconnect user' });
   }
@@ -789,9 +806,12 @@ router.post('/college-requests/:id/notify', async (req, res) => {
 // ─── SETTINGS ───
 router.get('/settings', async (req, res) => {
   try {
-    const settings = await Setting.find().lean();
+    const settings = await Setting.find({
+      key: { $nin: RETIRED_MODERATION_SETTING_KEYS },
+    }).lean();
     const obj = {};
     settings.forEach(s => { obj[s.key] = s.value; });
+    obj.reportReviewThreshold ??= DEFAULT_REPORT_REVIEW_THRESHOLD;
     res.json(obj);
   } catch (err) {
     console.error('Admin settings error:', err);
@@ -813,9 +833,9 @@ router.put('/settings', async (req, res) => {
       if (!ALLOWED_SETTING_KEYS.has(key)) {
         return res.status(400).json({ message: `Unknown setting key: ${key}` });
       }
-      if (key === 'shadowbanThreshold') {
-        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1000) {
-          return res.status(400).json({ message: 'shadowbanThreshold must be a finite number between 0 and 1000' });
+      if (key === 'reportReviewThreshold') {
+        if (!Number.isInteger(value) || value < 1 || value > 1000) {
+          return res.status(400).json({ message: 'reportReviewThreshold must be a whole number between 1 and 1000' });
         }
       } else if (typeof value === 'string' && value.trim().length > 50) {
         return res.status(400).json({ message: `${key} must be 50 characters or fewer` });

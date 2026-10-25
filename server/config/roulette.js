@@ -67,9 +67,19 @@ export const ROULETTE_SETTINGS = {
   ENABLED: bool('ROULETTE_ENABLED', false),
 
   /* ── WHO MAY JOIN A QUEUE ──────────────────────────────────────────────────
-   * The allow-list is read fresh on every call rather than cached at module
-   * load, the same way campusGate.js reads ALLOWED_COLLEGES per request: a test
-   * that mutates process.env must not be defeated by a stale snapshot.
+   * ⚠️ CORRECTED 2026-10-17. This comment previously claimed the allow-list was
+   * "read fresh on every call … so a test that mutates process.env must not be
+   * defeated by a stale snapshot". That was not true and never had been:
+   * `accounts()` runs once at module load (see `const TEST_ACCOUNTS` above), so
+   * the list is a startup snapshot and mutating `process.env
+   * .ROULETTE_TEST_ACCOUNTS` at runtime changes nothing.
+   *
+   * Fixing it properly — re-parsing per call — would move an env-var read into
+   * the hot path of every socket event for no benefit: `ENABLED` and
+   * `IS_TEST_MODE` are baked in at load either way, so the list would only be
+   * half-fresh, which is WORSE than honestly snapshot-once. Restarting the
+   * process is the correct and sufficient way to change the allow-list, and it
+   * means turning Roulette on is always a deliberate act.
    *
    * Empty list = nobody. See the note on `accounts()` above. */
   TEST_ACCOUNTS,
@@ -125,6 +135,37 @@ export const ROULETTE_SETTINGS = {
    * authenticated client can generate them in a loop. */
   TURN_CREDENTIAL_TTL_SECONDS: num('ROULETTE_TURN_TTL_SEC', 3600),
   ISSUANCE_PER_HOUR: num('ROULETTE_ICE_PER_HOUR', 10),
+
+  /* ── SIGNALING SHAPE LIMITS (Stage 3) ─────────────────────────────────────
+   * Stage 3 is the first point where untrusted clients send us large strings.
+   * Every limiter in `middleware/rateLimiters.js` is `express-rate-limit`, which
+   * needs a `req` — so all six of them are invisible to socket events. These
+   * four numbers are what actually bound signaling traffic.
+   *
+   * Sized against real values, not guesses: one video + one audio offer is
+   * roughly 2-4 KB, and a healthy call gathers well under 40 ICE candidates
+   * across its lifetime. Every ceiling below is therefore generous by an order
+   * of magnitude — they exist to stop the pathological case, not to trim the
+   * normal one. A limit tight enough to threaten a real call would be a bug. */
+
+  /* Ceiling on one SDP offer/answer, in characters (≈3× UTF-8 bytes, so this is
+   * a loose upper bound by design). ~60 KB against a real ~4 KB payload. */
+  MAX_SDP_BYTES: num('ROULETTE_MAX_SDP_BYTES', 60_000),
+
+  /* Total ICE candidates relayed for one call, across its whole lifetime.
+   * A trickle that stays under the per-second rate limit still accumulates, so
+   * the rate limiter alone is not a total bound. */
+  MAX_CANDIDATES_PER_SESSION: num('ROULETTE_MAX_CANDIDATES', 120),
+
+  /* Sustained signaling events/second per user, with a burst allowance.
+   * Keyed by USER, never by IP: an entire college sits behind one NAT address,
+   * so an IP limit would throttle a whole campus mid-conversation. This is the
+   * same reasoning as `verifyOtpLimiter` in `middleware/rateLimiters.js`.
+   *
+   * The burst is generous because ICE legitimately arrives in a dozen-at-once
+   * burst right after `setRemoteDescription`. */
+  SIGNAL_RATE_PER_SECOND: num('ROULETTE_SIGNAL_RATE', 40),
+  SIGNAL_BURST: num('ROULETTE_SIGNAL_BURST', 150),
 };
 
 /**

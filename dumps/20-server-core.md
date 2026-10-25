@@ -1,23 +1,21 @@
 # Chunk 20 — Server Core
 
-> Matchalize · `server-core` · files 20 of 27 chunks · 13 file(s) · 87 KB · ~25,385 tokens
-> Generated 2026-10-17 21:10.
+> Matchalize · `server-core` · files 20 of 28 chunks · 11 file(s) · 98 KB · ~28,614 tokens
+> Generated 2026-10-18 20:29.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
 > - `./server/scripts/verify-location-swap.mjs`
 > - `./server/seedRealistic.js`
 > - `./server/socket/chat.js`
+> - `./server/socket/rouletteSignaling.js`
 > - `./server/utils/AppError.js`
 > - `./server/utils/campusGate.js`
 > - `./server/utils/campusSeed.js`
 > - `./server/utils/email.js`
 > - `./server/utils/media.js`
+> - `./server/utils/moderationLedger.js`
 > - `./server/utils/otpHash.js`
-> - `./server/utils/partnerView.js`
-> - `./server/utils/publicCard.js`
-> - `./server/utils/push.js`
-> - `./server/utils/queue.js`
 
 ---
 ### ./server/scripts/verify-location-swap.mjs
@@ -675,6 +673,21 @@ const onlineUsers = new Map(); // userId -> Set<socketId>
 // How often to re-check suspension/deletion status from the DB per connected socket.
 const SUSPENSION_CHECK_INTERVAL = 60 * 1000;
 
+const registerSafeSocketHandler = (socket, event, handler) => {
+  socket.on(event, (...args) => {
+    try {
+      const result = handler(...args);
+      if (result && typeof result.catch === 'function') {
+        result.catch((error) => {
+          console.error(`Socket ${event} handler error:`, error);
+        });
+      }
+    } catch (error) {
+      console.error(`Socket ${event} handler error:`, error);
+    }
+  });
+};
+
 /**
  * Parse a raw cookie header string into a { name: value } map.
  */
@@ -707,6 +720,9 @@ export const socketHandler = (io) => {
       const user = await User.findById(decoded.id);
       if (!user) {
         return next(new Error('Authentication error: User not found'));
+      }
+      if (user.lastLogoutAt && decoded.iat * 1000 < user.lastLogoutAt.getTime()) {
+        return next(new Error('Authentication error: Session expired'));
       }
       socket.user = user;
       next();
@@ -788,7 +804,7 @@ export const socketHandler = (io) => {
     User.findByIdAndUpdate(userId, { lastActive: new Date() }).exec()
       .catch(err => console.error('Failed to update lastActive:', err));
 
-    socket.on('join-alignment', async (alignmentId) => {
+    registerSafeSocketHandler(socket, 'join-alignment', async (alignmentId) => {
       if (!alignmentId || typeof alignmentId !== 'string') return;
 
       try {
@@ -825,7 +841,7 @@ export const socketHandler = (io) => {
     // it with optional access, so a missing/wrong-shaped field is ignored and
     // logged instead of fatal.
 
-    socket.on('typing', (payload) => {
+    registerSafeSocketHandler(socket, 'typing', (payload) => {
       const alignmentId = payload?.alignmentId;
       if (!alignmentId || typeof alignmentId !== 'string') return;
       // Authorized at join-alignment; room membership replaces the per-keystroke DB query
@@ -833,14 +849,14 @@ export const socketHandler = (io) => {
       socket.to(alignmentId).emit('user-typing', { userName: socket.user.name });
     });
 
-    socket.on('stop-typing', (payload) => {
+    registerSafeSocketHandler(socket, 'stop-typing', (payload) => {
       const alignmentId = payload?.alignmentId;
       if (!alignmentId || typeof alignmentId !== 'string') return;
       if (!socket.rooms.has(alignmentId)) return;
       socket.to(alignmentId).emit('user-stop-typing');
     });
 
-    socket.on('check-online', async (payload) => {
+    registerSafeSocketHandler(socket, 'check-online', async (payload) => {
       // Read inside the try: destructuring used to happen in the parameter list,
       // where a missing payload threw before any guard could run.
       const alignmentId = payload?.alignmentId;
@@ -869,7 +885,7 @@ export const socketHandler = (io) => {
       }
     });
 
-    socket.on('read-messages', async (payload) => {
+    registerSafeSocketHandler(socket, 'read-messages', async (payload) => {
       const alignmentId = payload?.alignmentId;
       if (!alignmentId || typeof alignmentId !== 'string') return;
 
@@ -888,7 +904,7 @@ export const socketHandler = (io) => {
       }
     });
 
-    socket.on('disconnect', () => {
+    registerSafeSocketHandler(socket, 'disconnect', () => {
       console.log(`User disconnected: ${socket.user.name}`);
 
       // Multi-device: remove this socket, keep others
@@ -928,6 +944,774 @@ export const socketHandler = (io) => {
     });
   });
 };
+
+```
+
+### ./server/socket/rouletteSignaling.js
+
+```
+/**
+ * 🎰 ROULETTE — the queue and the call signaling.
+ *
+ * ── WHAT THIS IS ─────────────────────────────────────────────────────────────
+ * Chatroulette with the profile switched off. You arrive, you wait, the server
+ * pairs you with whoever else is waiting, you talk face to face, you press Next.
+ * Nobody ever sees a name, a college, or a profile.
+ *
+ * ── WHY THIS FILE HAS NO DATABASE IMPORTS ─────────────────────────────────────
+ * Every check that touches the database — "are these two blocked?", "is this
+ * account suspended?" — arrives through `deps`. That is not architectural
+ * purity, it is testability: CI has no MongoDB (there is no
+ * mongodb-memory-server, and the existing harness in `tests/lib/mongo.mjs`
+ * deliberately talks to a real cluster, which is why the QA job in CI is
+ * commented out as "not wired up yet"). Injecting the checks means the queue,
+ * the pairing races and the crash-safety guarantees are all provable in CI
+ * without a database or a browser.
+ *
+ * `socket/roulette.js` is the thin wrapper that supplies real mongoose-backed
+ * implementations. Nothing here knows mongoose exists.
+ *
+ * ── THE CRASH RULE ───────────────────────────────────────────────────────────
+ * `server/socket/chat.js:151-162` documents an existing production hazard: a
+ * socket event with a missing or wrong-shaped payload throws inside Socket.IO's
+ * `process.nextTick` dispatch, which has no try/catch, becomes an
+ * `uncaughtException`, and `server/index.js:574` responds with `process.exit(1)`.
+ * One malformed packet from one authenticated user takes down the whole app for
+ * everyone.
+ *
+ * Stage 3 is the first feature where strangers send us large attacker-controlled
+ * strings, so this module makes that structurally impossible rather than
+ * careful. Two independent layers:
+ *
+ *   1. `safeHandler` wraps EVERY registered handler in a try/catch. This is the
+ *      layer that actually stops the process dying, and it does so even for
+ *      throws that no shape check anticipated.
+ *   2. Validators reject bad payloads before any state is touched.
+ *
+ * Layer 1 is what makes layer 2 an optimisation rather than the only defence.
+ * `handlers` is exported so a test can assert that nothing is registered
+ * un-wrapped — that assertion is the thing keeping layer 1 true as handlers are
+ * added over time.
+ *
+ * ── WHAT IS DELIBERATELY ABSENT ──────────────────────────────────────────────
+ * No TURN (Stage 4), no skip/recovery/safety UI (Stage 6), no Align request
+ * (Stage 7), no chat (Stage 8), no profile reveal (Stage 9). Pairing here is
+ * first-in-first-out among allow-listed test accounts only.
+ *
+ * Design source: ambitions/roulette.md §11, §13, §15
+ */
+
+import { randomUUID } from 'crypto';
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * EVENTS
+ *
+ * Same names in both directions; Socket.IO separates them by direction. Every
+ * inbound event carries `sessionId` so that a signal belonging to a finished
+ * call can be rejected rather than applied to whatever call is current now.
+ *
+ * `call:terminated` keeps the name the spec already commits to (§13: "Refuses
+ * new pairs, emits `call:terminated`") and is reserved for a SERVER decision —
+ * capacity, the kill switch. `call:ended` is a participant leaving or pressing
+ * Next. Two names for genuinely different causes beats one ambiguous one.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+export const CALL_EVENTS = Object.freeze({
+  /* client → server */
+  JOIN: 'call:join',
+  LEAVE_QUEUE: 'call:leave-queue',
+  OFFER: 'call:offer',
+  ANSWER: 'call:answer',
+  ICE: 'call:ice',
+  MEDIA_STATE: 'call:media-state',
+  NEXT: 'call:next',
+  END: 'call:end',
+  /* server → client */
+  SEARCHING: 'call:searching',
+  MATCHED: 'call:matched',
+  PEER_MEDIA: 'call:peer-media',
+  ENDED: 'call:ended',
+  TERMINATED: 'call:terminated',
+  RATE_LIMITED: 'call:rate-limited',
+});
+
+/** Every inbound event this module listens for. Used by the wrapper test. */
+export const INBOUND_EVENTS = Object.freeze([
+  CALL_EVENTS.JOIN,
+  CALL_EVENTS.LEAVE_QUEUE,
+  CALL_EVENTS.OFFER,
+  CALL_EVENTS.ANSWER,
+  CALL_EVENTS.ICE,
+  CALL_EVENTS.MEDIA_STATE,
+  CALL_EVENTS.NEXT,
+  CALL_EVENTS.END,
+]);
+
+/**
+ * Keys allowed to appear in any server → client payload.
+ *
+ * Roulette's central privacy promise is that the person on the other end is a
+ * face with no identity attached. Every emit in this module is filtered through
+ * `assertNoIdentity`, so a future edit that helpfully adds `peerName` fails a
+ * test instead of shipping. `sessionId` is the only opaque handle — it is a
+ * random UUID that identifies a call, not a person, and both sides already hold
+ * each other's socket to know who is talking to them.
+ */
+const FORBIDDEN_PAYLOAD_KEYS = Object.freeze([
+  'userId', 'peerId', 'name', 'userName', 'username', 'displayName',
+  'firstName', 'lastName', 'email', 'phone', 'college', 'collegeName',
+  'profile', 'avatar', 'photo', 'photos', 'bio', 'prompt', 'gender',
+  'age', 'city', 'intent', 'intention', 'socketId', 'token',
+]);
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * VALIDATION
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
+/** Prototype-pollution keys. Rejected anywhere in an inbound payload. */
+const POLLUTION_KEYS = Object.freeze(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Walk a payload looking for prototype-pollution keys.
+ *
+ * Depth-limited because these payloads are shallow by design; an attacker
+ * nesting 50,000 objects deep is a different threat (parser stack overflow,
+ * handled by the try/catch in safeHandler) and this walk must not become the
+ * thing that burns CPU.
+ */
+const findPollutionKey = (value, depth = 0) => {
+  if (depth > 6 || value === null || typeof value !== 'object') return null;
+  for (const key of Object.keys(value)) {
+    if (POLLUTION_KEYS.includes(key)) return key;
+    const nested = findPollutionKey(value[key], depth + 1);
+    if (nested) return nested;
+  }
+  return null;
+};
+
+/** A bounded, correctly-typed string, or null. */
+export const safeString = (value, { min = 0, max = 256 } = {}) => {
+  if (typeof value !== 'string') return null;
+  if (value.length < min || value.length > max) return null;
+  return value;
+};
+
+export const safeSessionId = (value) => {
+  const s = safeString(value, { min: 8, max: 64 });
+  return s && SESSION_ID_RE.test(s) ? s : null;
+};
+
+/**
+ * An SDP blob.
+ *
+ * The length bound is in JavaScript characters rather than bytes, so it is a
+ * ~3x-overestimate against UTF-8 — deliberately loose in the permissive
+ * direction, because the aim is to stop a 50 MB payload, not to shave kilobytes
+ * off a legitimate offer. A real offer for one video track plus one audio track
+ * is roughly 2-4 KB, so the default ceiling leaves enormous headroom.
+ *
+ * The floor matters as much as the ceiling: an SDP shorter than 20 characters
+ * cannot be a real description and is only ever an attempt to make the peer
+ * throw.
+ */
+export const safeSdp = (value, maxChars) => {
+  const s = safeString(value, { min: 20, max: maxChars });
+  if (s === null) return null;
+  return { type: 'offer', sdp: s };
+};
+
+/**
+ * An ICE candidate.
+ *
+ * Rebuilt field by field rather than forwarded. Forwarding the client's object
+ * would relay whatever extra properties it carried into another user's socket
+ * handler — the classic socket relay bug.
+ */
+export const safeCandidate = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (findPollutionKey(value) !== null) return null;
+
+  const candidate = safeString(value.candidate, { min: 1, max: 2048 });
+  if (candidate === null) return null;
+
+  const out = { candidate };
+
+  if (value.sdpMid !== undefined && value.sdpMid !== null) {
+    const mid = safeString(value.sdpMid, { max: 16 });
+    if (mid === null) return null;
+    out.sdpMid = mid;
+  }
+
+  if (value.sdpMLineIndex !== undefined && value.sdpMLineIndex !== null) {
+    const idx = value.sdpMLineIndex;
+    if (!Number.isInteger(idx) || idx < 0 || idx > 32) return null;
+    out.sdpMLineIndex = idx;
+  }
+
+  return out;
+};
+
+/** Mic/camera state. Two booleans, nothing else — no identity may ride along. */
+export const safeMediaState = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (typeof value.audioOn !== 'boolean' || typeof value.videoOn !== 'boolean') return null;
+  return { audioOn: value.audioOn, videoOn: value.videoOn };
+};
+
+/**
+ * Fail a test, and in production drop the payload, if a server → client emit
+ * ever carries something resembling identity.
+ *
+ * This is the enforcement point behind the `FORBIDDEN_PAYLOAD_KEYS` list.
+ */
+export const assertNoIdentity = (eventName, payload) => {
+  if (!payload || typeof payload !== 'object') return;
+  for (const key of Object.keys(payload)) {
+    if (FORBIDDEN_PAYLOAD_KEYS.includes(key)) {
+      throw new Error(
+        `[roulette] REFUSING to emit "${eventName}": payload carries "${key}". `
+        + 'Roulette partners must never receive identity — see ambitions/roulette.md §1.3.',
+      );
+    }
+  }
+};
+
+/**
+ * Wrap a handler so it cannot take the process down.
+ *
+ * Catches synchronous throws AND rejected promises, because an async handler
+ * that rejects reaches the same `unhandledRejection` path that `index.js:565`
+ * logs but does not exit on — silently swallowing a real bug is worse than
+ * crashing, so it is logged loudly.
+ *
+ * This is the single most important function in the file.
+ */
+const safeHandler = (name, fn, logger) => function wrapped(...args) {
+  try {
+    const result = fn(...args);
+    if (result && typeof result.catch === 'function') {
+      result.catch((err) => {
+        logger(`[roulette] async failure in "${name}"`, err);
+      });
+    }
+    return result;
+  } catch (err) {
+    logger(`[roulette] synchronous throw in "${name}" — contained`, err);
+    return undefined;
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * THE ENGINE
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * @param {object} opts
+ * @param {import('socket.io').Server} opts.io
+ * @param {object} opts.settings            ROULETTE_SETTINGS
+ * @param {(userId: string) => boolean} opts.deps.isAllowed
+ * @param {(a: string, b: string) => Promise<{ok:boolean, reason?:string, blame?:'a'|'b'}>} opts.deps.assertPairable
+ *        Fresh block + suspension check. MUST hit the database rather than any
+ *        socket cache: `chat.js:12` caches suspension state for 60s, which is
+ *        far too stale for "may this person see my camera".
+ * @param {ReturnType<import('../utils/signalingRateLimit.js').createSignalingRateLimiter>} [opts.rateLimiter]
+ * @param {(msg: string, err?: Error) => void} [opts.logger]
+ */
+export const createRouletteSignaling = ({
+  io,
+  settings,
+  deps,
+  rateLimiter = null,
+  logger = (...a) => console.error(...a),
+}) => {
+  /* ── STATE ────────────────────────────────────────────────────────────────
+   * In-memory on purpose. There is no Call model, no Redis adapter, and no
+   * sticky-session requirement, which keeps this stage to one deployable unit.
+   * The cost is real and must be stated rather than discovered: every call and
+   * every queued user is lost on restart or a Render free-tier cold start.
+   * That is acceptable for an allow-listed test mode and is NOT acceptable for
+   * a pilot — it belongs with the capacity work in Stage 10. */
+  const queue = [];
+  const sessions = new Map();     // sessionId → session
+  const socketIndex = new Map();  // socketId  → { entry } | { sessionId }
+  const socketUsers = new Map();  // socketId  → userId (for rate-limit eviction)
+  const waitTimers = new Map();   // socketId  → Timeout
+  const sessionTimers = new Map();// sessionId → Timeout
+
+  /* Pump serialisation.
+   *
+   * Pairing needs an `await` for the block/suspension check, and an `await`
+   * opens the door for a second `join` to interleave between the "is this pair
+   * still claimable" read and the write. Node being single-threaded does not
+   * save us — the interleaving happens across microtask boundaries.
+   *
+   * So pairing claims both entries synchronously (setting `pending`) BEFORE any
+   * await, and `pump` is serialised behind `pumping`/`pumpRequested` so two
+   * concurrent joins cannot run two pair attempts over the same pair. */
+  let pumping = false;
+  let pumpRequested = false;
+
+  const clearTimer = (map, key) => {
+    const t = map.get(key);
+    if (t) {
+      clearTimeout(t);
+      map.delete(key);
+    }
+  };
+
+  /** Emit to exactly one socket. Socket.IO gives every socket a room named
+   * after its own id, so this addresses one socket without a shared room. */
+  const toSocket = (socketId, event, payload) => {
+    assertNoIdentity(event, payload);
+    io.to(socketId).emit(event, payload);
+  };
+
+  const isConnected = (socketId) => {
+    const s = io.sockets?.sockets?.get?.(socketId);
+    return Boolean(s && s.connected);
+  };
+
+  /* ── QUEUE ───────────────────────────────────────────────────────────────── */
+
+  const findInQueue = (socketId) => queue.find((e) => e.socketId === socketId);
+
+  const removeFromQueue = (entry) => {
+    const idx = queue.indexOf(entry);
+    if (idx !== -1) queue.splice(idx, 1);
+    clearTimer(waitTimers, entry.socketId);
+    entry.pending = false;
+    if (socketIndex.get(entry.socketId)?.entry === entry) socketIndex.delete(entry.socketId);
+  };
+
+  /** Tell the user how long they may wait before we stop pretending (§13). */
+  const scheduleWaitTimeout = (entry) => {
+    const ms = settings.MAX_WAIT_SECONDS * 1000;
+    if (!Number.isFinite(ms) || ms <= 0) return;
+    const timer = setTimeout(() => {
+      waitTimers.delete(entry.socketId);
+      if (!findInQueue(entry)) return; // already paired — timer is stale
+      removeFromQueue(entry);
+      toSocket(entry.socketId, CALL_EVENTS.TERMINATED, {
+        reason: 'wait-timeout',
+        message: 'Nobody is available right now. Try again in a little while.',
+      });
+    }, ms);
+    if (typeof timer.unref === 'function') timer.unref();
+    waitTimers.set(entry.socketId, timer);
+  };
+
+  const enqueue = (socket, userId) => {
+    const entry = { socketId: socket.id, userId, queuedAt: Date.now(), pending: false };
+    queue.push(entry);
+    socketIndex.set(socket.id, { entry });
+    scheduleWaitTimeout(entry);
+    toSocket(socket.id, CALL_EVENTS.SEARCHING, {
+      waiting: true,
+      position: queue.length,
+      maxWaitSeconds: settings.MAX_WAIT_SECONDS,
+    });
+  };
+
+  /* ── SESSIONS ────────────────────────────────────────────────────────────── */
+
+  /**
+   * Tear a session down and tell both sides why.
+   *
+   * Order matters: the session is deleted from `sessions` BEFORE the emits, so a
+   * signal that arrives in the gap is rejected as unknown rather than relayed
+   * into a call that no longer exists.
+   */
+  const closeSession = (sessionId, { reason, message, initiator = null, requeue = null }) => {
+    const session = sessions.get(sessionId);
+    if (!session) return;
+
+    sessions.delete(sessionId);
+    clearTimer(sessionTimers, sessionId);
+
+    for (const side of [session.a, session.b]) {
+      if (socketIndex.get(side.socketId)?.sessionId === sessionId) {
+        socketIndex.delete(side.socketId);
+      }
+    }
+
+    for (const side of [session.a, session.b]) {
+      if (side.socketId === initiator) continue; // they know, they did it
+      toSocket(side.socketId, CALL_EVENTS.ENDED, { sessionId, reason, message });
+    }
+
+    // The peer of whoever pressed Next does NOT go back in the queue
+    // automatically — spec §11.4 gives them an explicit "Find next". Only the
+    // person who pressed Next resumes searching.
+    if (requeue) {
+      const socket = io.sockets?.sockets?.get?.(requeue.socketId);
+      if (socket && socket.connected) enqueue(socket, requeue.userId);
+    }
+  };
+
+  const createSession = (first, second) => {
+    const sessionId = randomUUID();
+    const session = {
+      sessionId,
+      a: { socketId: first.socketId, userId: first.userId },
+      b: { socketId: second.socketId, userId: second.userId },
+      createdAt: Date.now(),
+      candidates: 0,
+    };
+    sessions.set(sessionId, session);
+
+    // The longer-waiting user offers. Fixed by position in the queue, which is
+    // what removes glare: exactly one side ever creates an offer, so there is no
+    // simultaneous-offer collision to negotiate.
+    const caller = session.a;
+    const callee = session.b;
+
+    socketIndex.set(caller.socketId, { sessionId });
+    socketIndex.set(callee.socketId, { sessionId });
+
+    toSocket(caller.socketId, CALL_EVENTS.MATCHED, { sessionId, role: 'caller' });
+    toSocket(callee.socketId, CALL_EVENTS.MATCHED, { sessionId, role: 'callee' });
+
+    /* Handshake watchdog.
+     *
+     * If the media path never comes up, both sides are left staring at a
+     * spinner with no way to know whether it is still working. Stage 3 is
+     * STUN-only, so a restrictive network genuinely fails — and it must fail
+     * with words rather than silence. `PAIR_TIMEOUT_MS` is used here rather
+     * than `CONNECT_TIMEOUT_MS` deliberately: the spec requires the pairing
+     * offer to comfortably outlive the connect attempt, otherwise a slow peer
+     * pairs and immediately loses the offer. */
+    const ms = settings.PAIR_TIMEOUT_MS;
+    if (Number.isFinite(ms) && ms > 0) {
+      const timer = setTimeout(() => {
+        sessionTimers.delete(sessionId);
+        if (!sessions.has(sessionId)) return;
+        logger(`[roulette] session ${sessionId} never connected — tearing down`);
+        closeSession(sessionId, {
+          reason: 'connect-failed',
+          message: 'Could not connect. This network may be blocking the call.',
+        });
+      }, ms);
+      if (typeof timer.unref === 'function') timer.unref();
+      sessionTimers.set(sessionId, timer);
+    }
+
+    return session;
+  };
+
+  /** Is this socket a participant of this session? The ONLY relay authority. */
+  const ownsSession = (socket, sessionId) => {
+    const session = sessions.get(sessionId);
+    if (!session) return null;
+    const owns = session.a.socketId === socket.id || session.b.socketId === socket.id;
+    return owns ? session : null;
+  };
+
+  const peerOf = (session, socketId) => (
+    session.a.socketId === socketId ? session.b : session.a
+  );
+
+  /* ── PAIRING PUMP ────────────────────────────────────────────────────────── */
+
+  const pumpOnce = async () => {
+    for (;;) {
+      if (sessions.size >= settings.MAX_CONCURRENT_CALLS) return;
+
+      const i = queue.findIndex((e) => !e.pending);
+      if (i === -1) return;
+      const j = queue.findIndex((e, idx) => idx > i && !e.pending);
+      if (j === -1) return;
+
+      const first = queue[i];
+      const second = queue[j];
+
+      // Claim both synchronously, before any await. Everything below is
+      // guaranteed exclusive access to this pair.
+      first.pending = true;
+      second.pending = true;
+
+      let verdict;
+      try {
+        verdict = await deps.assertPairable(first.userId, second.userId);
+      } catch (err) {
+        logger('[roulette] assertPairable threw — refusing the pair', err);
+        verdict = { ok: false, reason: 'check-failed' };
+      }
+
+      if (!verdict || verdict.ok !== true) {
+        const reason = verdict?.reason || 'not-allowed';
+        const blame = verdict?.blame === 'a' ? first : second;
+
+        removeFromQueue(first);
+        removeFromQueue(second);
+
+        // Only the user responsible is told, and only in general terms. Telling
+        // them "you are blocked" confirms the block exists and who caused it.
+        const message = reason === 'blocked'
+          ? 'You cannot be matched with this person.'
+          : 'Could not start a session. Please try again.';
+
+        toSocket(blame.socketId, CALL_EVENTS.TERMINATED, { reason, message });
+
+        // The innocent party keeps waiting rather than being punished for
+        // someone else's block.
+        const innocent = blame === first ? second : first;
+        const innocentSocket = io.sockets?.sockets?.get?.(innocent.socketId);
+        if (innocentSocket && innocentSocket.connected) enqueue(innocentSocket, innocent.userId);
+
+        continue;
+      }
+
+      // Re-check that nobody's socket died while we awaited the database.
+      if (!isConnected(first.socketId) || !isConnected(second.socketId)) {
+        removeFromQueue(first);
+        removeFromQueue(second);
+        continue;
+      }
+
+      removeFromQueue(first);
+      removeFromQueue(second);
+      createSession(first, second);
+    }
+  };
+
+  const pump = async () => {
+    if (pumping) {
+      pumpRequested = true;
+      return;
+    }
+    pumping = true;
+    try {
+      do {
+        pumpRequested = false;
+        await pumpOnce();
+      } while (pumpRequested);
+    } finally {
+      pumping = false;
+    }
+  };
+
+  /* ── HANDLERS ────────────────────────────────────────────────────────────── */
+
+  const userIdOf = (socket) => String(socket.user?._id ?? '');
+
+  /** Gate every inbound event on the allow-list and a rate budget. */
+  const admit = (socket, cost = 1) => {
+    const userId = userIdOf(socket);
+    if (!userId || !deps.isAllowed(userId)) return null;
+
+    if (rateLimiter) {
+      const { ok, retryAfterMs } = rateLimiter.take(`call:${userId}`, cost);
+      if (!ok) {
+        toSocket(socket.id, CALL_EVENTS.RATE_LIMITED, {
+          reason: 'too-fast',
+          retryAfterMs,
+        });
+        return null;
+      }
+    }
+    return userId;
+  };
+
+  /** Shared preamble: validate sessionId, confirm ownership, fetch the peer. */
+  const withSession = (payload, socket, fn) => {
+    const sessionId = safeSessionId(payload?.sessionId);
+    if (!sessionId) return;
+    const session = ownsSession(socket, sessionId);
+    if (!session) return; // unknown session, or not yours — silently dropped
+    fn(session, peerOf(session, socket.id));
+  };
+
+  /**
+   * Build the handler set for ONE socket.
+   *
+   * Per-socket rather than engine-level because every handler needs the socket
+   * it arrived on. `safeHandler` still wraps each one, which is the guarantee
+   * that matters: it is applied at the single point where a listener is
+   * registered, so there is no way to add an unwrapped handler later.
+   */
+  const buildHandlers = (socket) => {
+    const handlers = new Map();
+    const on = (name, fn) => {
+      const wrapped = safeHandler(name, fn, logger);
+      handlers.set(name, wrapped);
+      return wrapped;
+    };
+
+    on(CALL_EVENTS.JOIN, () => {
+      const userId = admit(socket);
+      if (!userId) return;
+
+      const existing = socketIndex.get(socket.id);
+      if (existing?.sessionId && sessions.has(existing.sessionId)) return; // already in a call
+      if (existing?.entry) return; // already queued
+
+      if (sessions.size >= settings.MAX_CONCURRENT_CALLS) {
+        return toSocket(socket.id, CALL_EVENTS.TERMINATED, {
+          reason: 'at-capacity',
+          message: 'Roulette is full right now. Try again shortly.',
+        });
+      }
+
+      if (queue.length >= settings.MAX_QUEUE_SIZE) {
+        return toSocket(socket.id, CALL_EVENTS.TERMINATED, {
+          reason: 'queue-full',
+          message: 'Roulette is very busy right now. Try again shortly.',
+        });
+      }
+
+      enqueue(socket, userId);
+      return pump();
+    });
+
+    on(CALL_EVENTS.LEAVE_QUEUE, () => {
+      const entry = findInQueue(socket.id);
+      if (!entry) return;
+      removeFromQueue(entry);
+      toSocket(socket.id, CALL_EVENTS.SEARCHING, { waiting: false });
+    });
+
+    on(CALL_EVENTS.OFFER, (payload) => {
+      if (!admit(socket)) return;
+      withSession(payload, socket, (session, peer) => {
+        const sdp = safeSdp(payload?.sdp, settings.MAX_SDP_BYTES);
+        if (!sdp) return; // malformed offer, dropped — never relayed
+        toSocket(peer.socketId, CALL_EVENTS.OFFER, { sessionId: session.sessionId, sdp });
+      });
+    });
+
+    on(CALL_EVENTS.ANSWER, (payload) => {
+      if (!admit(socket)) return;
+      withSession(payload, socket, (session, peer) => {
+        const sdp = safeSdp(payload?.sdp, settings.MAX_SDP_BYTES);
+        if (!sdp) return;
+        toSocket(peer.socketId, CALL_EVENTS.ANSWER, { sessionId: session.sessionId, sdp });
+      });
+    });
+
+    on(CALL_EVENTS.ICE, (payload) => {
+      if (!admit(socket)) return;
+      withSession(payload, socket, (session, peer) => {
+        // Per-session candidate ceiling. The rate limiter bounds the rate; this
+        // bounds the total, because a slow trickle under the rate limit still
+        // accumulates.
+        if (session.candidates >= settings.MAX_CANDIDATES_PER_SESSION) return;
+        session.candidates += 1;
+
+        const candidate = safeCandidate(payload?.candidate);
+        if (!candidate) return;
+        toSocket(peer.socketId, CALL_EVENTS.ICE, { sessionId: session.sessionId, candidate });
+      });
+    });
+
+    on(CALL_EVENTS.MEDIA_STATE, (payload) => {
+      if (!admit(socket)) return;
+      withSession(payload, socket, (session, peer) => {
+        const state = safeMediaState(payload);
+        if (!state) return;
+        toSocket(peer.socketId, CALL_EVENTS.PEER_MEDIA, state);
+      });
+    });
+
+    on(CALL_EVENTS.NEXT, (payload) => {
+      if (!admit(socket)) return;
+      withSession(payload, socket, (session) => {
+        closeSession(session.sessionId, {
+          reason: 'peer-next',
+          message: 'They moved on.',
+          initiator: socket.id,
+          // The presser goes back to the queue with a FRESH wait start, so
+          // pressing Next repeatedly cannot buy infinite waiting time.
+          requeue: { socketId: socket.id, userId: userIdOf(socket) },
+        });
+        // The presser is waiting again, so the pump must run or they will sit
+        // idle until a stranger happens to arrive.
+        return pump();
+      });
+    });
+
+    on(CALL_EVENTS.END, (payload) => {
+      if (!admit(socket)) return;
+      withSession(payload, socket, (session) => {
+        closeSession(session.sessionId, {
+          reason: 'peer-left',
+          message: 'They left.',
+          initiator: socket.id,
+        });
+      });
+    });
+
+    return handlers;
+  };
+
+  /* ── DISCONNECT ──────────────────────────────────────────────────────────── */
+
+  /**
+   * Tear down whatever this socket was doing.
+   *
+   * Safe to call more than once for the same socket, and safe to call for a
+   * socket that was never in Roulette at all.
+   */
+  const handleDisconnect = (socketId) => {
+    const entry = findInQueue(socketId);
+    if (entry) removeFromQueue(entry);
+
+    const indexed = socketIndex.get(socketId);
+    if (indexed?.sessionId) {
+      closeSession(indexed.sessionId, { reason: 'peer-left', message: 'They left.' });
+    }
+
+    clearTimer(waitTimers, socketId);
+    socketIndex.delete(socketId);
+
+    const userId = socketUsers.get(socketId);
+    if (userId && rateLimiter) rateLimiter.forget(`call:${userId}`);
+    socketUsers.delete(socketId);
+  };
+
+  /* ── ATTACH ──────────────────────────────────────────────────────────────── */
+
+  const attachSocket = (socket) => {
+    const userId = userIdOf(socket);
+    if (userId) socketUsers.set(socket.id, userId);
+
+    // Built ONCE per socket and registered explicitly. `safeHandler` is applied
+    // inside `buildHandlers`, at the one place a listener is created, so there
+    // is no path that registers an unwrapped handler.
+    for (const [event, fn] of buildHandlers(socket)) {
+      socket.on(event, fn);
+    }
+
+    socket.on('disconnect', () => {
+      try {
+        handleDisconnect(socket.id);
+      } catch (err) {
+        logger('[roulette] handleDisconnect threw — contained', err);
+      }
+    });
+  };
+
+  return {
+    attachSocket,
+    handleDisconnect,
+    /* Introspection for tests and the boot log. */
+    stats: () => ({
+      queued: queue.length,
+      sessions: sessions.size,
+      waitTimers: waitTimers.size,
+      sessionTimers: sessionTimers.size,
+    }),
+    /** Test-only: build a socket's handlers without registering them. */
+    buildHandlers,
+    /** Test-only: is this user id in the waiting queue? */
+    isQueued: (userId) => queue.some((e) => e.userId === userId),
+    /** Test-only: does this session exist? */
+    hasSession: (sessionId) => sessions.has(sessionId),
+  };
+};
+
+export default createRouletteSignaling;
 
 ```
 
@@ -1354,6 +2138,9 @@ export const sendOTP = async (email, otp) => {
   const apiKey = process.env.RESEND_API_KEY;
 
   if (!apiKey) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('RESEND_API_KEY is required to send OTP emails in production');
+    }
     console.log(`\n----------------------------------------`);
     console.log(`[DEV MODE] OTP for ${email}: ${otp}`);
     console.log(`----------------------------------------\n`);
@@ -1544,6 +2331,42 @@ export const isAcceptableMediaUrl = (url, userId) =>
 
 ```
 
+### ./server/utils/moderationLedger.js
+
+```
+import crypto from 'crypto';
+import { normalizeEmail } from './otpHash.js';
+import ModerationLedger from '../models/ModerationLedger.js';
+
+export const fingerprintModerationEmail = (email) => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error('JWT_SECRET is required to fingerprint moderation identifiers');
+
+  return crypto
+    .createHmac('sha256', secret)
+    .update(`moderation-ledger:${normalizeEmail(email)}`)
+    .digest('hex');
+};
+
+export const preserveShadowban = async (user) => {
+  if (!user?.email || !user.shadowbannedAt) return null;
+
+  const emailFingerprint = fingerprintModerationEmail(user.email);
+  return ModerationLedger.findOneAndUpdate(
+    { emailFingerprint },
+    {
+      $set: {
+        shadowbannedAt: user.shadowbannedAt,
+        shadowbanScore: Number(user.shadowbanScore) || 0,
+        contentFrozen: Boolean(user.contentFrozen),
+      },
+    },
+    { upsert: true, new: true, runValidators: true }
+  );
+};
+
+```
+
 ### ./server/utils/otpHash.js
 
 ```
@@ -1580,537 +2403,5 @@ export const verifyOtp = (email, otp, storedHash) => {
 
 export { normalizeEmail };
 
-```
-
-### ./server/utils/partnerView.js
-
-```
-/**
- * 🛡️ PARTNER VIEW — the single answer to "what may this connection show?"
- *
- * ── WHY THIS FILE EXISTS ─────────────────────────────────────────────────────
- * Before this, "can person A see person B's profile?" was decided
- * independently by every screen that displayed a name. Twenty-two inline sites
- * read `user.name` or `user.photos[0]` directly, and four server paths embedded
- * real names in payloads and push titles. There was no rule to break and no
- * single place to change — which is why a promise of "your profile is hidden"
- * could not be kept, and why it could not be tested.
- *
- * This module is that rule. It is deliberately boring: one lookup, one
- * fallback chain, no clever branching. Every surface that shows a partner
- * eventually calls `displayNameFor` instead of reading a field itself, which
- * is what makes the promise auditable.
- *
- * ── THE INVARIANT ────────────────────────────────────────────────────────────
- *   NO GRANT MEANS NO ACCESS. Not "unless it is a deck connection", not "unless
- *   the field is missing". Absence is denial.
- *
- * That is the whole design. It fails closed because there is no branch that
- * could decide otherwise — the only way to grant access is to write a grant.
- *
- * ── NOT CALLED ANYTHING YET ──────────────────────────────────────────────────
- * Stage 1 defines and tests the contract. Wiring it into Chat, the Requests
- * list, search, typing events and push notifications is Stage 8, and the
- * acceptance gate for that stage is that all thirteen of those surfaces call
- * these functions. Until then no screen changes behaviour, which is precisely
- * why this can be merged without regression risk.
- *
- * Design source: ambitions/roulette.md §4
- */
-
-import Alignment from '../models/Alignment.js';
-
-/**
- * Placeholder shown when nothing authorises a real identity.
- *
- * ⚠️ Never derive this from the user's name, college, ObjectId or an avatar.
- * The whole point is that a partner learns nothing. This string is the same
- * for everyone so it also leaks nothing by comparison — two strangers looking
- * at each other see identical text.
- */
-export const ANONYMOUS_LABEL = 'Stranger';
-
-/**
- * Resolve the OTHER user in a connection.
- *
- * @param {{ users?: Array }} connection  an Alignment document or plain object
- * @param {string|import('mongoose').Types.ObjectId} viewerId
- * @returns {string|null} the partner's id, or null if viewerId is not a member
- */
-export const partnerIdFor = (connection, viewerId) => {
-  const users = Array.isArray(connection?.users) ? connection.users : [];
-  if (users.length !== 2) return null;
-  const viewer = String(viewerId);
-  const partner = users.find((u) => String(u) !== viewer);
-  return partner ? String(partner) : null;
-};
-
-/**
- * The authorisation question, answered directly from the document.
- *
- * Pure: takes an already-loaded connection, hits no database. `canViewProfile`
- * below is the loading variant.
- *
- * @param {{ profileGrants?: Array }} connection
- * @param {string} viewerId
- * @param {string} subjectId
- * @returns {boolean} true ONLY if an explicit grant exists
- */
-export const hasGrant = (connection, viewerId, subjectId) => {
-  const grants = Array.isArray(connection?.profileGrants) ? connection.profileGrants : [];
-  const viewer = String(viewerId);
-  const subject = String(subjectId);
-  // An empty list is the common case for a hidden connection, so bail before
-  // doing any string comparison work.
-  if (grants.length === 0) return false;
-  return grants.some((g) => String(g?.viewerId) === viewer && String(g?.subjectId) === subject);
-};
-
-/**
- * May `viewerId` see `subjectId`'s public profile through this connection?
- *
- * @param {object} connection  a loaded Alignment
- * @param {string} viewerId
- * @param {string} [subjectId]  defaults to "whoever else is in it"
- * @returns {boolean}
- */
-export const canViewProfileIn = (connection, viewerId, subjectId) => {
-  // A connection is two people by definition, and Alignment.js:53-63 enforces
-  // that on save. Refusing anything else here is defence in depth for a
-  // function whose entire job is to be un-grantable: a malformed document
-  // naming extra members must not become a way to hand out access, even if
-  // it happens to contain a matching grant.
-  const users = Array.isArray(connection?.users) ? connection.users : [];
-  if (users.length !== 2) return false;
-
-  const subject = subjectId ? String(subjectId) : partnerIdFor(connection, viewerId);
-  if (!subject || !viewerId) return false;
-  if (String(viewerId) === subject) return false;
-  return hasGrant(connection, viewerId, subject);
-};
-
-/**
- * The nickname this connection records for the partner, if any.
- *
- * @param {object} connection
- * @param {string} partnerId
- * @returns {string|null}
- */
-export const aliasFor = (connection, partnerId) => {
-  const aliases = Array.isArray(connection?.conversationAliases)
-    ? connection.conversationAliases
-    : [];
-  const partner = String(partnerId);
-  const found = aliases.find((a) => String(a?.userId) === partner);
-  const alias = found?.alias;
-  return typeof alias === 'string' && alias.trim() ? alias.trim() : null;
-};
-
-/**
- * The display name for a partner, in a fixed order of preference.
- *
- * 1. A nickname recorded for this connection  → use it
- * 2. A grant authorises their real name       → use their real name
- * 3. Otherwise                                → ANONYMOUS_LABEL
- *
- * Order matters and is not interchangeable. The alias wins even after a
- * mutual reveal, which is deliberate (spec §8.2): the conversation keeps the
- * name people chose for each other, and the real name is still available
- * through `canViewProfile` for the profile sheet. A user who has seen
- * "Moonwalker" for a week should not have that silently replaced mid-chat
- * because they later agreed to share profiles.
- *
- * ⚠️ Callers that want to display a real name must ALSO check
- * `canViewProfileIn` — this function is for labels, not for authorisation.
- * They coincide today by construction, and will drift the moment anyone adds
- * a UI that renders one without the other.
- *
- * @param {object} connection
- * @param {string} viewerId
- * @param {{ name?: string }} [partnerUser]  the partner's user doc, for the real name
- * @returns {string}
- */
-export const displayNameIn = (connection, viewerId, partnerUser) => {
-  const partnerId = partnerIdFor(connection, viewerId);
-  if (!partnerId) return ANONYMOUS_LABEL;
-
-  const alias = aliasFor(connection, partnerId);
-  if (alias) return alias;
-
-  if (canViewProfileIn(connection, viewerId, partnerId)) {
-    const real = partnerUser?.name;
-    if (typeof real === 'string' && real.trim()) return real.trim();
-  }
-
-  return ANONYMOUS_LABEL;
-};
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * DATABASE-BACKED VARIANTS
- *
- * The pure functions above are what the tests exercise and what every call
- * site should prefer. These exist so a route does not have to hand-roll the
- * same two queries.
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-/**
- * Load a connection and answer the authorisation question.
- *
- * @param {string} alignmentId
- * @param {string} viewerId
- * @returns {Promise<{ connection: object|null, partnerId: string|null, canView: boolean }>}
- */
-export const canViewProfile = async (alignmentId, viewerId) => {
-  const connection = await Alignment.findById(alignmentId).lean();
-  if (!connection) return { connection: null, partnerId: null, canView: false };
-
-  const partnerId = partnerIdFor(connection, viewerId);
-  // A non-member gets the same answer as a stranger: false. Never throw and
-  // never distinguish "not a member" from "not allowed" — that difference is
-  // an oracle for probing whether a connection exists.
-  const canView = partnerId ? canViewProfileIn(connection, viewerId, partnerId) : false;
-  return { connection, partnerId, canView };
-};
-
-/**
- * Load a connection and resolve a partner's display name.
- *
- * @param {string} alignmentId
- * @param {string} viewerId
- * @param {string} [partnerId]  avoids a lookup when the caller already has it
- * @param {{ name?: string }} [partnerUser]  avoids a lookup when already loaded
- * @returns {Promise<string>}
- */
-export const displayNameFor = async (alignmentId, viewerId, partnerId, partnerUser) => {
-  const connection = await Alignment.findById(alignmentId).lean();
-  if (!connection) return ANONYMOUS_LABEL;
-
-  const partner = partnerId ? String(partnerId) : partnerIdFor(connection, viewerId);
-  if (!partner) return ANONYMOUS_LABEL;
-
-  const alias = aliasFor(connection, partner);
-  if (alias) return alias;
-
-  if (canViewProfileIn(connection, viewerId, partner)) {
-    const name = partnerUser?.name;
-    if (typeof name === 'string' && name.trim()) return name.trim();
-  }
-
-  return ANONYMOUS_LABEL;
-};
-
-/**
- * Build the grant rows a brand-new connection starts with.
- *
- * The asymmetry is the feature. Entering Roulette with "show my profile" ON
- * grants your partner access to YOUR profile and grants nobody access to
- * theirs — visibility is something you give, not something you receive.
- *
- * @param {{ _id: string }} viewer   the person creating the connection
- * @param {string} partnerId
- * @param {boolean} viewerShowsProfile
- * @returns {Array<object>} zero or one grant
- */
-export const grantsForNewConnection = (viewer, partnerId, viewerShowsProfile) => {
-  if (!viewerShowsProfile) return [];
-  return [
-    {
-      viewerId: String(partnerId),
-      subjectId: String(viewer._id),
-      source: 'roulette_visible',
-      grantedAt: new Date(),
-    },
-  ];
-};
-
-/**
- * The grants to write when both parties consent to share profiles.
- *
- * Always exactly two, in both directions — a mutual reveal that only
- * unhid one person would be a bug, not a partial success.
- *
- * @param {string} a
- * @param {string} b
- * @returns {Array<object>}
- */
-export const grantsForMutualReveal = (a, b) => {
-  const now = new Date();
-  return [
-    { viewerId: String(a), subjectId: String(b), source: 'roulette_reveal', grantedAt: now },
-    { viewerId: String(b), subjectId: String(a), source: 'roulette_reveal', grantedAt: now },
-  ];
-};
-
-```
-
-### ./server/utils/publicCard.js
-
-```
-import { withFreshAge } from './age.js';
-
-/**
- * The ONLY fields another person may see on a card.
- *
- * An allowlist, not a denylist, and this function enforces it itself rather than
- * trusting the caller to have selected these fields first. The deck route does
- * `.select(CARD_FIELDS)`, so projection looked redundant there — but the
- * `profile-updated` broadcast hands it a full user document, and a projection
- * that only stripped `college` shipped `email`, `isVerified`, `shadowbanScore`
- * and `adminNotes` to every connected socket. Adding a field to the schema would
- * have leaked it silently.
- */
-export const CARD_FIELDS = [
-  'name', 'photos', 'bio', 'bioPhoto', 'year', 'pronouns', 'graduatingYear',
-  'college', 'collegeCode', 'showCollege', 'dob', 'age', 'interests', 'intent',
-  'prompts', 'interestedIn', 'gender', 'profileScore', 'lastActive', 'gapYear',
-];
-
-/** Space-separated projection, for `.select()` on a Mongoose query. */
-export const CARD_FIELDS_SELECT = CARD_FIELDS.join(' ');
-
-/**
- * Project a user document — Mongoose document or plain object — down to the
- * public card shape.
- *
- * Deliberately NOT included: `hybridScore`. It is relative to the VIEWER (it
- * measures how well the candidate matches the person being shown the deck), so it
- * can only be computed for a specific reader. Callers that know the viewer compute
- * it separately and spread it on top; a broadcast payload carries only the
- * view-independent fields, and each client keeps whatever viewer-relative scores
- * it already had.
- */
-export const toPublicCard = (user) => {
-  if (!user) return user;
-
-  /* Normalise Mongoose documents to plain objects first.
-     `const { a, ...rest } = doc` reads `a` through the prototype getter, but a
-     rest-spread copies OWN enumerable properties — and a document keeps its
-     schema fields under `_doc`, not on itself. Spreading a document therefore
-     yields internals, not fields. The deck route passes `.lean()` documents so
-     it never hit this; the broadcast path did, and shipped
-     `{bio: undefined, profileScore: undefined}` while still looking correct,
-     because the explicitly re-added `college` happened to survive. */
-  const src = typeof user.toObject === 'function' ? user.toObject() : user;
-
-  const out = {};
-  for (const field of CARD_FIELDS) {
-    if (field in src) out[field] = src[field];
-  }
-
-  /* 🔒 CAMPUS BADGE — stripped here, not hidden in CSS.
-
-     Hiding it client-side still ships it over the wire, so anyone opening
-     devtools sees every card's college regardless of the setting, and the
-     toggle is a decoration rather than the privacy control it claims to be.
-     Removing it at the projection means the data never leaves the database.
-
-     Keyed on the OWNER's `showCollege`, never the viewer's: this controls
-     whether people can see YOU, and says nothing about what you are allowed to
-     see. Someone with the badge off is still shown college names on other
-     people's cards. The `showCollege` flag itself is dropped either way — it is
-     the owner's private preference and no card needs it. */
-  const showCollege = out.showCollege;
-  delete out.showCollege;
-  if (showCollege === false) {
-    delete out.college;
-    delete out.collegeCode;
-  }
-
-  return withFreshAge(out);
-};
-
-```
-
-### ./server/utils/push.js
-
-```
-import webPush from 'web-push';
-import User from '../models/User.js';
-
-const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
-const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
-
-if (vapidPublicKey && vapidPrivateKey) {
-  webPush.setVapidDetails(
-    'mailto:admin@matchalize.app',
-    vapidPublicKey,
-    vapidPrivateKey
-  );
-}
-
-export const sendPushNotification = async (userId, payload) => {
-  try {
-    // ⚠️ The status flags were never selected here, so they could never be
-    // tested. Suspension blocks the *user* from acting (middleware/auth.js
-    // rejects them and the deck filters them out), but it did nothing to stop
-    // their device being handed inbound content: an active alignment is not
-    // deactivated on suspension, so their counterpart could keep messaging them
-    // and the lock screen kept showing up to 100 chars of the message text.
-    // The fix is here rather than at each call site so no future caller can
-    // reintroduce it by forgetting a pre-check.
-    const user = await User.findById(userId).select(
-      'pushSubscription name suspended isDeleted shadowbannedAt contentFrozen'
-    );
-    if (!user?.pushSubscription) return false;
-
-    if (user.suspended || user.isDeleted) {
-      // Moderation action, not a transient failure: drop the subscription so a
-      // suspended device stops being a notification target entirely rather than
-      // relying on this guard on every future send.
-      await User.findByIdAndUpdate(userId, { pushSubscription: null }).catch(() => {});
-      console.warn(
-        `[push] Suppressed notification for ${userId} (suspended=${!!user.suspended} deleted=${!!user.isDeleted}); cleared subscription`
-      );
-      return false;
-    }
-
-    // Shadowbanned users still function normally in the app (that is the point of
-    // a shadowban), so they keep receiving their own notifications — only the
-    // sender is misled. Not treated as a suppression case.
-
-    const notificationPayload = {
-      title: payload.title || 'Matchalize',
-      body: payload.body || '',
-      icon: '/icons/icon-192.png',
-      badge: '/icons/badge-72.png',
-      data: payload.data || {},
-      vibrate: [100, 50, 100],
-    };
-
-    await webPush.sendNotification(
-      user.pushSubscription,
-      JSON.stringify(notificationPayload)
-    );
-    return true;
-  } catch (error) {
-    if (error.statusCode === 410 || error.statusCode === 404) {
-      // Subscription expired or invalid, remove it
-      await User.findByIdAndUpdate(userId, { pushSubscription: null }).catch(() => {});
-    }
-    console.error('Push notification error:', error.message);
-    return false;
-  }
-};
-
-export const generateVapidKeys = () => {
-  return webPush.generateVAPIDKeys();
-};
-
-```
-
-### ./server/utils/queue.js
-
-```
-import * as Sentry from '@sentry/node';
-
-// A zero-dependency, free background task runner.
-// Detaches async tasks (push notifications, emails) from the Express response cycle.
-// Concurrency-capped FIFO worker pool so a burst of tasks (e.g. push at launch)
-// can't overwhelm external services or spike memory.
-const MAX_CONCURRENT = 20;
-
-// ⚠️ A task that never settles used to leak its slot FOREVER: `running` was only
-// decremented in `.finally()`, which never runs if the promise never resolves.
-// Twenty such tasks and `running` stayed at 20, so the `while` below never ran
-// again — and every subsequent push notification, email and background job for
-// the entire app silently stopped, forever, with no log line, no Sentry event and
-// no metric. The worst possible failure mode: notifications just quietly quit.
-//
-// The timeout converts "hangs forever" into "fails loudly, then moves on", and
-// the saturation log makes the condition diagnosable instead of invisible.
-const TASK_TIMEOUT_MS = 15_000;
-
-// Bound memory when producers outpace consumers. Without this, `queue.push` is
-// unbounded and a traffic spike can grow the array without limit.
-const MAX_QUEUE_LENGTH = 1000;
-
-let droppedTasks = 0;
-let timedOutTasks = 0;
-
-const queue = [];
-let running = 0;
-
-const pump = () => {
-  // Diagnose the wedge condition even when it happens, rather than discovering
-  // it weeks later from "users say notifications stopped".
-  if (queue.length > MAX_QUEUE_LENGTH / 2 && running >= MAX_CONCURRENT) {
-    console.warn(
-      `[Background Queue] saturated: ${queue.length} queued, ${running}/${MAX_CONCURRENT} slots in use`
-    );
-  }
-
-  while (running < MAX_CONCURRENT && queue.length > 0) {
-    const task = queue.shift();
-    running += 1;
-
-    // ⚠️ The slot must be released by OUR chain settling, not by the task's own
-    // promise settling. `running` is decremented in `.finally()` below, and
-    // `.finally()` only runs when the promise it is attached to settles. Merely
-    // logging on a timer is therefore not enough — the chain stays pending and the
-    // slot leaks anyway. So the task is RACED against the timer: when the timer
-    // wins, our promise rejects, `.catch()` records it and `.finally()` frees the
-    // slot, while the abandoned task keeps running harmlessly in the background
-    // (these are fire-and-forget notifications, so there is nothing to cancel).
-    // `rejectTimeout` is wired into the Promise.race below. It must be declared
-    // before the timer so the timer callback can reach it.
-    let rejectTimeout;
-    const timer = setTimeout(() => {
-      timedOutTasks += 1;
-      console.error(
-        `[Background Queue] task exceeded ${TASK_TIMEOUT_MS}ms; releasing its slot`
-      );
-      rejectTimeout?.(new Error(`task exceeded ${TASK_TIMEOUT_MS}ms`));
-    }, TASK_TIMEOUT_MS);
-
-    Promise.resolve()
-      .then(() => {
-        // Arm the race: whichever settles first wins.
-        return Promise.race([
-          Promise.resolve().then(task),
-          new Promise((_, reject) => {
-            rejectTimeout = reject;
-          }),
-        ]);
-      })
-      .catch((error) => {
-        // The timer already logged the timeout, and an abandoned task is not an
-        // application bug worth waking Sentry for — it is an infra symptom. Real
-        // task failures still get reported.
-        if (error?.message?.includes(`exceeded ${TASK_TIMEOUT_MS}ms`)) return;
-        console.error('[Background Queue Error]', error);
-        // Surface background failures in Sentry when initialized (safe no-op if DSN unset)
-        Sentry.captureException(error);
-      })
-      .finally(() => {
-        clearTimeout(timer);
-        running -= 1;
-        setImmediate(pump);
-      });
-  }
-};
-
-export const addToQueue = (task) => {
-  if (queue.length >= MAX_QUEUE_LENGTH) {
-    droppedTasks += 1;
-    // Dropping is strictly better than growing without bound, and the counter
-    // makes it visible.
-    console.error(
-      `[Background Queue] at capacity (${MAX_QUEUE_LENGTH}); dropped task. Total dropped: ${droppedTasks}`
-    );
-    return;
-  }
-  queue.push(task);
-  setImmediate(pump);
-};
-
-/** Health counters — for debugging "notifications stopped" reports. */
-export const getQueueStats = () => ({
-  queued: queue.length,
-  running,
-  maxConcurrent: MAX_CONCURRENT,
-  maxQueueLength: MAX_QUEUE_LENGTH,
-  droppedTasks,
-  timedOutTasks,
-});
 ```
 

@@ -1,5 +1,5 @@
-// v2 → v3: the v2 cache had no eviction and was caching /uploads/ (photos and
-// voice notes), which are cookie-gated but served from cache without a server
+// v2 → v3: the v2 cache had no eviction and was caching /uploads/ (photos),
+// which are cookie-gated but served from cache without a server
 // request. Bumping the name makes `activate` delete the whole old cache on the
 // next load, purging what was already stored on real devices.
 // Bump this every time caching behaviour changes — it is the only eviction
@@ -42,17 +42,17 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   // NEVER cache API responses — otherwise stale chat/notification data could be served
   if (url.pathname.startsWith('/api/')) return;
-  // NEVER cache /uploads/ — these are the user's own photos and voice notes.
+  // NEVER cache /uploads/ — these are the user's own photos.
   //
   // Two reasons, and the second is the serious one:
   //   1. They are unbounded user media. The cache below is cache-first with no
-  //      eviction and no TTL, so every voice note ever played accumulated in the
+  //      eviction and no TTL, so every uploaded photo accumulated in the
   //      browser permanently — the cache only clears when someone hand-edits
   //      CACHE_NAME (see `activate`).
   //   2. `/uploads` is served behind `protect` (server/index.js). A cache hit is
   //      returned WITHOUT any request to the server, so no cookie is ever
   //      checked. On a shared device the next person to open the app would be
-  //      served the previous user's photos and voice notes straight out of the
+  //      served the previous user's photos straight out of the
   //      cache.
   //
   // In production uploads are Cloudinary URLs (cross-origin, already skipped by

@@ -10,6 +10,15 @@ export const messageLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+export const destructiveActionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  keyGenerator: (req) => req.user?._id?.toString() || req.ip,
+  message: { message: 'Too many destructive actions. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Limit discover actions (likes/passes) to 100 per 10 minutes per user
 export const discoverLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
@@ -51,6 +60,17 @@ export const otpEmailLimiter = rateLimit({
     return email || `no-email-${req.ip}`;
   },
   message: { message: 'Too many verification requests for this email. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Add a per-source cap before the per-email cap so one client cannot consume
+// arbitrary OTP sends for many addresses. Keep this generous for shared campus
+// networks; the per-email limiter remains as a separate delivery-abuse guard.
+export const otpIpLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: Number(process.env.OTP_IP_LIMIT_MAX) || 20,
+  message: { message: 'Too many verification requests from this device. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });

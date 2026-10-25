@@ -1,7 +1,7 @@
-# Chunk 24 — Server Tests
+# Chunk 25 — Server Tests
 
-> Matchalize · `server-tests` · files 24 of 27 chunks · 10 file(s) · 74 KB · ~21,558 tokens
-> Generated 2026-10-17 21:10.
+> Matchalize · `server-tests` · files 25 of 28 chunks · 15 file(s) · 80 KB · ~23,267 tokens
+> Generated 2026-10-18 20:29.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -14,7 +14,12 @@
 > - `./server/tests/society/cast.mjs`
 > - `./server/tests/society/personas.mjs`
 > - `./server/tests/society/seedSociety.mjs`
+> - `./server/tests/unit/email.test.js`
+> - `./server/tests/unit/moderationLedger.test.js`
 > - `./server/tests/unit/partnerView.test.js`
+> - `./server/tests/unit/profileStringLimits.test.js`
+> - `./server/tests/unit/reportAnalyticsIndexes.test.js`
+> - `./server/tests/unit/sanitizeMongoInput.test.js`
 
 ---
 ### ./server/tests/lib/env.mjs
@@ -1719,6 +1724,95 @@ export async function seedSociety() {
 }
 ```
 
+### ./server/tests/unit/email.test.js
+
+```
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { sendOTP } from '../../utils/email.js';
+
+test('OTP delivery fails explicitly in production without Resend configuration', async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousApiKey = process.env.RESEND_API_KEY;
+  process.env.NODE_ENV = 'production';
+  delete process.env.RESEND_API_KEY;
+
+  try {
+    await assert.rejects(
+      sendOTP('student@example.edu', '123456'),
+      /RESEND_API_KEY is required/
+    );
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousApiKey === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = previousApiKey;
+  }
+});
+
+test('OTP delivery keeps the local testing path when Resend is not configured', async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousApiKey = process.env.RESEND_API_KEY;
+  const previousLog = console.log;
+  const logged = [];
+  process.env.NODE_ENV = 'test';
+  delete process.env.RESEND_API_KEY;
+  console.log = (...args) => logged.push(args.join(' '));
+
+  try {
+    assert.equal(await sendOTP('student@example.edu', '123456'), true);
+    assert.ok(logged.some((line) => line.includes('123456')));
+  } finally {
+    console.log = previousLog;
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousApiKey === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = previousApiKey;
+  }
+});
+
+```
+
+### ./server/tests/unit/moderationLedger.test.js
+
+```
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { fingerprintModerationEmail } from '../../utils/moderationLedger.js';
+
+test('moderation email fingerprints normalize email and never contain the email', () => {
+  const previousSecret = process.env.JWT_SECRET;
+  process.env.JWT_SECRET = 'unit-test-secret';
+
+  try {
+    const first = fingerprintModerationEmail(' Student@Example.edu ');
+    const normalized = fingerprintModerationEmail('student@example.edu');
+
+    assert.equal(first, normalized);
+    assert.match(first, /^[a-f0-9]{64}$/);
+    assert.equal(first.includes('student'), false);
+  } finally {
+    if (previousSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = previousSecret;
+  }
+});
+
+test('moderation email fingerprinting fails explicitly without the server secret', () => {
+  const previousSecret = process.env.JWT_SECRET;
+  delete process.env.JWT_SECRET;
+
+  try {
+    assert.throws(
+      () => fingerprintModerationEmail('student@example.edu'),
+      /JWT_SECRET is required/
+    );
+  } finally {
+    if (previousSecret !== undefined) process.env.JWT_SECRET = previousSecret;
+  }
+});
+
+```
+
 ### ./server/tests/unit/partnerView.test.js
 
 ```
@@ -1991,6 +2085,131 @@ test('source alone never authorises anything', () => {
       `source:'${source}' with no grants must not grant access`,
     );
   }
+});
+
+```
+
+### ./server/tests/unit/profileStringLimits.test.js
+
+```
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import User from '../../models/User.js';
+
+test('profile string fields reject values longer than 50 characters', () => {
+  const user = new User({
+    email: 'limits@example.edu',
+    gender: 'x'.repeat(51),
+    intent: ['x'.repeat(51)],
+    interestedIn: ['Female'],
+    interests: ['x'.repeat(51)],
+  });
+
+  const error = user.validateSync();
+  assert.ok(error);
+  for (const field of ['gender', 'intent.0', 'interests.0']) {
+    assert.ok(error.errors[field], `expected ${field} to enforce its max length`);
+  }
+});
+
+test('profile string fields allow values at the 50-character limit', () => {
+  const user = new User({
+    email: 'limits@example.edu',
+    gender: 'x'.repeat(50),
+    intent: ['x'.repeat(50)],
+    interestedIn: ['Female'],
+    interests: ['x'.repeat(50)],
+  });
+
+  assert.equal(user.validateSync(), undefined);
+});
+
+test('interestedIn only accepts supported gender preferences', () => {
+  const invalidUser = new User({
+    email: 'invalid-preference@example.edu',
+    interestedIn: ['Everyone', 'Unlisted value'],
+  });
+
+  assert.ok(invalidUser.validateSync()?.errors['interestedIn.1']);
+
+  const validUser = new User({
+    email: 'valid-preference@example.edu',
+    interestedIn: ['Female', 'Non-binary', 'Everyone'],
+  });
+
+  assert.equal(validUser.validateSync(), undefined);
+});
+
+```
+
+### ./server/tests/unit/reportAnalyticsIndexes.test.js
+
+```
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import Report from '../../models/Report.js';
+import Analytics from '../../models/Analytics.js';
+
+test('reporter/reported index allows multiple reports from the same pair', () => {
+  const pairIndex = Report.schema.indexes().find(([keys]) =>
+    keys.reporter === 1 && keys.reported === 1
+  );
+
+  assert.ok(pairIndex);
+  assert.notEqual(pairIndex[1]?.unique, true);
+});
+
+test('analytics expires after 90 days and indexes user/event queries', () => {
+  const indexes = Analytics.schema.indexes();
+  const ttlIndex = indexes.find(([keys]) => keys.timestamp === 1);
+  const userEventIndex = indexes.find(([keys]) => keys.user === 1 && keys.event === 1);
+
+  assert.equal(ttlIndex?.[1]?.expireAfterSeconds, 90 * 24 * 60 * 60);
+  assert.ok(userEventIndex);
+});
+
+```
+
+### ./server/tests/unit/sanitizeMongoInput.test.js
+
+```
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import sanitizeMongoInput, { sanitizeObject } from '../../middleware/sanitizeMongoInput.js';
+
+test('sanitizeObject removes Mongo operator and dotted keys recursively', () => {
+  const input = {
+    safe: 'value',
+    '$where': 'malicious',
+    nested: {
+      'profile.name': 'malicious',
+      keep: [{ '$gt': 1, score: 5 }],
+    },
+  };
+
+  assert.deepEqual(sanitizeObject(input), {
+    safe: 'value',
+    nested: {
+      keep: [{ score: 5 }],
+    },
+  });
+});
+
+test('middleware replaces query with a sanitized own property for Express 5', () => {
+  const req = {
+    body: { '$ne': null, name: 'safe' },
+    query: { 'filter.$gt': 0, search: 'safe' },
+  };
+  let continued = false;
+
+  sanitizeMongoInput(req, {}, () => {
+    continued = true;
+  });
+
+  assert.deepEqual(req.body, { name: 'safe' });
+  assert.deepEqual(req.query, { search: 'safe' });
+  assert.equal(Object.hasOwn(req, 'query'), true);
+  assert.equal(continued, true);
 });
 
 ```

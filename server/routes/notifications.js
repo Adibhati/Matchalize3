@@ -8,6 +8,7 @@ import { protect } from '../middleware/auth.js';
 import { areBlocked } from '../middleware/blockFilter.js';
 import { sendPushNotification } from '../utils/push.js';
 import { addToQueue } from '../utils/queue.js';
+import { CARD_FIELDS_SELECT, toPublicCard } from '../utils/publicCard.js';
 
 const router = express.Router();
 
@@ -90,11 +91,23 @@ router.get('/', protect, async (req, res) => {
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit)
-      .populate('senderId', 'name photos year gender pronouns interests age bio prompts suspended isDeleted')
+      .populate('senderId', `${CARD_FIELDS_SELECT} suspended isDeleted`)
       .populate('interactionRef');
 
     res.status(200).json({
-      notifications,
+      notifications: notifications.map((notification) => {
+        const result = notification.toObject();
+        const sender = result.senderId;
+        if (sender) {
+          result.senderId = {
+            ...toPublicCard(sender),
+            _id: sender._id,
+            suspended: sender.suspended,
+            isDeleted: sender.isDeleted,
+          };
+        }
+        return result;
+      }),
       total,
       page,
       totalPages: Math.ceil(total / limit),

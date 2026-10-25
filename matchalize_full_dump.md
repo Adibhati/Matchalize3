@@ -1,7 +1,7 @@
 # Matchalize — Full Codebase Dump
 
 > Verbatim contents of all project source and configuration files.
-> Generated 2026-10-17 21:10.
+> Generated 2026-10-18 20:29.
 > Identical content to dumps/ -- kept as one file for grep and for tools without an attachment limit.
 > Matchalize is an INTRA + INTER college network for all the colleges of India: users connect within their own campus (intra) AND across campuses (inter). Every user signs in via their own college academic email system (`.ac.in`), making each campus a private, verified community.
 
@@ -61,6 +61,18 @@ jobs:
       # won't catch.
       - name: Build client
         run: npm run build --prefix client
+
+      # Pure-logic unit tests, no database or browser required. Both suites use
+      # the built-in node:test runner, so this adds no dependency.
+      #
+      # Roulette's camera teardown is deliberately covered here rather than left
+      # to end-of-project device testing: a leaked camera is invisible to a
+      # reviewer but is the failure that reaches users, and the guarantee lives
+      # in `stopStream`, which is testable without hardware.
+      - name: Test server
+        run: npm test --prefix server
+      - name: Test client
+        run: npm test --prefix client
 
       # dumps/ is committed and gets handed to other tools, so it must not
       # silently go stale: a stale dump means a reader gets code that no longer
@@ -208,7 +220,7 @@ dist-ssr
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <!-- Initial chrome colour, replaced per-screen at runtime by utils/chrome.js.
          Defaults to the Deck's night desk so there is no white flash on first paint. -->
     <meta name="theme-color" content="#131313" />
@@ -249,6 +261,7 @@ dist-ssr
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
+    "test": "node --test",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -341,8 +354,8 @@ dist-ssr
 ### ./client/public/sw.js
 
 ```
-// v2 → v3: the v2 cache had no eviction and was caching /uploads/ (photos and
-// voice notes), which are cookie-gated but served from cache without a server
+// v2 → v3: the v2 cache had no eviction and was caching /uploads/ (photos),
+// which are cookie-gated but served from cache without a server
 // request. Bumping the name makes `activate` delete the whole old cache on the
 // next load, purging what was already stored on real devices.
 // Bump this every time caching behaviour changes — it is the only eviction
@@ -385,17 +398,17 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   // NEVER cache API responses — otherwise stale chat/notification data could be served
   if (url.pathname.startsWith('/api/')) return;
-  // NEVER cache /uploads/ — these are the user's own photos and voice notes.
+  // NEVER cache /uploads/ — these are the user's own photos.
   //
   // Two reasons, and the second is the serious one:
   //   1. They are unbounded user media. The cache below is cache-first with no
-  //      eviction and no TTL, so every voice note ever played accumulated in the
+  //      eviction and no TTL, so every uploaded photo accumulated in the
   //      browser permanently — the cache only clears when someone hand-edits
   //      CACHE_NAME (see `activate`).
   //   2. `/uploads` is served behind `protect` (server/index.js). A cache hit is
   //      returned WITHOUT any request to the server, so no cookie is ever
   //      checked. On a shared device the next person to open the app would be
-  //      served the previous user's photos and voice notes straight out of the
+  //      served the previous user's photos straight out of the
   //      cache.
   //
   // In production uploads are Cloudinary URLs (cross-origin, already skipped by
@@ -606,7 +619,6 @@ legacy-peer-deps=true
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "express-mongo-sanitize": "^2.2.0",
     "express-rate-limit": "^7.3.1",
     "express-validator": "^7.1.0",
     "helmet": "^7.1.0",
@@ -6167,7 +6179,7 @@ export const AppConfigProvider = ({ children }) => {
 ### ./client/src/utils/AuthContext.jsx
 
 ```
-import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import { api, API_BASE } from './api';
 import socket from './socket';
 
@@ -6213,7 +6225,38 @@ export const AuthProvider = ({ children }) => {
     const normalised = { reverifyRequired: false, ...user };
     localStorage.setItem(USER_KEY, JSON.stringify(normalised));
     setState({ user: normalised });
+    if (socket?.disconnected) socket.connect();
   }, []);
+
+  useEffect(() => {
+    const handleStorage = (event) => {
+      if (event.key !== USER_KEY) return;
+
+      let nextUser = null;
+      if (event.newValue) {
+        try {
+          nextUser = { reverifyRequired: false, ...JSON.parse(event.newValue) };
+        } catch {
+          nextUser = null;
+        }
+      }
+
+      if (String(state.user?._id || '') === String(nextUser?._id || '')) {
+        if (nextUser) setState({ user: nextUser });
+        if (nextUser && socket?.disconnected) socket.connect();
+        return;
+      }
+
+      queryClientRef.current?.clear();
+      socket?.disconnect();
+      localStorage.removeItem('matchalize_suspended');
+      setState({ user: nextUser });
+      if (nextUser && socket?.disconnected) socket.connect();
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [state.user]);
 
   /**
    * 🔒 LOGOUT MUST ERASE EVERYTHING, NOT JUST THE ID CARD.
@@ -7239,6 +7282,466 @@ export const useIsDesktop = () => {
 
 ```
 
+### ./client/src/utils/webrtc.js
+
+```
+/**
+ * 📷 WEBRTC — camera and microphone, local preview only.
+ *
+ * ── WHY THIS FILE EXISTS ─────────────────────────────────────────────────────
+ * The single most common way a video feature embarrasses you is not a broken
+ * call. It is a camera that stays on after the user left the screen. Every app
+ * with a camera has shipped that bug at least once, so the whole module is
+ * organised around making that impossible rather than around making the
+ * happy path short.
+ *
+ * The rule: `stopStream` is the ONLY way a MediaStream is ever torn down, and
+ * `useCameraPreview` calls it from every exit path it can reach — unmount, page
+ * hide, explicit stop, request failure, and starting a new request. There is no
+ * second implementation to keep in sync, and nothing to forget.
+ *
+ * ── SCOPE ────────────────────────────────────────────────────────────────────
+ * Stage 2: local preview, permission states, guaranteed cleanup. No peer
+ * connection, no queue, no signaling — those are Stages 3 and 5.
+ *
+ * ── SECURE CONTEXT ───────────────────────────────────────────────────────────
+ * getUserMedia only exists on HTTPS or localhost. On a plain-HTTP LAN address
+ * `navigator.mediaDevices` is undefined and the browser refuses — which is why
+ * `diagnoseEnvironment()` exists and why the preview reports it plainly instead
+ * of failing with something unhelpful.
+ *
+ * Design source: ambitions/roulette.md §15, stage 2
+ */
+
+import React from 'react';
+
+/**
+ * Deep-freeze a constraints tree.
+ *
+ * `Object.freeze` is shallow, which means a frozen top level would still let a
+ * caller reach through and mutate `video.width.ideal` — the exact shared state
+ * every caller reads. Recursion is the only thing that actually protects it.
+ */
+const deepFreeze = (obj) => {
+  Object.values(obj).forEach((val) => {
+    if (val && typeof val === 'object' && !Object.isFrozen(val)) deepFreeze(val);
+  });
+  return Object.freeze(obj);
+};
+
+/**
+ * Starting capture constraints.
+ *
+ * 480p/24 deliberately, not 720p/30 and certainly not 1080p. For a face-to-face
+ * chat this is visually indistinguishable, and the bitrate difference is the
+ * entire TURN bill once relaying is introduced at Stage 4. Resolution and
+ * bitrate are separate settings — this caps the resolution, and Stage 4 sets
+ * `maxBitrate` separately. Frame rate is asked for rather than capped because
+ * browsers are unreliable at honouring an exact cap.
+ *
+ * `facingMode: 'user'` asks for the front camera; desktop cameras ignore it,
+ * which is harmless.
+ */
+export const PREVIEW_CONSTRAINTS = deepFreeze({
+  audio: {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  },
+  video: {
+    width: { ideal: 640 },
+    height: { ideal: 480 },
+    frameRate: { ideal: 24 },
+    facingMode: 'user',
+  },
+});
+
+/**
+ * Retry constraints after OverconstrainedError.
+ *
+ * A device that cannot do 480p still does 360p, and a machine with no
+ * front-facing camera still has a webcam. Asking for `ideal` rather than
+ * `exact` in PREVIEW_CONSTRAINTS means this is rarely reached, but a preview
+ * that refuses to start on a 360p-only laptop is a bad first impression.
+ */
+export const FALLBACK_CONSTRAINTS = deepFreeze({
+  audio: true,
+  video: { width: { ideal: 320 }, height: { ideal: 240 } },
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * TEARDOWN
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Stop every track on a stream. THE ONLY teardown path in the codebase.
+ *
+ * `MediaStream.stop()` does not exist — stopping is per-track, and omitting one
+ * leaves that camera alive. This loops defensively: a track whose `stop` throws
+ * must not prevent the others from stopping.
+ *
+ * Also drops `srcObject` on any video element bound to the stream, because an
+ * element holding a stopped stream still shows the last frame, which reads as
+ * "camera is still on" to the user even when it is not.
+ *
+ * @param {MediaStream|null|undefined} stream
+ * @param {HTMLVideoElement|null|undefined} [video]  element to detach
+ * @returns {number} how many tracks were stopped (for tests/diagnostics)
+ */
+export const stopStream = (stream, video) => {
+  let stopped = 0;
+
+  if (stream) {
+    const tracks = typeof stream.getTracks === 'function' ? stream.getTracks() : [];
+    for (const track of tracks) {
+      try {
+        track.stop();
+        stopped += 1;
+      } catch {
+        // A track can already be ended (user revoked permission in the browser
+        // UI). Swallowing this is correct — the remaining tracks still need to
+        // stop, and aborting the loop would leak them.
+      }
+    }
+  }
+
+  if (video) {
+    try {
+      video.pause?.();
+      video.srcObject = null;
+    } catch {
+      // Detaching is best-effort; a detached-but-stopped track is already safe.
+    }
+  }
+
+  return stopped;
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * ERROR CLASSIFICATION
+ * ═══════════════════════════════════════════════════════════════════════════
+ * The browser hands back a DOMException whose `name` is the only reliable
+ * signal. Turning each into a sentence the user can act on is the difference
+ * between a dead end and a fixable problem — every one of these has a different
+ * remedy, and "camera error" tells somebody nothing.
+ *
+ * Legacy Safari prefixes (`PermissionDeniedError`, `DevicesNotFoundError`,
+ * `TrackStartError`) appear in the lists because iOS Safari still emits them.
+ */
+export const describeMediaError = (err) => {
+  const name = err?.name || '';
+
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+    return {
+      code: 'denied',
+      title: 'Camera blocked',
+      detail:
+        'Your browser is not letting this page use your camera or microphone. '
+        + 'Open the padlock or camera icon in the address bar and allow access, then try again.',
+    };
+  }
+
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return {
+      code: 'no-device',
+      title: 'No camera found',
+      detail: 'This device does not have a camera we can use. You can still browse Roulette, but you cannot join a video session.',
+    };
+  }
+
+  if (name === 'NotReadableError' || name === 'TrackStartError') {
+    return {
+      code: 'busy',
+      title: 'Camera is busy',
+      detail:
+        'Something else is already using your camera — another app, or a video call in another tab. '
+        + 'Close it and try again.',
+    };
+  }
+
+  if (name === 'OverconstrainedError') {
+    return {
+      code: 'overconstrained',
+      title: 'Camera settings unavailable',
+      detail: 'Your camera cannot meet the requested settings. We have retried at a lower resolution.',
+    };
+  }
+
+  if (name === 'AbortError') {
+    return {
+      code: 'aborted',
+      title: 'Camera stopped unexpectedly',
+      detail: 'The browser ended the camera request. Please try again.',
+    };
+  }
+
+  return {
+    code: 'unknown',
+    title: 'Could not start your camera',
+    detail: 'Something went wrong while starting the camera. Refreshing the page usually clears it.',
+    raw: name || String(err?.message || err || 'unknown'),
+  };
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * ENVIRONMENT DIAGNOSTICS
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Because device testing happens at the end of the project, this exists so a
+ * failing preview reports WHY in one tap instead of leaving someone to guess
+ * between a code bug, a permissions problem, and an HTTP address.
+ */
+export const diagnoseEnvironment = () => {
+  const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
+
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+    return {
+      ok: false,
+      code: 'unsupported',
+      label: 'Camera unavailable on this address',
+      detail: insecure
+        ? 'Browsers only allow camera access over HTTPS or on localhost. This page is on a plain-HTTP address, so the camera is blocked by the browser itself — not by a bug in the app.'
+        : 'This browser does not support camera access. Try Chrome, Safari or Firefox.',
+    };
+  }
+
+  return {
+    ok: true,
+    code: 'supported',
+    label: 'Camera supported',
+    detail: 'This browser can access a camera on this address.',
+  };
+};
+
+/** List the cameras and microphones attached, without opening either. */
+export const listDevices = async () => {
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) return [];
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return {
+      cameras: devices.filter((d) => d.kind === 'videoinput'),
+      microphones: devices.filter((d) => d.kind === 'audioinput'),
+    };
+  } catch {
+    // Enumeration is blocked in some privacy modes even where getUserMedia works.
+    return { cameras: [], microphones: [] };
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * REQUEST
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Open the local camera and microphone.
+ *
+ * Retries once with FALLBACK_CONSTRAINTS on OverconstrainedError, because a
+ * device that cannot do 480p is still perfectly able to do a video call — it
+ * just cannot do this one.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.audio=false]  default is video-only preview
+ * @returns {Promise<MediaStream>}
+ * @throws the original DOMException, after any fallback has also failed
+ */
+export const requestPreviewStream = async ({ audio = false } = {}) => {
+  const primary = audio
+    ? { audio: PREVIEW_CONSTRAINTS.audio, video: PREVIEW_CONSTRAINTS.video }
+    : { video: PREVIEW_CONSTRAINTS.video };
+
+  try {
+    return await navigator.mediaDevices.getUserMedia(primary);
+  } catch (err) {
+    if (err?.name !== 'OverconstrainedError') throw err;
+
+    const fallback = audio
+      ? { audio: true, video: FALLBACK_CONSTRAINTS.video }
+      : { video: FALLBACK_CONSTRAINTS.video };
+    return navigator.mediaDevices.getUserMedia(fallback);
+  }
+};
+
+/** Enable or disable one track by kind, e.g. setTrackEnabled(stream, 'audio', false). */
+export const setTrackEnabled = (stream, kind, enabled) => {
+  if (!stream || typeof stream.getTracks !== 'function') return false;
+  const track = stream.getTracks().find((t) => t.kind === kind);
+  if (!track) return false;
+  track.enabled = !!enabled;
+  return true;
+};
+
+/** Bind a stream to a video element. Muting is required for a self-preview. */
+export const attachStream = (video, stream) => {
+  if (!video) return;
+  video.srcObject = stream || null;
+  // A self-preview must never produce audio feedback. `muted` also satisfies
+  // the autoplay policy browsers apply to unmuted playback.
+  video.muted = true;
+  video.playsInline = true;
+  if (stream) {
+    const attempt = video.play?.();
+    // Autoplay can reject even when muted; a rejected promise here is not an
+    // error worth surfacing, and swallowing it avoids an unhandled rejection.
+    if (attempt?.catch) attempt.catch(() => {});
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * REACT HOOK
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Guarantees cleanup. The stream lives in a ref, never in state, because state
+ * updates are asynchronous and a stale closure can hand out a stream that has
+ * already been stopped — the classic leaked-camera race.
+ */
+
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.audio=false]
+ * @param {boolean} [opts.autoStart=false]  begin capturing as soon as mounted
+ * @param {boolean} [opts.stopOnHide=true]   stop when the tab is hidden
+ */
+export const useCameraPreview = ({ audio = false, autoStart = false, stopOnHide = true } = {}) => {
+  const [status, setStatus] = React.useState('idle'); // idle|requesting|ready|error
+  const [error, setError] = React.useState(null);
+  const [audioOn, setAudioOnState] = React.useState(true);
+  const [videoOn, setVideoOnState] = React.useState(true);
+
+  const streamRef = React.useRef(null);
+  const videoRef = React.useRef(null);
+  const mountedRef = React.useRef(false);
+
+  /** The single teardown. Everything else routes through this. */
+  const stop = React.useCallback(() => {
+    stopStream(streamRef.current, videoRef.current);
+    streamRef.current = null;
+    if (mountedRef.current) setStatus('idle');
+  }, []);
+
+  const start = React.useCallback(async () => {
+    if (streamRef.current) return streamRef.current;
+
+    setStatus('requesting');
+    setError(null);
+
+    try {
+      const stream = await requestPreviewStream({ audio });
+      streamRef.current = stream;
+
+      if (!mountedRef.current) {
+        // Unmounted (or hidden-and-stopped) while the browser was still deciding.
+        // The stream exists but nobody holds a reference any more — this is
+        // exactly how cameras leak, so it is stopped here rather than discarded.
+        stopStream(stream);
+        return null;
+      }
+
+      attachStream(videoRef.current, stream);
+
+      // The user can revoke camera access from the browser UI at any time,
+      // which ends the track without any event on our side.
+      for (const track of stream.getTracks()) {
+        track.addEventListener?.('ended', () => {
+          if (streamRef.current === stream) {
+            streamRef.current = null;
+            setStatus('error');
+            setError(describeMediaError({ name: 'NotReadableError' }));
+          }
+        });
+      }
+
+      setAudioOnState(true);
+      setVideoOnState(true);
+      setStatus('ready');
+      return stream;
+    } catch (err) {
+      if (mountedRef.current) {
+        setStatus('error');
+        setError(describeMediaError(err));
+      }
+      return null;
+    }
+  }, [audio]);
+
+  const toggleAudio = React.useCallback(() => {
+    setAudioOnState((prev) => {
+      const next = !prev;
+      if (streamRef.current) setTrackEnabled(streamRef.current, 'audio', next);
+      return next;
+    });
+  }, []);
+
+  const toggleVideo = React.useCallback(() => {
+    setVideoOnState((prev) => {
+      const next = !prev;
+      if (streamRef.current) setTrackEnabled(streamRef.current, 'video', next);
+      return next;
+    });
+  }, []);
+
+  // Mount bookkeeping + the unmount guarantee.
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      stopStream(streamRef.current, videoRef.current);
+      streamRef.current = null;
+    };
+  }, []);
+
+  /*
+   * Tab hidden / closed.
+   *
+   * `pagehide` is the reliable one: it fires on tab close AND on navigating
+   * away, including into the back/forward cache. `beforeunload` is not, on
+   * mobile. `visibilitychange` is separate because it also fires on a plain tab
+   * switch — harmless for a preview, but Stage 3 will want to keep a live call
+   * alive across a tab switch, so the two are handled distinctly now.
+   */
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const onPageHide = () => {
+      stopStream(streamRef.current, videoRef.current);
+      streamRef.current = null;
+    };
+    const onVisibility = () => {
+      if (!stopOnHide) return;
+      if (document.visibilityState === 'hidden') onPageHide();
+    };
+
+    window.addEventListener('pagehide', onPageHide);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [stopOnHide]);
+
+  React.useEffect(() => {
+    if (autoStart) start();
+    // Intentionally not depending on `start` — autoStart is a mount-time
+    // decision, and re-running on every render identity change would re-open
+    // the camera repeatedly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return {
+    status,
+    error,
+    audioOn,
+    videoOn,
+    videoRef,
+    hasStream: () => Boolean(streamRef.current),
+    start,
+    stop,
+    toggleAudio,
+    toggleVideo,
+  };
+};
+
+export default useCameraPreview;
+
+```
+
 ### ./client/src/components/AccountSuspendedScreen.jsx
 
 ```
@@ -7417,7 +7920,6 @@ import Header from './Header';
 import NavBar from './NavBar';
 import DesktopSidebar from './DesktopSidebar';
 import { api } from '../utils/api';
-import { useAuth } from '../utils/AuthContext';
 import PushPrompt from './PushPrompt';
 import { SkeletonBox } from './Skeleton';
 import { useIsDesktop } from '../utils/useIsDesktop';
@@ -7523,8 +8025,6 @@ const AppShell = ({ onSignOut }) => {
     setFocusProfileStrength(true);
     setActiveTab('profile');
   }, []);
-  const { user } = useAuth();
-
   // ── Push-notification deep link ────────────────────────────────────────────
   // The service worker used to navigate to `/chat/<alignmentId>`, but this app
   // has NO router — App.jsx picks a screen from component state, so that path
@@ -7537,7 +8037,23 @@ const AppShell = ({ onSignOut }) => {
     () => new URLSearchParams(window.location.search).get('chat')
   );
   const queryClient = useQueryClient();
-  const myId = user?._id;
+
+  useEffect(() => {
+    const handleUnavailableAlignment = ({ alignmentId } = {}) => {
+      if (!alignmentId) return;
+      const id = String(alignmentId);
+
+      setActiveChat((current) => (String(current?._id || '') === id ? null : current));
+      queryClient.setQueryData(['matches'], (old) => ({
+        ...(old || {}),
+        matches: (old?.matches || []).filter((match) => String(match._id) !== id),
+      }));
+      queryClient.removeQueries({ queryKey: ['messages', id], exact: true });
+    };
+
+    socket.on('unmatch-notification', handleUnavailableAlignment);
+    return () => socket.off('unmatch-notification', handleUnavailableAlignment);
+  }, [queryClient]);
 
   const { data: matchData } = useQuery({
     queryKey: ['matches'],
@@ -7625,13 +8141,16 @@ const AppShell = ({ onSignOut }) => {
   // postMessaged the id, so no navigation happens and the param path above
   // never runs.
   useEffect(() => {
+    const serviceWorker = navigator.serviceWorker;
+    if (!serviceWorker) return;
+
     const onMessage = (event) => {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type !== 'open-chat') return;
       openChatById(event.data.alignmentId);
     };
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
+    serviceWorker.addEventListener('message', onMessage);
+    return () => serviceWorker.removeEventListener('message', onMessage);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchData, queryClient]);
 
@@ -8078,135 +8597,6 @@ const ArchivalToast = () => {
 };
 
 export default ArchivalToast;
-```
-
-### ./client/src/components/CassettePlayer.jsx
-
-```
-import React, { useRef, useState } from 'react';
-
-const CassettePlayer = ({ audioUrl }) => {
-  const audioRef = useRef(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-
-  const togglePlay = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (isPlaying) {
-      audio.pause();
-      setIsPlaying(false);
-    } else {
-      audio.play().catch(() => setIsPlaying(false));
-      setIsPlaying(true);
-    }
-  };
-
-  const handleTimeUpdate = () => {
-    const audio = audioRef.current;
-    if (audio && audio.duration) {
-      setCurrentTime(audio.currentTime);
-      setProgress(audio.currentTime / audio.duration);
-    }
-  };
-
-  const formatTime = (seconds) => {
-    if (!seconds || isNaN(seconds)) return '0:00';
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60).toString().padStart(2, '0');
-    return `${mins}:${secs}`;
-  };
-
-  return (
-    <div
-      style={{
-        backgroundColor: 'var(--card)',
-        border: '1.5px solid var(--gold-deep)',
-        borderRadius: '12px',
-        padding: '12px 14px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '14px',
-        width: '260px',
-        boxSizing: 'border-box',
-      }}
-    >
-      {/* Twin Spinning Tape Reels */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flexShrink: 0 }}>
-        {[0, 1].map((idx) => (
-          <div
-            key={idx}
-            className={`cassette-spool ${isPlaying ? 'playing' : ''}`}
-            style={{
-              width: '24px',
-              height: '24px',
-              borderRadius: '50%',
-              backgroundColor: '#2a221e',
-              border: '2px solid var(--gold-deep)',
-              position: 'relative',
-            }}
-          >
-            <div style={{ position: 'absolute', top: 0, left: '10px', width: '2px', height: '20px', backgroundColor: 'var(--gold-deep)' }} />
-            <div style={{ position: 'absolute', top: '10px', left: 0, width: '20px', height: '2px', backgroundColor: 'var(--gold-deep)' }} />
-          </div>
-        ))}
-      </div>
-
-      {/* Player Controls & Progress */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <button
-            type="button"
-            onClick={togglePlay}
-            style={{
-              backgroundColor: 'var(--crimson)',
-              color: 'var(--surface)',
-              border: 'none',
-              borderRadius: '50%',
-              width: '32px',
-              height: '32px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            {isPlaying ? '❚❚' : '▶'}
-          </button>
-          <span style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--accent)', letterSpacing: '0.5px' }}>
-            CASSETTE
-          </span>
-        </div>
-
-        {/* Progress Bar */}
-        <div style={{ marginTop: '10px', height: '4px', backgroundColor: 'var(--line)', borderRadius: '2px', overflow: 'hidden' }}>
-          <div style={{ width: `${progress * 100}%`, height: '100%', backgroundColor: 'var(--crimson)', transition: 'width 0.1s linear' }} />
-        </div>
-
-        {/* Timestamp */}
-        <div style={{ marginTop: '4px', fontSize: '10px', color: 'var(--ink-muted)', textAlign: 'right', fontFamily: 'monospace' }}>
-          {formatTime(currentTime)} / {formatTime(duration)}
-        </div>
-      </div>
-
-      <audio
-        ref={audioRef}
-        src={audioUrl}
-        preload="metadata"
-        style={{ display: 'none' }}
-        onTimeUpdate={handleTimeUpdate}
-        onLoadedMetadata={(e) => setDuration(e.target.duration || 0)}
-        onEnded={() => setIsPlaying(false)}
-      />
-    </div>
-  );
-};
-
-export default CassettePlayer;
-
 ```
 
 ### ./client/src/components/DeckActions.jsx
@@ -9844,6 +10234,11 @@ const DRAWER_CSS = `
 const NotificationDrawer = ({ onClose, onSelectMatch }) => {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [notificationTotal, setNotificationTotal] = useState(0);
+  const [loadMoreError, setLoadMoreError] = useState('');
   const [selectedProfile, setSelectedProfile] = useState(null);
   const [decliningIds, setDecliningIds] = useState(new Set());
 
@@ -9855,10 +10250,39 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
     try {
       const response = await api.get('/notifications');
       setNotifications(response.notifications || []);
+      setHasMore(Boolean(response.hasMore));
+      setPage(response.page || 1);
+      setNotificationTotal(response.total ?? response.notifications?.length ?? 0);
     } catch (err) {
       console.error('Failed to fetch letters:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadMoreNotifications = async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    setLoadMoreError('');
+    try {
+      const nextPage = page + 1;
+      const response = await api.get(`/notifications?page=${nextPage}`);
+      const nextNotifications = response.notifications || [];
+      setNotifications((previous) => {
+        const existingIds = new Set(previous.map((notification) => notification._id));
+        return [
+          ...previous,
+          ...nextNotifications.filter((notification) => !existingIds.has(notification._id)),
+        ];
+      });
+      setPage(response.page || nextPage);
+      setHasMore(Boolean(response.hasMore));
+      setNotificationTotal(response.total ?? notificationTotal);
+    } catch (err) {
+      console.error('Failed to load more letters:', err);
+      setLoadMoreError('Could not load older requests. Try again.');
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -9868,6 +10292,7 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
     try {
       const response = await api.post(`/notifications/${id}/accept`);
       setNotifications((prev) => prev.filter((n) => n._id !== id));
+      setNotificationTotal((total) => Math.max(0, total - 1));
       setSelectedProfile(null);
 
       if (onSelectMatch) {
@@ -9889,6 +10314,7 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
 
     setTimeout(() => {
       setNotifications((prev) => prev.filter((n) => n._id !== id));
+      setNotificationTotal((total) => Math.max(0, total - 1));
       setDecliningIds(prev => {
         const next = new Set(prev);
         next.delete(id);
@@ -10014,7 +10440,7 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
           <h2 style={styles.heading}>Letterbox</h2>
           {!loading && notifications.length > 0 && (
-            <span style={styles.badge}>{notifications.length} pending</span>
+            <span style={styles.badge}>{notificationTotal} pending</span>
           )}
         </div>
         {onClose && (
@@ -10087,6 +10513,25 @@ const NotificationDrawer = ({ onClose, onSelectMatch }) => {
                 <AnimatePresence>
                   {legacy.map(renderRow)}
                 </AnimatePresence>
+              </div>
+            )}
+
+            {hasMore && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '8px 0 24px' }}>
+                {loadMoreError && (
+                  <p role="alert" style={{ ...styles.emptyText, color: t.red, textAlign: 'center' }}>
+                    {loadMoreError}
+                  </p>
+                )}
+                <button
+                  className="lb-slam"
+                  type="button"
+                  onClick={loadMoreNotifications}
+                  disabled={loadingMore}
+                  style={styles.loadMoreBtn}
+                >
+                  {loadingMore ? 'Loading…' : loadMoreError ? 'Try again' : 'Load more'}
+                </button>
               </div>
             )}
 
@@ -10252,6 +10697,13 @@ const styles = {
     boxShadow: `3px 3px 0 ${t.ink}`,
     width: 38, height: 38, display: 'flex', alignItems: 'center', justifyContent: 'center',
     cursor: 'pointer', flexShrink: 0, color: t.ink,
+  },
+  loadMoreBtn: {
+    padding: '10px 18px', backgroundColor: t.yellow, color: t.ink,
+    border: `2px solid ${t.ink}`, borderRadius: 10,
+    boxShadow: `3px 3px 0 ${t.ink}`, cursor: 'pointer',
+    fontFamily: t.fontMono, fontSize: 11, fontWeight: 700,
+    letterSpacing: '.1em', textTransform: 'uppercase',
   },
   contentArea: {
     flex: 1, padding: '14px 14px 0', overflowY: 'auto', position: 'relative', zIndex: 2,
@@ -11363,19 +11815,11 @@ const t = neu;
  * NEVER reveals scores, weights, tiers, or how many reports.
  *
  * Props:
- *   score: Number — user's shadowbanScore
+ *   isUnderReview: Boolean — safe status flag for the authenticated user
  *   onLearnMore: Function — callback to open Learn More sheet
- *
- * Visibility: score < 5.0 → null (don't render)
  */
-const ShadowbanBanner = ({ score = 0, onLearnMore }) => {
-  if (score < 5.0) return null;
-
-  const isHighTier = score >= 8.0;
-
-  /* high tier = red tile + red accent · low tier = coral tile + ink accent */
-  const tileBg = isHighTier ? t.red : t.coral;
-  const accent = isHighTier ? t.red : t.ink;
+const ShadowbanBanner = ({ isUnderReview = false, onLearnMore }) => {
+  if (!isUnderReview) return null;
 
   return (
     <motion.div
@@ -11395,19 +11839,18 @@ const ShadowbanBanner = ({ score = 0, onLearnMore }) => {
         position: 'relative',
       }}
     >
-      {/* Standard candy icon tile, colored by tier */}
       <div style={{
         width: 36,
         height: 36,
         borderRadius: 10,
-        backgroundColor: tileBg,
+        backgroundColor: t.coral,
         border: `2px solid ${t.ink}`,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,
       }}>
-        <AlertTriangle size={17} color={isHighTier ? '#fff' : t.ink} strokeWidth={2.4} />
+        <AlertTriangle size={17} color={t.ink} strokeWidth={2.4} />
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -11429,9 +11872,7 @@ const ShadowbanBanner = ({ score = 0, onLearnMore }) => {
           margin: '3px 0 0 0',
           lineHeight: 1.45,
         }}>
-          {isHighTier
-            ? 'Profile editing and photo uploads are temporarily limited.'
-            : 'New profile visibility may be temporarily limited.'}
+          'Profile editing may be temporarily limited.'
         </p>
       </div>
 
@@ -11449,7 +11890,7 @@ const ShadowbanBanner = ({ score = 0, onLearnMore }) => {
           fontWeight: 700,
           letterSpacing: '.1em',
           textTransform: 'uppercase',
-          color: accent,
+          color: t.ink,
           cursor: 'pointer',
           whiteSpace: 'nowrap',
           flexShrink: 0,
@@ -11884,7 +12325,6 @@ import { motion } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
 import { Check, CheckCheck } from 'lucide-react';
 import PolaroidCard from '../PolaroidCard';
-import CassettePlayer from '../CassettePlayer';
 import neu from '../../styles/neu';
 
 const t = neu;
@@ -11930,17 +12370,17 @@ const MessageBubble = ({
         </div>
       );
     }
-    if (message.type === 'audio') {
-      return (
-        <div data-no-longpress>
-          <CassettePlayer audioUrl={message.mediaUrl} themeColor={isMine ? t.yellow : t.ink2} />
-        </div>
-      );
-    }
     if (message.deleted) {
       return (
         <span style={{ fontStyle: 'italic', color: t.ink3, fontSize: '13px', fontFamily: t.fontBody }}>
           This artifact was removed.
+        </span>
+      );
+    }
+    if (message.type !== 'text' && message.type !== 'opening_letter') {
+      return (
+        <span style={{ fontStyle: 'italic', color: t.ink3, fontSize: '13px', fontFamily: t.fontBody }}>
+          This message type is no longer available.
         </span>
       );
     }
@@ -11971,6 +12411,7 @@ const MessageBubble = ({
       // fresh reactions to a message that had already been removed.
       onTouchStart={message.deleted ? undefined : startPress}
       onTouchEnd={message.deleted ? undefined : cancelPress}
+      onTouchCancel={message.deleted ? undefined : cancelPress}
       onTouchMove={message.deleted ? undefined : cancelPress}
       onMouseDown={message.deleted ? undefined : startPress}
       onMouseUp={message.deleted ? undefined : cancelPress}
@@ -12326,7 +12767,7 @@ export default PhotoViewer;
 import React, { memo } from 'react';
 import { motion } from 'framer-motion';
 import { triggerHaptic } from '../../utils/haptics';
-import { Image, Mic, X } from 'lucide-react';
+import { Image, X } from 'lucide-react';
 import neu from '../../styles/neu';
 
 const t = neu;
@@ -12339,9 +12780,9 @@ const ReplyPreview = ({ replyTo, otherName, onCancel }) => {
     ? replyTo.text.slice(0, 60) + (replyTo.text.length > 60 ? '…' : '')
     : replyTo.type === 'image'
     ? <><Image size={14} style={{ marginRight: '6px', verticalAlign: 'text-bottom' }} /> Photograph</>
-    : replyTo.type === 'audio'
-    ? <><Mic size={14} style={{ marginRight: '6px', verticalAlign: 'text-bottom' }} /> Voice Note</>
-    : 'Letter';
+    : replyTo.type === 'text' || replyTo.type === 'opening_letter'
+    ? 'Letter'
+    : 'Message unavailable';
 
   return (
     <motion.div
@@ -13186,7 +13627,7 @@ const SearchOverlay = ({ alignmentId, myId, onClose, onJumpTo }) => {
               className="tactile-result-btn"
               onClick={() => {
                 triggerHaptic('medium');
-                onJumpTo(m._id);
+                onJumpTo(m);
                 onClose();
               }}
               style={{
@@ -13884,8 +14325,14 @@ function SettingsTab() {
       { key: 'maintenanceMode', label: 'Maintenance Mode', type: 'bool' },
     ]},
     { group: 'Moderation', items: [
-      { key: 'shadowbanThreshold', label: 'Shadowban Score Threshold', type: 'number' },
-      { key: 'autoShadowban', label: 'Auto-Shadowban', type: 'bool' },
+      {
+        key: 'reportReviewThreshold',
+        label: 'Different reporters needed to flag an account for review',
+        type: 'number',
+        min: 1,
+        max: 1000,
+        description: 'Repeat reports from the same person count once. Reports flag an account for review; an admin must decide whether to suspend it.',
+      },
     ]},
   ];
 
@@ -13902,6 +14349,7 @@ function SettingsTab() {
           {group.items.map(f => (
             <div key={f.key} style={{ marginBottom: 14 }}>
               <label style={label}>{f.label}</label>
+              {f.description && <p style={{ fontSize: 12, color: T.ink2, margin: '6px 0 0' }}>{f.description}</p>}
               {f.type === 'bool'
                 ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
                     <button onClick={() => set(f.key, !settings[f.key])} style={{ width: 46, height: 26, borderRadius: 999, border: `2px solid ${T.ink}`, backgroundColor: settings[f.key] ? T.yellow : T.hair, cursor: 'pointer', position: 'relative', transition: 'background 0.2s' }}>
@@ -13911,6 +14359,9 @@ function SettingsTab() {
                   </div>
                 : <input
                     type={f.type === 'number' ? 'number' : 'text'}
+                    min={f.min}
+                    max={f.max}
+                    step={f.type === 'number' ? 1 : undefined}
                     value={settings[f.key] ?? ''}
                     onChange={e => set(f.key, f.type === 'number' ? Number(e.target.value) : e.target.value)}
                     style={{ width: '100%', maxWidth: 300, padding: '10px 13px', borderRadius: 11, border: `2px solid ${T.ink}`, backgroundColor: T.card, fontSize: 13.5, fontWeight: 500, color: T.ink, fontFamily: T.fontBody, outline: 'none', marginTop: 8 }}
@@ -14386,22 +14837,28 @@ import { CheckCircle2, Search } from 'lucide-react';
 import AccountSuspendedScreen from '../components/AccountSuspendedScreen';
 import { useAuth } from '../utils/AuthContext';
 import neu from '../styles/neu';
-import { useIsDesktop } from '../utils/useIsDesktop';
 import campusPhoto from '../assets/college-town-aesthetic-cute-college-town.jpg';
 
-const M = neu;
+const M = neu; // canon reference — kept only for the (hidden) SVG artwork voices
 
+/* ============================================================
+   C — THE DIALECT (ProfileCard.jsx palette, project-wide winner).
+   docs/DESIGN-SYSTEM.md is the documentation twin of this object.
+   One skin for every step and every breakpoint; per-step scenes
+   were retired when the dialect was unified.
+   ============================================================ */
 const C = {
-  ink: '#111211',
-  ink2: '#383832',
-  muted: '#77766F',
-  paper: '#F1EDE2',
-  card: '#F8F5EC',
-  amber: '#E0A15E',
-  coral: '#C96F68',
-  sage: '#779477',
-  concrete: '#A3A3A1',
-  red: '#A84F4A',
+  ink: '#171414',            // all line work: borders, hard shadows, primary text
+  ink2: '#393130',           // secondary text
+  muted: '#6E6160',          // placeholders / tertiary
+  paper: '#FFF9F4',          // page canvas
+  card: '#FFFCF8',           // raised surfaces (inputs, tiles, photo frames)
+  yellow: '#FFE76A',         // THE action color: CTAs, highlights, selection
+  yellowDeep: '#FFDE45',     // pressed-CTA lemon
+  coral: '#FF7399',          // secondary accent (the tilted "?", focus pops)
+  green: '#B8F0C7',          // pastel mint — success / chosen washes
+  pink: '#C8A7FF',           // lavender — decorative tile voice
+  red: '#D9485D',            // destructive + errors only
   body: "'Space Grotesk', sans-serif",
   display: "'Barlow Condensed', sans-serif",
   mono: "'IBM Plex Mono', monospace",
@@ -14421,12 +14878,13 @@ export const AUTH_CSS = `
     --muted: ${C.muted};
     --paper: ${C.paper};
     --card: ${C.card};
-    --amber: ${C.amber};
+    --yellow: ${C.yellow};
+    --yellow-deep: ${C.yellowDeep};
     --coral: ${C.coral};
-    --sage: ${C.sage};
+    --mint: ${C.green};
     --red: ${C.red};
-    --accent: var(--coral);
-    --tint: rgba(201,111,104,.14);
+    --accent: ${C.coral};
+    --tint: rgba(255, 231, 106, .16);
     --body: ${C.body};
     --display: ${C.display};
     --mono: ${C.mono};
@@ -14457,84 +14915,27 @@ export const AUTH_CSS = `
     -webkit-tap-highlight-color: transparent;
   }
 
-  .au-root::before,
-  .au-root::after {
-    content: '';
-    position: fixed;
-    z-index: 0;
-    pointer-events: none;
-    border-radius: 50%;
-  }
-
-  .au-root::before {
-    width: min(55vw, 390px);
-    height: min(55vw, 390px);
-    top: -190px;
-    right: -100px;
-    background: var(--tint);
-    filter: blur(24px);
-    transition: background .4s ease;
-  }
-
-  .au-root::after {
-    width: 260px;
-    height: 260px;
-    bottom: -190px;
-    left: -110px;
-    background: rgba(119,148,119,.12);
-    filter: blur(20px);
-  }
+  /* The old heritage blur-circle garnish is retired with the dialect. */
 
   .au-root ::selection {
-    background: var(--accent);
+    background: var(--yellow);
     color: var(--ink);
   }
 
-  .au-root-college {
-    --paper: #F1EDE2;
-    --ink: #111211;
-    --ink2: #383832;
-    --muted: #77766F;
-    --card: #F8F5EC;
-    --accent: #C96F68;
-    --tint: rgba(201,111,104,.14);
-  }
+  /* One uniform skin. The per-step desktop scenes (coral / sage / amber /
+     dark) were retired when the app unified on the ProfileCard dialect. */
 
-  .au-root-request {
-    --paper: #E1E7D9;
-    --ink: #111211;
-    --ink2: #383832;
-    --muted: #77766F;
-    --card: #F8F5EC;
-    --accent: #779477;
-    --tint: rgba(119,148,119,.18);
-  }
-
-  .au-root-email {
-    --paper: #F1EDE2;
-    --ink: #111211;
-    --ink2: #383832;
-    --muted: #77766F;
-    --card: #F8F5EC;
-    --accent: #E0A15E;
-    --tint: rgba(224,161,94,.22);
-  }
-
-  .au-root-otp,
-  .au-root-verify {
-    --paper: #111211;
-    --ink: #F1EDE2;
-    --ink2: #D8D3C8;
-    --muted: #A3A3A1;
-    --card: #20211F;
-    --accent: #779477;
-    --tint: rgba(119,148,119,.18);
+  /* Desktop split: keep the photo and form in fluid columns so the form is
+     centered in the space remaining beside the image at every desktop width. */
+  .au-root {
+    --au-scene-width: 42vw;
   }
 
   .au-fit {
     position: relative;
     z-index: 1;
-    width: 100%;
+    width: calc(100% - var(--au-scene-width));
+    margin-left: var(--au-scene-width);
     min-height: 100%;
     display: flex;
     flex-direction: column;
@@ -14547,12 +14948,14 @@ export const AUTH_CSS = `
     flex: 1;
     display: flex;
     flex-direction: column;
+    align-items: center;
     justify-content: center;
-    margin: 0;
+    margin: 0 auto;
     padding:
-      max(34px, env(safe-area-inset-top))
-      clamp(22px, 6vw, 88px)
-      max(30px, env(safe-area-inset-bottom));
+      max(40px, env(safe-area-inset-top))
+      clamp(28px, 4vw, 72px)
+      max(34px, env(safe-area-inset-bottom));
+    max-width: 760px;
     background: transparent;
     border: 0;
     border-radius: 0;
@@ -14562,60 +14965,46 @@ export const AUTH_CSS = `
   .au-step {
     position: relative;
     width: 100%;
-    max-width: 1040px;
+    max-width: 520px;
     min-width: 0;
-    margin: 0 auto;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(220px, .72fr);
-    align-content: center;
-    align-items: center;
-    gap: 19px clamp(22px, 4vw, 45px);
-  }
-
-  .au-step > .au-headline {
-    grid-column: 1;
     margin: 0;
-    max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 18px;
   }
 
-  .au-step > .au-sub {
-    grid-column: 1;
+  .au-root .au-step {
+    translate: 0 var(--au-search-shift, 0px);
+    transition: translate .46s cubic-bezier(.22, 1, .36, 1);
+    will-change: translate;
   }
 
-  .au-step > .au-art {
-    grid-column: 2;
-    grid-row: 1 / span 2;
-  }
-
-  .au-step > *:not(.au-headline):not(.au-sub):not(.au-art) {
-    grid-column: 1 / -1;
-    min-width: 0;
-  }
-
+  /* ONE headline voice on every breakpoint — the Space Grotesk 800 look the
+     phone uses. Desktop only scales it up; there is no second display font
+     anymore, so phone and desktop read as the same screen. */
   .au-headline {
     margin: 0;
     max-width: 100%;
     color: var(--ink);
-    font-family: var(--display);
-    font-size: clamp(55px, 7.4vw, 91px);
+    font-family: var(--body);
+    font-size: clamp(34px, 3.4vw, 48px);
     font-weight: 800;
-    letter-spacing: -.035em;
-    line-height: .87;
-    text-transform: uppercase;
+    letter-spacing: -.06em;
+    line-height: 1.04;
     overflow-wrap: anywhere;
     text-wrap: balance;
     transition: color .3s ease;
   }
 
-  .au-headline::after {
-    content: '';
-    display: block;
-    width: 62px;
-    height: 7px;
-    margin-top: 16px;
-    border-radius: 99px;
-    background: var(--accent);
-    transition: background .3s ease;
+  /* The tilted "huh?" inline mark — identical on phone and desktop. */
+  .au-headline .au-huh-inline {
+    font-family: 'Bowlby One SC', var(--display);
+    font-size: 1.02em;
+    font-weight: 400;
+    letter-spacing: -.055em;
+    white-space: nowrap;
+    text-shadow: 1.5px 1.5px 0 var(--yellow);
   }
 
   .au-sub {
@@ -14623,9 +15012,9 @@ export const AUTH_CSS = `
     max-width: 570px;
     color: var(--ink2);
     font-family: var(--body);
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 400;
-    line-height: 1.8;
+    line-height: 1.6;
     overflow-wrap: anywhere;
     transition: color .3s ease;
   }
@@ -14640,86 +15029,11 @@ export const AUTH_CSS = `
     text-transform: lowercase;
   }
 
-  /* Each screen has a little illustration of its own. */
+  /* The little SVG step illustrations are retired: the campus photo pane
+     replaced them on desktop, the full-bleed photo replaced them on mobile.
+     The component still renders (hidden) so nothing else has to change. */
   .au-art {
-    position: relative;
-    width: 100%;
-    min-width: 0;
-    height: clamp(190px, 25vw, 280px);
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--tint);
-    border: 1px solid rgba(17,18,17,.1);
-    border-radius: 30px 30px 9px 30px;
-    transition: background .35s ease, border-color .35s ease;
-  }
-
-  .au-root-otp .au-art,
-  .au-root-verify .au-art {
-    border-color: rgba(241,237,226,.12);
-  }
-
-  .au-art::before {
-    content: '';
-    position: absolute;
-    width: 120px;
-    height: 120px;
-    top: -52px;
-    right: -42px;
-    border: 1px solid var(--accent);
-    border-radius: 50%;
-    opacity: .5;
-  }
-
-  .au-art::after {
-    content: '';
-    position: absolute;
-    bottom: -31px;
-    left: -20px;
-    width: 66px;
-    height: 66px;
-    border-radius: 22px;
-    background: var(--accent);
-    opacity: .17;
-    transform: rotate(-16deg);
-  }
-
-  .au-art svg {
-    position: relative;
-    z-index: 1;
-    width: 100%;
-    height: 100%;
-    overflow: visible;
-  }
-
-  .au-art .art-float {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: au-float 4s ease-in-out infinite;
-  }
-
-  .au-art .art-late {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: au-float 4.5s ease-in-out -1.5s infinite;
-  }
-
-  .au-art .art-pulse {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: au-pulse 3.4s ease-in-out infinite;
-  }
-
-  @keyframes au-float {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-6px); }
-  }
-
-  @keyframes au-pulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.035); }
+    display: none;
   }
 
   .au-searchwrap {
@@ -14727,37 +15041,74 @@ export const AUTH_CSS = `
     position: relative;
   }
 
+  /* Mono eyebrow label + (while the search sheet is open) a Cancel exit. */
+  .au-search-labelrow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+  }
+
+  .au-field-label {
+    display: block;
+    color: var(--ink2);
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+  }
+
+  .au-cancel {
+    flex-shrink: 0;
+    padding: 4px 0 4px 12px;
+    background: transparent;
+    border: 0;
+    color: var(--coral);
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    transition: color .12s ease;
+  }
+
+  .au-cancel:active { color: var(--ink); }
+
   .au-searchicon {
     width: 43px;
     height: 43px;
     position: absolute;
     z-index: 1;
-    left: 11px;
+    left: 13px;
     top: 50%;
     display: grid;
     place-items: center;
     transform: translateY(-50%);
     color: var(--ink);
-    background: var(--tint);
+    background: transparent;
     border-radius: 15px;
     pointer-events: none;
   }
 
+  /* Dialect inputs everywhere: card face, 2px ink line, hard slam shadow. */
   .au-search,
   .au-input {
     display: block;
     width: 100%;
     min-width: 0;
-    height: 68px;
+    height: 64px;
     padding: 0 20px;
     color: var(--ink);
     background: var(--card);
-    border: 1.5px solid var(--line, rgba(17,18,17,.16));
-    border-radius: 17px;
+    border: 2px solid var(--ink);
+    border-radius: 14px;
     outline: none;
-    box-shadow: 0 3px 0 rgba(17,18,17,.025);
+    box-shadow: 3px 3px 0 var(--ink);
     font-family: var(--body);
-    font-size: 18px;
+    font-size: 17px;
     font-weight: 500;
     -webkit-appearance: none;
     appearance: none;
@@ -14765,7 +15116,7 @@ export const AUTH_CSS = `
   }
 
   .au-search {
-    padding-left: 67px;
+    padding-left: 62px;
   }
 
   .au-search::placeholder,
@@ -14776,10 +15127,11 @@ export const AUTH_CSS = `
   }
 
   .au-search:focus,
-  .au-input:focus {
-    background: var(--card);
-    border-color: var(--accent);
-    box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 4px var(--tint);
+  .au-input:focus,
+  .au-field input:focus {
+    background: #FFF0F4;
+    border-color: var(--coral);
+    box-shadow: 4px 4px 0 var(--coral);
   }
 
   .au-input:disabled {
@@ -14791,84 +15143,115 @@ export const AUTH_CSS = `
     -webkit-text-fill-color: var(--ink);
   }
 
+  /* College results — one shared design on both breakpoints: circular logo
+     on the left, name + location on the right, hairline-separated rows. */
   .au-results {
     width: 100%;
-    max-height: max(230px, calc(100dvh - 350px));
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    align-content: start;
-    gap: 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
-    padding: 3px 4px 8px 2px;
+    padding: 0;
+    border-top: 1px solid var(--line, rgba(23,20,20,.22));
   }
 
   .au-result {
     position: relative;
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    justify-content: center;
-    gap: 7px;
-    min-height: 94px;
+    flex-direction: row;
+    align-items: center;
+    gap: 15px;
+    min-height: 76px;
     width: 100%;
-    padding: 16px 38px 16px 16px;
+    padding: 12px 44px 12px 4px;
     text-align: left;
-    background: var(--card);
+    background: transparent;
     color: var(--ink);
-    border: 1px solid rgba(17,18,17,.1);
-    border-radius: 16px;
+    border: 0;
+    border-bottom: 1px solid var(--line, rgba(23,20,20,.22));
+    border-radius: 0;
     cursor: pointer;
-    box-shadow: 0 3px 0 rgba(17,18,17,.035);
-    transition: background .18s ease, border-color .18s ease, transform .18s ease;
-  }
-
-  .au-result:nth-child(5n + 2) {
-    background: #E8EBDD;
-  }
-
-  .au-result:nth-child(5n + 4) {
-    background: #F1DFD5;
+    transition: background .15s ease;
   }
 
   .au-result::after {
-    content: '↗';
+    content: '→';
     position: absolute;
-    top: 15px;
-    right: 14px;
-    color: var(--muted);
-    font: 16px var(--body);
+    top: 50%;
+    right: 12px;
+    transform: translateY(-50%);
+    color: var(--ink);
+    font: 19px/1 var(--body);
     transition: transform .18s ease, color .18s ease;
+  }
+
+  .au-result:hover::after {
+    color: var(--coral);
+    transform: translateY(-50%) translate(2px, 0);
+  }
+
+  /* The circular college logo (uploaded logo, or an ink initials fallback). */
+  .au-logo {
+    flex-shrink: 0;
+    width: 52px;
+    height: 52px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    background: var(--card);
+    border: 2px solid var(--ink);
+    border-radius: 50%;
+    box-shadow: 2px 2px 0 var(--ink);
+    color: var(--ink2);
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: .02em;
+  }
+
+  .au-logo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .au-result-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
   }
 
   .au-result-name {
     color: var(--ink);
     font-family: var(--body);
-    font-size: 15px;
+    font-size: 15.5px;
     font-weight: 700;
-    line-height: 1.45;
+    line-height: 1.35;
     overflow-wrap: anywhere;
   }
 
   .au-result-meta {
-    color: #77766F;
+    color: var(--muted);
     font-family: var(--mono);
     font-size: 10px;
-    font-weight: 500;
+    font-weight: 600;
     line-height: 1.5;
-    letter-spacing: .025em;
+    letter-spacing: .05em;
     text-transform: uppercase;
   }
 
   .au-result.chosen {
-    background: #E6E8DA;
-    border-color: var(--sage);
+    background: rgba(184, 240, 199, .28);
   }
 
   .au-result.chosen::after {
     content: '✓';
-    color: var(--sage);
+    color: var(--ink);
+    font-weight: 700;
   }
 
   .au-empty {
@@ -14889,32 +15272,34 @@ export const AUTH_CSS = `
   }
 
   .au-cta {
-    min-height: 62px;
+    min-height: 58px;
     width: 100%;
     padding: 15px 22px;
     color: var(--ink);
-    background: var(--accent);
-    border: 1px solid rgba(17,18,17,.13);
-    border-radius: 17px 17px 6px 17px;
+    background: var(--yellow);
+    border: 2px solid var(--ink);
+    border-radius: 14px;
     cursor: pointer;
-    box-shadow: 0 4px 0 rgba(17,18,17,.08);
+    box-shadow: 4px 4px 0 var(--ink);
     font-family: var(--body);
     font-size: 15px;
     font-weight: 700;
     letter-spacing: 0;
-    transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
+    transition: transform .08s steps(2), box-shadow .08s steps(2), background .12s ease;
+    -webkit-tap-highlight-color: transparent;
   }
 
   .au-cta:active:not(:disabled) {
-    transform: translateY(3px);
-    box-shadow: 0 1px 0 rgba(17,18,17,.08);
+    transform: translate(4px, 4px);
+    box-shadow: 0 0 0 var(--ink);
+    background: var(--yellow-deep);
   }
 
   .au-cta:disabled {
-    background: #D6D0C3;
-    color: #77766F;
-    border-color: #77766F;
-    box-shadow: 0 3px 0 rgba(17,18,17,.06);
+    background: var(--card);
+    color: var(--muted);
+    border-color: var(--muted);
+    box-shadow: 3px 3px 0 var(--muted);
     cursor: default;
     opacity: .75;
   }
@@ -14956,20 +15341,21 @@ export const AUTH_CSS = `
     text-align: center;
     color: var(--ink);
     background: var(--card);
-    border: 1.5px solid var(--line, rgba(17,18,17,.16));
-    border-radius: 16px;
-    font-family: var(--display);
+    border: 2px solid var(--ink);
+    border-radius: 14px;
+    box-shadow: 3px 3px 0 var(--ink);
+    font-family: var(--body);
     font-size: 32px;
-    font-weight: 800;
+    font-weight: 500;
     outline: none;
     caret-color: var(--accent);
     transition: background .15s ease, border-color .15s ease, transform .15s ease;
   }
 
   .au-box:focus {
-    background: var(--card);
-    border-color: var(--accent);
-    box-shadow: inset 0 0 0 1px var(--accent);
+    background: #FFF0F4;
+    border-color: var(--coral);
+    box-shadow: 4px 4px 0 var(--coral);
     transform: translateY(-2px);
   }
 
@@ -14983,9 +15369,9 @@ export const AUTH_CSS = `
   }
 
   .au-box.ok {
-    background: #E1E9DB;
-    color: var(--ink2);
-    border-color: var(--sage);
+    background: rgba(184, 240, 199, .45);
+    color: var(--ink);
+    border-color: var(--ink);
     transform: translateY(-2px);
   }
 
@@ -14995,33 +15381,37 @@ export const AUTH_CSS = `
     75% { transform: translateX(4px); }
   }
 
+  /* Error banner — dialect: quiet paper, one hard red ink edge. */
   .au-banner {
     position: relative;
-    padding: 14px 16px;
-    background: #F0DCD3;
-    border: 1px solid rgba(168,79,74,.2);
-    border-radius: 14px;
-    overflow: hidden;
+    padding: 12px 16px;
+    background: transparent;
+    border: 0;
+    border-left: 3px solid var(--red);
+    border-radius: 0;
+    overflow: visible;
   }
 
   .au-banner p {
     margin: 0;
-    color: #111211;
+    color: var(--ink);
     font-family: var(--body);
     font-size: 14px;
     font-weight: 500;
     line-height: 1.65;
   }
 
+  /* Success strip — a mint "stamp": ink border, hard shadow. */
   .au-strip {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 16px 18px;
-    background: #E1E9DB;
-    color: #111211;
-    border: 1px solid rgba(119,148,119,.35);
-    border-radius: 15px;
+    padding: 14px 18px;
+    background: rgba(184, 240, 199, .45);
+    color: var(--ink);
+    border: 2px solid var(--ink);
+    border-radius: 14px;
+    box-shadow: 3px 3px 0 var(--ink);
     font-family: var(--body);
     font-size: 14px;
     font-weight: 700;
@@ -15044,13 +15434,14 @@ export const AUTH_CSS = `
   .au-field input {
     width: 100%;
     min-width: 0;
-    height: 60px;
+    height: 58px;
     padding: 0 16px;
     color: var(--ink);
     background: var(--card);
-    border: 1.5px solid var(--line, rgba(17,18,17,.16));
+    border: 2px solid var(--ink);
     border-radius: 14px;
     outline: none;
+    box-shadow: 3px 3px 0 var(--ink);
     font-family: var(--body);
     font-size: 16px;
     font-weight: 500;
@@ -15060,8 +15451,9 @@ export const AUTH_CSS = `
   }
 
   .au-field input:focus {
-    border-color: var(--accent);
-    box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 4px var(--tint);
+    background: #FFFFFF;
+    border-color: var(--ink);
+    box-shadow: 4px 4px 0 var(--ink);
   }
 
   .au-field input::-webkit-outer-spin-button,
@@ -15085,53 +15477,157 @@ export const AUTH_CSS = `
   .au-cta:focus-visible,
   .au-ghost:focus-visible,
   .au-field input:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--coral);
     outline-offset: 3px;
   }
 
   @media (hover: hover) and (pointer: fine) {
     .au-result:hover:not(:disabled) {
-      border-color: rgba(17,18,17,.28);
-      transform: translateY(-2px);
-    }
-
-    .au-result:hover::after {
-      color: var(--coral);
-      transform: translate(2px, -2px);
+      background: rgba(255, 231, 106, .22);
     }
 
     .au-cta:hover:not(:disabled) {
-      filter: brightness(.96);
+      filter: brightness(.97);
+      transform: translate(-1px, -1px);
+      box-shadow: 5px 5px 0 var(--ink);
     }
 
     .au-ghost:hover:not(:disabled) {
-      color: var(--accent);
-      border-color: var(--accent);
+      color: var(--coral);
+      border-color: var(--coral);
     }
   }
 
-  @media (min-width: 1100px) {
-    .au-results {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      max-height: calc(100dvh - 360px);
-    }
+  /* ── The desktop campus-photo pane ──
+     Its width follows the desktop form column's CSS variable. A horizontal
+     wash dissolves its right edge into the paper instead of making a hard cut. */
+  .au-campus-scene {
+    display: block;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: var(--au-scene-width);
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    background: var(--paper);
+  }
 
-    .au-result {
-      min-height: 99px;
-    }
+  .au-campus-photo {
+    display: block;
+    position: absolute;
+    z-index: 0;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 42%;
+    filter: saturate(.92) contrast(.98) brightness(.97);
+    transition: filter .5s cubic-bezier(.2,.8,.2,1), transform .6s cubic-bezier(.2,.8,.2,1);
+  }
 
-    .au-art {
-      height: 280px;
-    }
+  .au-campus-wash {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      rgba(255, 249, 244, 0) 0%,
+      rgba(255, 249, 244, 0) 62%,
+      rgba(255, 249, 244, .5) 82%,
+      rgba(255, 249, 244, .9) 94%,
+      ${C.paper} 100%
+    );
+  }
+
+  .au-campus-blur { display: none; }
+
+  /* Focused-input mode is shared by college, email, and OTP on every layout.
+     The field group moves to the top while the campus scene softens. */
+  .au-root.is-auth-input-open { overflow: hidden; }
+
+  .au-root.is-auth-input-open .au-brandbar {
+    position: absolute;
+    left: var(--au-brand-left, 0px);
+    top: var(--au-brand-top, max(18px, env(safe-area-inset-top, 0px)));
+    width: var(--au-brand-width, 100%);
+    margin: 0;
+    opacity: 0;
+    transform: translateY(-6px);
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity .24s ease, transform .24s ease, visibility 0s linear .24s;
+  }
+
+  .au-root.is-auth-input-open .au-campus-photo {
+    filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
+    transform: scale(1.06);
+  }
+
+  .au-root.is-auth-input-open .au-campus-blur { opacity: 1; }
+
+  .au-root.is-auth-input-open .au-panel {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    justify-content: flex-start;
+    padding-top: max(30px, env(safe-area-inset-top, 0px));
+    padding-bottom: max(14px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .au-root.is-auth-input-open .au-step { flex: 1 1 auto; min-height: 0; }
+
+  .au-root.is-auth-input-open .au-results {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    padding-top: 6px;
+    padding-bottom: calc(var(--au-kb, 0px) + 14px);
+    -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 14px);
+    mask-image: linear-gradient(180deg, transparent 0, #000 14px);
+  }
+
+  .au-brandbar {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+    width: 100%;
+    max-width: 520px;
+    margin: 0 0 34px;
+    transition: opacity .24s ease, transform .24s ease, visibility 0s;
+  }
+
+  .au-wordmark {
+    display: inline-block;
+    color: var(--ink);
+    font-family: 'Bowlby One SC', var(--display);
+    font-size: clamp(40px, 3.6vw, 54px);
+    font-weight: 400;
+    letter-spacing: -.065em;
+    line-height: .92;
+    text-shadow: 2.5px 2.5px 0 var(--yellow);
+  }
+
+  .au-brand-question {
+    display: inline-block;
+    color: var(--coral);
+    margin-left: .015em;
+    transform: rotate(7deg) translateY(-.015em);
+    transform-origin: 60% 65%;
+  }
+
+  .au-brand-whisper {
+    color: var(--ink2);
+    font-family: var(--body);
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: .015em;
+    line-height: 1.35;
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .au-art .art-float,
-    .au-art .art-late,
-    .au-art .art-pulse {
-      animation: none;
-    }
-
     .au-search,
     .au-input,
     .au-result,
@@ -15147,13 +15643,15 @@ export const AUTH_CSS = `
     }
   }
 
-  /* Mobile-only chrome: hidden on desktop, revealed by MOBILE_AUTH_CSS. */
-  .au-brandbar { display: none; }
-  .au-campus-scene,
-  .au-campus-blur,
-  .au-backdrop { display: none; }
-  .au-mobile-field-label,
-  .au-mobile-sub { display: none; }
+  /* Invisible tap-catcher behind the open search sheet: clicking the photo
+     pane (or any dead space) closes the search, exactly like on the phone. */
+  .au-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background: transparent;
+    -webkit-tap-highlight-color: transparent;
+  }
 `;
 
 /* ============================================================
@@ -15166,23 +15664,23 @@ export const AUTH_CSS = `
    every breakpoint).
    ============================================================ */
 export const MOBILE_AUTH_CSS = `
-  @media (max-width: 700px) {
+  @media (max-width: 767px) {
     /* ---- tokens & root ---- */
     .au-root {
-      --ink: ${M.ink};
-      --ink2: ${M.ink2};
-      --muted: ${M.ink2};
-      --paper: ${M.paper};
-      --card: ${M.card};
-      --accent: ${M.yellow};
+      --ink: ${C.ink};
+      --ink2: ${C.ink2};
+      --muted: ${C.ink2};
+      --paper: ${C.paper};
+      --card: ${C.card};
+      --accent: ${C.yellow};
       --tint: rgba(255,212,61,.14);
-      --red: ${M.red};
-      --line: ${M.ink};
-      --body: ${M.fontBody};
-      --display: ${M.fontHeavy};
-      --mono: ${M.fontMono};
-      background: ${M.paper};
-      color: ${M.ink};
+      --red: ${C.red};
+      --line: ${C.ink};
+      --body: ${C.body};
+      --display: ${C.display};
+      --mono: ${C.mono};
+      background: ${C.paper};
+      color: ${C.ink};
       font-family: var(--body);
     }
 
@@ -15192,17 +15690,17 @@ export const MOBILE_AUTH_CSS = `
     .au-root.au-root-email,
     .au-root.au-root-otp,
     .au-root.au-root-verify {
-      --ink: ${M.ink};
-      --ink2: ${M.ink2};
-      --muted: ${M.ink2};
-      --paper: ${M.paper};
-      --card: ${M.card};
-      --accent: ${M.yellow};
+      --ink: ${C.ink};
+      --ink2: ${C.ink2};
+      --muted: ${C.ink2};
+      --paper: ${C.paper};
+      --card: ${C.card};
+      --accent: ${C.yellow};
       --tint: rgba(255,212,61,.14);
-      --red: ${M.red};
-      --line: ${M.ink};
-      background: ${M.paper};
-      color: ${M.ink};
+      --red: ${C.red};
+      --line: ${C.ink};
+      background: ${C.paper};
+      color: ${C.ink};
     }
 
     .au-root::before,
@@ -15252,31 +15750,31 @@ export const MOBILE_AUTH_CSS = `
       max-width: 380px;
       margin: 7px 0 0;
       min-height: 0;
-      transition: opacity .35s ease, transform .5s cubic-bezier(.32,.72,0,1);
+      transition: opacity .24s ease, transform .24s ease, visibility 0s linear .24s;
     }
 
     .au-wordmark {
       display: inline-block;
-      color: ${M.ink};
-      font-family: 'Bowlby One SC', ${M.fontHeavy};
+      color: ${C.ink};
+      font-family: 'Bowlby One SC', ${C.display};
       font-size: clamp(37px, 10vw, 47px);
       font-weight: 400;
       letter-spacing: -.065em;
       line-height: .92;
-      text-shadow: 2px 2px 0 ${M.yellow};
+      text-shadow: 2px 2px 0 ${C.yellow};
     }
 
     .au-brand-question {
       display: inline-block;
-      color: ${M.coral};
+      color: ${C.coral};
       margin-left: .015em;
       transform: rotate(7deg) translateY(-.015em);
       transform-origin: 60% 65%;
     }
 
     .au-brand-whisper {
-      color: ${M.ink2};
-      font-family: ${M.fontBody};
+      color: ${C.ink2};
+      font-family: ${C.body};
       font-size: 11px;
       font-weight: 600;
       letter-spacing: .015em;
@@ -15298,7 +15796,7 @@ export const MOBILE_AUTH_CSS = `
       margin: auto auto max(10px, env(safe-area-inset-bottom, 0px));
       padding: 18px 0 max(8px, env(safe-area-inset-bottom, 0px));
       background: transparent;
-      color: ${M.ink};
+      color: ${C.ink};
       border: 0;
       border-radius: 0;
       box-shadow: none;
@@ -15314,7 +15812,7 @@ export const MOBILE_AUTH_CSS = `
       right: -22px;
       bottom: -24px;
       left: -22px;
-      background: linear-gradient(180deg, rgba(241,237,226,0) 0%, rgba(241,237,226,.76) 18%, rgba(241,237,226,.92) 46%, ${M.paper} 100%);
+      background: linear-gradient(180deg, rgba(255,249,244,0) 0%, rgba(255,249,244,.76) 18%, rgba(255,249,244,.92) 46%, ${C.paper} 100%);
       opacity: .94;
       transition: opacity .4s cubic-bezier(.32,.72,0,1);
     }
@@ -15324,57 +15822,22 @@ export const MOBILE_AUTH_CSS = `
       margin-bottom: max(28px, env(safe-area-inset-bottom, 0px));
     }
 
+    /* Headline/sub share the base voice now — phones only scale them down.
+       Same font, same weight, same tracking as desktop: one screen, two sizes. */
     .au-step .au-headline {
       max-width: 21ch;
-      margin: 0;
-      color: ${M.ink};
-      font-family: ${M.fontBody};
       font-size: clamp(30px, 8.3vw, 36px);
-      font-weight: 800;
-      line-height: 1.04;
-      letter-spacing: -.06em;
-      text-transform: none;
-      overflow-wrap: anywhere;
-      text-wrap: balance;
-    }
-
-    .au-headline::after { display: none; content: none; }
-
-    .au-headline .au-huh-inline {
-      font-family: 'Bowlby One SC', ${M.fontHeavy};
-      font-size: 1.02em;
-      font-weight: 400;
-      letter-spacing: -.055em;
-      white-space: nowrap;
-      text-shadow: 1.5px 1.5px 0 ${M.yellow};
     }
 
     .au-step .au-sub {
       max-width: 31ch;
       margin: -2px 0 0;
-      color: ${M.ink2};
-      font-family: ${M.fontBody};
-      font-size: 13.5px;
-      font-weight: 400;
-      line-height: 1.48;
-      overflow-wrap: anywhere;
     }
 
-    .au-sub b { color: ${M.ink}; font-weight: 700; }
+    .au-sub b { color: ${C.ink}; font-weight: 700; }
     .au-sub b.low { overflow-wrap: anywhere; text-transform: lowercase; }
 
     .au-mobile-sub { display: block; }
-
-    .au-mobile-field-label {
-      display: block;
-      margin: 4px 0 -3px;
-      color: ${M.ink2};
-      font-family: ${M.fontMono};
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: .09em;
-      text-transform: uppercase;
-    }
 
     /* Mobile replaces the framed illustration with the full-bleed photo. */
     .au-step > .au-art { display: none !important; }
@@ -15392,7 +15855,7 @@ export const MOBILE_AUTH_CSS = `
       width: 22px;
       height: 22px;
       transform: translateY(-50%);
-      color: ${M.ink};
+      color: ${C.ink};
       background: transparent;
       pointer-events: none;
     }
@@ -15402,13 +15865,13 @@ export const MOBILE_AUTH_CSS = `
       width: 100%;
       height: 56px;
       padding: 0 14px 0 47px;
-      color: ${M.ink};
-      background: rgba(255,253,247,.97);
-      border: 2px solid ${M.ink};
+      color: ${C.ink};
+      background: rgba(255,252,248,.97);
+      border: 2px solid ${C.ink};
       border-radius: 15px;
       outline: none;
-      box-shadow: 4px 4px 0 ${M.ink};
-      font-family: ${M.fontBody};
+      box-shadow: 4px 4px 0 ${C.ink};
+      font-family: ${C.body};
       font-size: 16px;
       font-weight: 500;
       -webkit-appearance: none;
@@ -15417,9 +15880,9 @@ export const MOBILE_AUTH_CSS = `
     }
 
     .au-search:focus {
-      background: #FFFEFA;
-      border-color: ${M.ink};
-      box-shadow: 4px 4px 0 ${M.ink};
+      background: #FFF0F4;
+      border-color: ${C.coral};
+      box-shadow: 4px 4px 0 ${C.coral};
       transform: none;
     }
 
@@ -15431,13 +15894,13 @@ export const MOBILE_AUTH_CSS = `
       min-width: 0;
       height: 54px;
       padding: 0 14px;
-      color: ${M.ink};
-      background: rgba(255,255,255,.94);
-      border: 2px solid ${M.ink};
+      color: ${C.ink};
+      background: rgba(255,252,248,.96);
+      border: 2px solid ${C.ink};
       border-radius: 12px;
       outline: none;
-      box-shadow: 3px 3px 0 ${M.ink};
-      font-family: ${M.fontBody};
+      box-shadow: 3px 3px 0 ${C.ink};
+      font-family: ${C.body};
       font-size: 16px;
       font-weight: 500;
       -webkit-appearance: none;
@@ -15448,16 +15911,16 @@ export const MOBILE_AUTH_CSS = `
     .au-search::placeholder,
     .au-input::placeholder,
     .au-field input::placeholder {
-      color: ${M.ink2};
+      color: ${C.ink2};
       opacity: .8;
       font-weight: 400;
     }
 
     .au-input:focus,
     .au-field input:focus {
-      background: #FFFFFF;
-      border-color: ${M.ink};
-      box-shadow: 4px 4px 0 ${M.ink};
+      background: #FFF0F4;
+      border-color: ${C.coral};
+      box-shadow: 4px 4px 0 ${C.coral};
       transform: none;
     }
 
@@ -15466,24 +15929,23 @@ export const MOBILE_AUTH_CSS = `
 
     .au-input:-webkit-autofill,
     .au-field input:-webkit-autofill {
-      -webkit-box-shadow: 0 0 0 60px ${M.card} inset, 3px 3px 0 ${M.ink};
-      -webkit-text-fill-color: ${M.ink};
+      -webkit-box-shadow: 0 0 0 60px ${C.card} inset, 3px 3px 0 ${C.ink};
+      -webkit-text-fill-color: ${C.ink};
     }
 
-    /* ---- results: calm full-width rows, not a grid of cards ---- */
+    /* ---- results: calm full-width rows; the list owns the screen height ---- */
     .au-results {
       display: flex;
       flex-direction: column;
       gap: 0;
       width: 100%;
-      max-height: min(30dvh, 250px);
       overflow-y: auto;
       overscroll-behavior: contain;
       -webkit-overflow-scrolling: touch;
       padding: 0;
       border-top: 1px solid rgba(17,18,17,.24);
       scrollbar-width: thin;
-      scrollbar-color: ${M.ink2} transparent;
+      scrollbar-color: ${C.ink2} transparent;
     }
 
     .au-result,
@@ -15491,18 +15953,17 @@ export const MOBILE_AUTH_CSS = `
     .au-result:nth-child(5n + 4) {
       position: relative;
       display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      justify-content: center;
-      gap: 3px;
+      flex-direction: row;
+      align-items: center;
+      gap: 12px;
       width: 100%;
-      min-height: 52px;
-      padding: 9px 34px 9px 2px;
+      min-height: 66px;
+      padding: 10px 36px 10px 2px;
       text-align: left;
-      color: ${M.ink};
+      color: ${C.ink};
       background: transparent;
       border: 0;
-      border-bottom: 1px solid ${M.hair};
+      border-bottom: 1px solid rgba(23, 20, 20, .22);
       border-radius: 0;
       box-shadow: none;
       cursor: pointer;
@@ -15515,15 +15976,22 @@ export const MOBILE_AUTH_CSS = `
       top: 50%;
       right: 10px;
       transform: translateY(-50%);
-      color: ${M.ink};
-      font: 20px/1 ${M.fontBody};
+      color: ${C.ink};
+      font: 20px/1 ${C.body};
     }
 
-    .au-result:active { background: #FFF1AE; }
+    .au-result:active { background: #FFF6D6; }
+
+    /* Mobile logo circle: a touch smaller than the desktop 52px. */
+    .au-logo {
+      width: 44px;
+      height: 44px;
+      font-size: 12px;
+    }
 
     .au-result-name {
-      color: ${M.ink};
-      font-family: ${M.fontBody};
+      color: ${C.ink};
+      font-family: ${C.body};
       font-size: 13.5px;
       font-weight: 700;
       line-height: 1.32;
@@ -15531,21 +15999,21 @@ export const MOBILE_AUTH_CSS = `
     }
 
     .au-result-meta {
-      color: ${M.ink2};
-      font-family: ${M.fontBody};
+      color: ${C.ink2};
+      font-family: ${C.body};
       font-size: 11px;
       font-weight: 400;
       line-height: 1.4;
     }
 
-    .au-result.chosen { background: #E5F3E7; }
-    .au-result.chosen::after { content: '✓'; color: ${M.ink}; font-weight: 700; }
+    .au-result.chosen { background: rgba(184, 240, 199, .35); }
+    .au-result.chosen::after { content: '✓'; color: ${C.ink}; font-weight: 700; }
 
     .au-empty {
       margin: 0;
       padding: 8px 0;
-      color: ${M.ink2};
-      font-family: ${M.fontBody};
+      color: ${C.ink2};
+      font-family: ${C.body};
       font-size: 12px;
       font-weight: 400;
       line-height: 1.6;
@@ -15561,13 +16029,13 @@ export const MOBILE_AUTH_CSS = `
       min-height: 52px;
       width: 100%;
       padding: 13px 18px;
-      color: ${M.ink};
-      background: ${M.yellow};
-      border: 2px solid ${M.ink};
+      color: ${C.ink};
+      background: ${C.yellow};
+      border: 2px solid ${C.ink};
       border-radius: 12px;
-      box-shadow: 4px 4px 0 ${M.ink};
+      box-shadow: 4px 4px 0 ${C.ink};
       cursor: pointer;
-      font-family: ${M.fontBody};
+      font-family: ${C.body};
       font-size: 14px;
       font-weight: 700;
       letter-spacing: -.01em;
@@ -15578,15 +16046,15 @@ export const MOBILE_AUTH_CSS = `
 
     .au-cta:active:not(:disabled) {
       transform: translate(4px, 4px);
-      box-shadow: 0 0 0 ${M.ink};
-      background: ${M.yellowDeep};
+      box-shadow: 0 0 0 ${C.ink};
+      background: ${C.yellowDeep};
     }
 
     .au-cta:disabled {
-      color: ${M.ink2};
-      background: ${M.hair};
-      border-color: ${M.ink2};
-      box-shadow: 3px 3px 0 ${M.ink2};
+      color: ${C.ink2};
+      background: rgba(23, 20, 20, .06);
+      border-color: rgba(23, 20, 20, .38);
+      box-shadow: 3px 3px 0 rgba(23, 20, 20, .3);
       cursor: not-allowed;
       opacity: 1;
     }
@@ -15595,20 +16063,20 @@ export const MOBILE_AUTH_CSS = `
       align-self: flex-start;
       min-height: 42px;
       padding: 9px 0;
-      color: ${M.ink2};
+      color: ${C.ink2};
       background: transparent;
       border: 0;
-      border-bottom: 1px solid ${M.ink2};
+      border-bottom: 1px solid ${C.ink2};
       border-radius: 0;
       box-shadow: none;
       cursor: pointer;
-      font-family: ${M.fontBody};
+      font-family: ${C.body};
       font-size: 13px;
       font-weight: 600;
       transition: color .12s ease;
     }
 
-    .au-ghost:active:not(:disabled) { color: ${M.ink}; }
+    .au-ghost:active:not(:disabled) { color: ${C.ink}; }
     .au-ghost:disabled { opacity: .5; cursor: not-allowed; }
 
     /* ---- OTP boxes ---- */
@@ -15627,29 +16095,29 @@ export const MOBILE_AUTH_CSS = `
       height: 50px;
       padding: 0;
       text-align: center;
-      color: ${M.ink};
-      background: rgba(255,255,255,.94);
-      border: 2px solid ${M.ink};
+      color: ${C.ink};
+      background: rgba(255,252,248,.96);
+      border: 2px solid ${C.ink};
       border-radius: 12px;
-      box-shadow: 3px 3px 0 ${M.ink};
-      font-family: ${M.fontHeavy};
+      box-shadow: 3px 3px 0 ${C.ink};
+      font-family: ${C.body};
       font-size: 23px;
-      font-weight: 400;
+      font-weight: 500;
       outline: none;
-      caret-color: ${M.ink};
+      caret-color: ${C.ink};
       transition: background .2s cubic-bezier(.32,.72,0,1), box-shadow .2s cubic-bezier(.32,.72,0,1);
     }
 
     .au-box:focus {
-      background: #FFF1AE;
-      border-color: ${M.ink};
-      box-shadow: 3px 3px 0 ${M.ink};
+      background: #FFF0F4;
+      border-color: ${C.coral};
+      box-shadow: 4px 4px 0 ${C.coral};
       transform: none;
     }
 
     .au-box:disabled:not(.ok) { opacity: .65; }
-    .au-box.err { border-color: ${M.red}; animation: au-shake .3s steps(2) 2; }
-    .au-box.ok { background: #E5F3E7; color: ${M.ink}; border-color: ${M.ink}; transform: none; }
+    .au-box.err { border-color: ${C.red}; animation: au-shake .3s steps(2) 2; }
+    .au-box.ok { background: rgba(184, 240, 199, .35); color: ${C.ink}; border-color: ${C.ink}; transform: none; }
 
     /* ---- notes, banners, misc ---- */
     .au-banner {
@@ -15657,15 +16125,15 @@ export const MOBILE_AUTH_CSS = `
       padding: 5px 0 5px 11px;
       background: transparent;
       border: 0;
-      border-left: 3px solid ${M.red};
+      border-left: 3px solid ${C.red};
       border-radius: 0;
       overflow: visible;
     }
 
     .au-banner p {
       margin: 0;
-      color: ${M.ink};
-      font-family: ${M.fontBody};
+      color: ${C.ink};
+      font-family: ${C.body};
       font-size: 13px;
       font-weight: 500;
       line-height: 1.55;
@@ -15677,27 +16145,27 @@ export const MOBILE_AUTH_CSS = `
       align-items: center;
       gap: 9px;
       padding: 6px 0;
-      color: ${M.ink};
+      color: ${C.ink};
       background: transparent;
       border: 0;
       border-radius: 0;
-      font-family: ${M.fontBody};
+      font-family: ${C.body};
       font-size: 14px;
       font-weight: 700;
     }
 
     .au-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
     .au-field label {
-      color: ${M.ink2};
-      font-family: ${M.fontBody};
+      color: ${C.ink2};
+      font-family: ${C.body};
       font-size: 12px;
       font-weight: 600;
     }
 
     .au-revnote {
       margin: 0;
-      color: ${M.ink2};
-      font-family: ${M.fontBody};
+      color: ${C.ink2};
+      font-family: ${C.body};
       font-size: 12px;
       line-height: 1.6;
     }
@@ -15709,7 +16177,7 @@ export const MOBILE_AUTH_CSS = `
     .au-cta:focus-visible,
     .au-ghost:focus-visible,
     .au-field input:focus-visible {
-      outline: 2px solid ${M.ink};
+      outline: 2px solid ${C.coral};
       outline-offset: 3px;
     }
 
@@ -15718,25 +16186,27 @@ export const MOBILE_AUTH_CSS = `
       display: block;
       position: fixed;
       inset: 0;
+      width: auto;
       z-index: 0;
       overflow: hidden;
       pointer-events: none;
-      background: ${M.paper};
+      background: ${C.paper};
       transition: opacity .35s ease;
     }
 
+    /* The photo fills the fixed scene EXACTLY — inset-0 + object-fit: cover.
+       The old 100vw / translateX(-50%) build measured wider than the visual
+       viewport on Chrome Android, which pushed the picture off-center and
+       cropped half of it out of frame. inset-0 always centers, always fits. */
     .au-campus-photo {
       display: block;
       position: absolute;
       z-index: 0;
-      top: 0;
-      left: 50%;
-      width: 100vw;
-      max-width: none;
-      height: 100dvh;
+      inset: 0;
+      width: 100%;
+      height: 100%;
       object-fit: cover;
-      object-position: center 48%;
-      transform: translateX(-50%) scale(1.01);
+      object-position: center 45%;
       filter: saturate(.92) contrast(.98) brightness(.96);
       transition: filter .42s cubic-bezier(.2,.8,.2,1), transform .55s cubic-bezier(.2,.8,.2,1);
       will-change: transform, filter;
@@ -15748,19 +16218,24 @@ export const MOBILE_AUTH_CSS = `
       transition: filter .6s cubic-bezier(.32,.72,0,1), transform .8s cubic-bezier(.32,.72,0,1);
     }
 
+    .au-root.is-auth-input-open .au-campus-scene-college .au-campus-photo {
+      filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
+      transform: scale(1.06);
+    }
+
     .au-campus-wash {
       position: absolute;
       z-index: 1;
       inset: 0;
       background: linear-gradient(
         180deg,
-        rgba(241,237,226,.06) 0%,
-        rgba(241,237,226,.03) 30%,
-        rgba(241,237,226,.15) 44%,
-        rgba(241,237,226,.62) 58%,
-        rgba(241,237,226,.93) 70%,
-        ${M.paper} 83%,
-        ${M.paper} 100%
+        rgba(255,249,244,.06) 0%,
+        rgba(255,249,244,.03) 30%,
+        rgba(255,249,244,.15) 44%,
+        rgba(255,249,244,.62) 58%,
+        rgba(255,249,244,.93) 70%,
+        ${C.paper} 83%,
+        ${C.paper} 100%
       );
       transition: background .55s cubic-bezier(.32,.72,0,1);
     }
@@ -15772,7 +16247,7 @@ export const MOBILE_AUTH_CSS = `
       z-index: 2;
       pointer-events: none;
       opacity: 0;
-      background: rgba(241,237,226,.5);
+      background: rgba(255,249,244,.5);
       -webkit-backdrop-filter: blur(26px) saturate(1.45);
       backdrop-filter: blur(26px) saturate(1.45);
       transition: opacity .55s cubic-bezier(.32,.72,0,1);
@@ -15788,37 +16263,25 @@ export const MOBILE_AUTH_CSS = `
       -webkit-tap-highlight-color: transparent;
     }
 
-    /* ---- search-open state ---- */
-    .au-root.is-search-open { overflow: hidden; }
-
-    .au-root.is-search-open .au-campus-blur { opacity: 1; }
-
-    .au-root.is-search-open .au-campus-scene-college .au-campus-photo {
-      filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
-      transform: translateX(-50%) scale(1.06);
+    /* Keep the active step in normal flow; its measured transform moves the
+       headline and inputs together without switching to fixed positioning. */
+    .au-root.is-auth-input-open .au-step {
+      position: relative;
+      z-index: 6;
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+      max-width: 380px;
+      margin: 0 auto;
+      padding: 0 0 max(12px, env(safe-area-inset-bottom, 0px));
+      gap: 8px;
     }
 
-    .au-root.is-search-open .au-brandbar {
-      opacity: 0;
-      transform: translateY(-10px);
-      pointer-events: none;
-    }
-
-    .au-root.is-search-open .au-step {
-      margin-top: clamp(18px, 7dvh, 64px);
-      margin-bottom: 0;
-      padding-top: 0;
-    }
-
-    .au-root.is-search-open .au-step::before {
+    .au-root.is-auth-input-open .au-step::before {
       opacity: 0;
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
     }
-
-    .au-root.is-search-open .au-mobile-field-label { margin-top: 2px; }
-
-    .au-root.is-search-open .au-results { max-height: min(28dvh, 230px); }
 
     /* ---- compact screens (order matters: height first, then width) ---- */
     @media (max-height: 760px) {
@@ -15856,10 +16319,6 @@ export const MOBILE_AUTH_CSS = `
       .au-ghost,
       .au-results { transition: none !important; }
       .au-box.err { animation: none !important; }
-      .au-root.is-search-open .au-campus-scene-college .au-campus-photo {
-        filter: blur(10px) saturate(.9) contrast(.98) brightness(.94);
-        transform: translateX(-50%);
-      }
     }
   }
 `;
@@ -15983,18 +16442,21 @@ const AuthCampusScene = ({ kind = 'college', verified = false }) => (
 
 const Auth = ({ onSuccess, reverifyOnly = false }) => {
   const reduceMotion = useReducedMotion();
-  const isDesktop = useIsDesktop();
 
   // Auth is cream where the splash is near-black, so the browser's status bar
   // and the strip around the app must switch with it or the transition reads as
   // two different apps.
-  useChromeColor(M.paper);
+  useChromeColor(C.paper);
 
   const [step, setStep] = useState(reverifyOnly ? 'otp' : 'college');
+  const rootRef = useRef(null);
   const [colleges, setColleges] = useState([]);
   const [collegeQuery, setCollegeQuery] = useState('');
   const [collegeSearchOpen, setCollegeSearchOpen] = useState(false);
+  const [authInputOpen, setAuthInputOpen] = useState(false);
   const collegeSearchRef = useRef(null);
+  const collegeStepRef = useRef(null);
+  const searchTransitionFrameRef = useRef(0);
   const [college, setCollege] = useState(null);
   const [email, setEmail] = useState('');
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
@@ -16002,19 +16464,120 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
   const [error, setError] = useState('');
   const [verified, setVerified] = useState(false);
   const [requestDone, setRequestDone] = useState(false);
-  const [graduatingYear, setGraduatingYear] = useState('');
   const inputRefs = useRef([]);
   const { login, user: authUser } = useAuth();
 
+  const transitionAuthInput = useCallback((open, targetStep = collegeStepRef.current) => {
+    const root = rootRef.current;
+
+    if (!root || !targetStep || authInputOpen === open || reduceMotion) {
+      setAuthInputOpen(open);
+      return Promise.resolve();
+    }
+
+    const previousOpen = root.classList.contains('is-auth-input-open');
+    const brand = root.querySelector('.au-brandbar');
+    const brandRect = brand?.getBoundingClientRect();
+    const rootRect = root.getBoundingClientRect();
+    if (brandRect) {
+      root.style.setProperty('--au-brand-left', `${brandRect.left - rootRect.left}px`);
+      root.style.setProperty('--au-brand-top', `${brandRect.top - rootRect.top}px`);
+      root.style.setProperty('--au-brand-width', `${brandRect.width}px`);
+    }
+    const startTop = targetStep.getBoundingClientRect().top;
+    root.classList.toggle('is-auth-input-open', open);
+    const targetTop = targetStep.getBoundingClientRect().top;
+    root.classList.toggle('is-auth-input-open', previousOpen);
+
+    targetStep.style.transition = 'none';
+    targetStep.style.setProperty('--au-search-shift', `${startTop - targetTop}px`);
+    void targetStep.offsetHeight;
+    targetStep.style.transition = '';
+
+    const transitionFinished = new Promise((resolve) => {
+      let timeoutId;
+      const finish = () => {
+        if (timeoutId) window.clearTimeout(timeoutId);
+        targetStep.removeEventListener('transitionend', onTransitionEnd);
+        resolve();
+      };
+      const onTransitionEnd = (event) => {
+        if (event.target === targetStep && event.propertyName === 'translate') finish();
+      };
+      targetStep.addEventListener('transitionend', onTransitionEnd);
+      timeoutId = window.setTimeout(finish, 600);
+    });
+
+    cancelAnimationFrame(searchTransitionFrameRef.current);
+    setAuthInputOpen(open);
+    searchTransitionFrameRef.current = requestAnimationFrame(() => {
+      targetStep.style.setProperty('--au-search-shift', '0px');
+    });
+    return transitionFinished;
+  }, [authInputOpen, reduceMotion]);
+
   const openCollegeSearch = useCallback(() => {
-    if (isDesktop) return;
     setCollegeSearchOpen(true);
-  }, [isDesktop]);
+    transitionAuthInput(true);
+  }, [transitionAuthInput]);
 
   const closeCollegeSearch = useCallback(() => {
+    transitionAuthInput(false);
     setCollegeSearchOpen(false);
+    setCollegeQuery('');
     collegeSearchRef.current?.blur();
+  }, [transitionAuthInput]);
+
+  const handleAuthInputFocus = (event) => {
+    transitionAuthInput(true, event.currentTarget.closest('.au-step'));
+  };
+
+  // Keyboard inset → --au-kb on the root, written straight to the DOM node
+  // (no re-renders while the keyboard animates). The 140px floor separates a
+  // real keyboard from URL-bar resize noise. The search sheet uses it to
+  // keep its last list rows reachable above the keys, while the screen
+  // itself never changes height.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    const root = rootRef.current;
+    if (!vv || !root) return undefined;
+
+    const syncKeyboardInset = () => {
+      const inset = window.innerHeight - vv.height - vv.offsetTop;
+      const kb = inset > 140 ? Math.round(inset) : 0;
+      root.style.setProperty('--au-kb', `${Math.max(0, kb)}px`);
+    };
+
+    syncKeyboardInset();
+    vv.addEventListener('resize', syncKeyboardInset);
+    vv.addEventListener('scroll', syncKeyboardInset);
+
+    return () => {
+      vv.removeEventListener('resize', syncKeyboardInset);
+      vv.removeEventListener('scroll', syncKeyboardInset);
+    };
   }, []);
+
+  // Swiping up on the college list dismisses the keyboard (the sheet stays
+  // open) so the full list is readable. A one-shot guard keeps the blur
+  // from refiring on every move event of the same gesture.
+  const listTouchStartY = useRef(null);
+  const listSwipeDismissed = useRef(false);
+
+  const handleResultsTouchStart = (e) => {
+    listTouchStartY.current = e.touches?.[0]?.clientY ?? null;
+    listSwipeDismissed.current = false;
+  };
+
+  const handleResultsTouchMove = (e) => {
+    if (listSwipeDismissed.current || listTouchStartY.current == null) return;
+    const y = e.touches?.[0]?.clientY;
+    if (y == null) return;
+    if (listTouchStartY.current - y > 14) {
+      listSwipeDismissed.current = true;
+      collegeSearchRef.current?.blur();
+    }
+  };
 
   const [requestForm, setRequestForm] = useState({
     collegeName: '',
@@ -16111,20 +16674,33 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     ? colleges.filter((c) => collegeMatches(c, collegeQuery))
     : colleges;
 
-  // On desktop the results are always inline under the field. On mobile they
-  // only exist while the search is open, and only once something is typed — an
-  // empty list is noise, not help.
-  const showResults = !!collegeQuery.trim() && (isDesktop || collegeSearchOpen);
-  const searchActive = collegeSearchOpen && !isDesktop;
+  // Ink initials fallback for colleges whose logo hasn't been uploaded yet.
+  // Once a logo ships on the college object it simply covers this.
+  const collegeInitials = (name = '') => {
+    const stop = new Set(['of', 'and', 'the', 'for', 'at', 'a', 'an']);
+    const words = String(name)
+      .replace(/[^A-Za-z\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w && !stop.has(w.toLowerCase()));
+    if (words.length === 0) return '??';
+    if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+    return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  };
+
+  // One identical search behavior on every breakpoint. Suggestions are
+  // intentionally withheld until the user enters a search query.
+  const searchActive = collegeSearchOpen;
+  const showResults = collegeSearchOpen && collegeQuery.trim().length > 0;
 
   const pickCollege = (c) => {
     setCollege(c);
     setCollegeQuery(c.name);
     setCollegeSearchOpen(false);
+    setAuthInputOpen(false);
     setError('');
     collegeSearchRef.current?.blur();
     triggerHaptic('light');
-    setTimeout(() => setStep('email'), 220);
+    setStep('email');
   };
 
   const [suspendedData, setSuspendedData] = useState(() => {
@@ -16137,10 +16713,10 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
   });
 
   useEffect(() => {
-    if (step === 'otp' && inputRefs.current[0]) {
+    if (reverifyOnly && step === 'otp' && inputRefs.current[0]) {
       setTimeout(() => inputRefs.current[0].focus(), 150);
     }
-  }, [step]);
+  }, [reverifyOnly, step]);
 
   const reverifyKicked = useRef(false);
 
@@ -16156,12 +16732,6 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
 
   const reverifyCollege = authUser?.college || 'your college';
 
-  const handleInputBlur = () => {
-    // Desktop keeps its existing reset behavior. On mobile, forcing the page to
-    // the top on blur fights keyboard dismissal and causes a visible jump.
-    if (!window.matchMedia('(max-width: 700px)').matches) window.scrollTo(0, 0);
-  };
-
   const handleSendOtp = async (e) => {
     e.preventDefault();
     if (!email.trim() || !college) return;
@@ -16170,6 +16740,9 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     setLoading(true);
     triggerHaptic('medium');
 
+    const activeStep = rootRef.current?.querySelector('.au-step');
+    const closeTransition = transitionAuthInput(false, activeStep);
+    setCollegeSearchOpen(false);
     if (document.activeElement) document.activeElement.blur();
 
     try {
@@ -16177,6 +16750,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
         email: email.trim(),
         collegeCode: college.code,
       });
+      await closeTransition;
       setStep('otp');
     } catch (err) {
       const exactError = err.response?.data?.message
@@ -16230,18 +16804,6 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
       localStorage.removeItem('matchalize_suspended');
       login(data.user);
 
-      if (graduatingYear && data.user?._id && !data.user.graduatingYear) {
-        api.put('/users/profile', {
-          graduatingYear: Number(graduatingYear),
-        })
-          .then(() => {
-            const stored = JSON.parse(localStorage.getItem('matchalize_user') || '{}');
-            stored.graduatingYear = Number(graduatingYear);
-            localStorage.setItem('matchalize_user', JSON.stringify(stored));
-          })
-          .catch(() => {});
-      }
-
       if (socket && socket.disconnected) socket.connect();
 
       setVerified(true);
@@ -16273,7 +16835,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
       triggerHaptic('heavy');
       setLoading(false);
     }
-  }, [email, onSuccess, login, reverifyOnly, handleReverifyConfirm, graduatingYear]);
+  }, [email, onSuccess, login, reverifyOnly, handleReverifyConfirm]);
 
   const handleOtpChange = (e, index) => {
     if (error) setError('');
@@ -16333,18 +16895,11 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
     </AnimatePresence>
   );
 
-  const swapProps = isDesktop ? {
-    initial: reduceMotion ? false : { opacity: 0, y: 12, scale: .985, filter: 'blur(2px)' },
-    animate: { opacity: 1, y: 0, scale: 1, filter: 'blur(0px)' },
-    exit: reduceMotion
-      ? { opacity: 0 }
-      : { opacity: 0, y: -8, scale: .99, filter: 'blur(2px)' },
-    transition: { duration: .24, ease: [0.22, 1, 0.36, 1] },
-  } : {
-    initial: reduceMotion ? false : { opacity: 0, y: 6 },
+  const swapProps = {
+    initial: reduceMotion ? false : { opacity: 0, y: 12 },
     animate: { opacity: 1, y: 0 },
-    exit: reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 },
-    transition: { duration: .18, ease: [0.22, 1, 0.36, 1] },
+    exit: reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 },
+    transition: { duration: reduceMotion ? 0 : .24, ease: [0.22, 1, 0.36, 1] },
   };
 
   if (suspendedData) {
@@ -16369,7 +16924,10 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
 
   if (reverifyOnly) {
     return (
-      <div className="au-root au-root-verify">
+      <div
+        ref={rootRef}
+        className={`au-root au-root-verify${authInputOpen ? ' is-auth-input-open' : ''}`}
+      >
         <style>{AUTH_CSS}{MOBILE_AUTH_CSS}</style>
         <AuthCampusScene kind="verify" verified={verified} />
 
@@ -16377,7 +16935,9 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
           <motion.div className="au-panel" {...swapProps}>
             <AuthBrand />
             <div className="au-step">
-              <h2 className="au-headline">Confirm you're still a student.</h2>
+              <h2 className="au-headline">
+                Still you, <span className="au-huh-inline">huh?</span>
+              </h2>
 
               <p className="au-sub">
                 We check each year that your <b>{reverifyCollege}</b> email still works.
@@ -16400,6 +16960,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                     ref={(el) => { inputRefs.current[index] = el; }}
                     onChange={(e) => handleOtpChange(e, index)}
                     onKeyDown={(e) => handleOtpKeyDown(e, index)}
+                    onFocus={handleAuthInputFocus}
                     disabled={verified || loading}
                     aria-label={`Digit ${index + 1}`}
                   />
@@ -16435,7 +16996,10 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
   }
 
   return (
-    <div className={`au-root au-root-${step}${step === 'college' && collegeSearchOpen ? ' is-search-open' : ''}`}>
+    <div
+      ref={rootRef}
+      className={`au-root au-root-${step}${authInputOpen ? ' is-auth-input-open' : ''}`}
+    >
       <style>{AUTH_CSS}{MOBILE_AUTH_CSS}</style>
       <AuthCampusScene kind={step} verified={verified} />
 
@@ -16449,38 +17013,25 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
             {step === 'college' ? (
               <motion.section
                 key="college"
+                ref={collegeStepRef}
                 className="au-step"
                 {...swapProps}
-                layout={isDesktop ? false : 'position'}
-                transition={{
-                  ...swapProps.transition,
-                  layout: { type: 'spring', stiffness: 300, damping: 34, mass: 0.9 },
-                }}
               >
-                <h2 className="au-headline">
+                <motion.h2 layoutId="auth-step-headline" className="au-headline">
                   So, what&rsquo;s your college, <span className="au-huh-inline">huh?</span>
-                </h2>
-
-                <AnimatePresence mode="wait" initial={false}>
-                  <motion.p
-                    key={searchActive ? 'typing' : 'idle'}
-                    className="au-sub au-mobile-sub"
-                    initial={reduceMotion ? false : { opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.16 }}
-                  >
-                    {searchActive
-                      ? 'Start typing. We’ll bring your campus into view.'
-                      : 'Your campus. Your people. Your next good story.'}
-                  </motion.p>
-                </AnimatePresence>
+                </motion.h2>
 
                 <AuthArtwork kind="college" />
 
                 {errorBanner}
 
-                <label className="au-mobile-field-label" htmlFor="college-search">Find your campus</label>
+                <div className="au-search-labelrow">
+                  {searchActive && (
+                    <button className="au-cancel" type="button" onClick={closeCollegeSearch}>
+                      Cancel
+                    </button>
+                  )}
+                </div>
                 <div className="au-searchwrap">
                   <span className="au-searchicon">
                     <Search size={20} strokeWidth={1.9} aria-hidden="true" />
@@ -16534,6 +17085,8 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                       id="college-suggestions"
                       role="listbox"
                       aria-label="College suggestions"
+                      onTouchStart={handleResultsTouchStart}
+                      onTouchMove={handleResultsTouchMove}
                       initial={reduceMotion ? false : { opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: 4 }}
@@ -16561,6 +17114,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                                 }));
                                 triggerHaptic('light');
                                 setCollegeSearchOpen(false);
+                                setAuthInputOpen(false);
                                 collegeSearchRef.current?.blur();
                                 setStep('request');
                               }}
@@ -16570,7 +17124,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                           )}
                         </div>
                       ) : (
-                        filteredColleges.slice(0, 12).map((c) => (
+                        filteredColleges.map((c) => (
                           <button
                             key={c.code}
                             type="button"
@@ -16579,12 +17133,19 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                             className={`au-result${college?.code === c.code ? ' chosen' : ''}`}
                             onClick={() => pickCollege(c)}
                           >
-                            <span className="au-result-name">{c.name}</span>
-                            {(c.city || c.state) && (
-                              <span className="au-result-meta">
-                                {[c.city, c.state].filter(Boolean).join(', ')}
-                              </span>
-                            )}
+                            <span className="au-logo" aria-hidden="true">
+                              {(c.logo || c.logoUrl)
+                                ? <img src={c.logo || c.logoUrl} alt="" loading="lazy" />
+                                : collegeInitials(c.name)}
+                            </span>
+                            <span className="au-result-text">
+                              <span className="au-result-name">{c.name}</span>
+                              {(c.city || c.state) && (
+                                <span className="au-result-meta">
+                                  {[c.city, c.state].filter(Boolean).join(', ')}
+                                </span>
+                              )}
+                            </span>
                           </button>
                         ))
                       )}
@@ -16592,9 +17153,6 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                   )}
                 </AnimatePresence>
 
-                {!collegeQuery.trim() && collegeLoadState === 'loading' && colleges.length === 0 && (
-                  <p className="au-empty">Loading colleges…</p>
-                )}
               </motion.section>
             ) : step === 'request' ? (
               <motion.section key="request" className="au-step" {...swapProps}>
@@ -16697,7 +17255,9 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
               </motion.section>
             ) : step === 'email' ? (
               <motion.section key="email" className="au-step" {...swapProps}>
-                <h2 className="au-headline">Your college email.</h2>
+                <motion.h2 layoutId="auth-step-headline" className="au-headline">
+                  So, what&rsquo;s your college email, <span className="au-huh-inline">huh?</span>
+                </motion.h2>
 
                 <p className="au-sub">
                   <b>{college?.name}</b> students use an <b>@{college?.domains?.[0]}</b> address.
@@ -16707,7 +17267,6 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
 
                 <form className="au-form" onSubmit={handleSendOtp}>
                   {errorBanner}
-                  <label className="au-mobile-field-label" htmlFor="college-email">College email</label>
                   <input
                     id="college-email"
                     className="au-input"
@@ -16720,7 +17279,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                     placeholder="you@iitb.ac.in"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    onBlur={handleInputBlur}
+                    onFocus={handleAuthInputFocus}
                     disabled={loading}
                     aria-label="College email address"
                     required
@@ -16735,6 +17294,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                     type="button"
                     onClick={() => {
                       setCollegeSearchOpen(false);
+                      setAuthInputOpen(false);
                       setStep('college');
                       setError('');
                     }}
@@ -16745,7 +17305,9 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
               </motion.section>
             ) : (
               <motion.section key="otp" className="au-step" {...swapProps}>
-                <h2 className="au-headline">Enter the code.</h2>
+                <motion.h2 layoutId="auth-step-headline" className="au-headline">
+                  Your code, <span className="au-huh-inline">huh?</span>
+                </motion.h2>
 
                 <p className="au-sub">
                   Sent to <b className="low">{email.trim()}</b>
@@ -16768,6 +17330,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                       ref={(el) => { inputRefs.current[index] = el; }}
                       onChange={(e) => handleOtpChange(e, index)}
                       onKeyDown={(e) => handleOtpKeyDown(e, index)}
+                      onFocus={handleAuthInputFocus}
                       disabled={verified || loading}
                       aria-label={`Digit ${index + 1}`}
                     />
@@ -16785,6 +17348,7 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                     disabled={loading}
                     onClick={() => {
                       triggerHaptic('light');
+                      setAuthInputOpen(false);
                       setStep('email');
                       setError('');
                       setOtp(['', '', '', '', '', '']);
@@ -16793,25 +17357,6 @@ const Auth = ({ onSuccess, reverifyOnly = false }) => {
                     Wrong email? Go back
                   </button>
                 )}
-
-                <div className="au-field">
-                  <label htmlFor="grad-year">Graduating year (optional)</label>
-                  <input
-                    id="grad-year"
-                    type="number"
-                    inputMode="numeric"
-                    min={new Date().getFullYear()}
-                    max={new Date().getFullYear() + 10}
-                    value={graduatingYear}
-                    onChange={(e) => {
-                      const v = e.target.value.replace(/\D/g, '').slice(0, 4);
-                      setGraduatingYear(v);
-                    }}
-                    onBlur={handleInputBlur}
-                    placeholder={String(new Date().getFullYear() + 3)}
-                    disabled={loading}
-                  />
-                </div>
               </motion.section>
             )}
           </AnimatePresence>
@@ -17771,6 +18316,19 @@ const genId = () =>
     ? crypto.randomUUID()
     : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 
+const appendMessageOnce = (messages = [], incoming) => {
+  if (!incoming?._id) return messages;
+  const existingIndex = messages.findIndex((message) =>
+    message._id === incoming._id
+    || (incoming.clientMsgId && message.clientMsgId === incoming.clientMsgId)
+  );
+
+  if (existingIndex === -1) return [...messages, incoming];
+  return messages.map((message, index) =>
+    index === existingIndex ? { ...message, ...incoming } : message
+  );
+};
+
 const Icon = React.memo(({ path, size = 20, color = 'currentColor', strokeWidth = 2 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
     {path}
@@ -18055,9 +18613,6 @@ const Chat = ({ match, onBack }) => {
   const [inputText, setInputText] = useState('');
   const [otherTyping, setOtherTyping] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [recording, setRecording] = useState(false);
-  const [showActionSheet, setShowActionSheet] = useState(false);
-  const [pendingFile, setPendingFile] = useState(null);
   
   // Online status
   const [isOnline, setIsOnline] = useState(false);
@@ -18084,14 +18639,13 @@ const Chat = ({ match, onBack }) => {
   const [showReportModal, setShowReportModal] = useState(false);
 
   const fileInputRef = useRef(null);
-  const recorderRef = useRef(null);
-  const chunksRef = useRef([]);
   const typingTimer = useRef(null);
   const listEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const prevScrollHeightRef = useRef(0);
   const prevMessagesLengthRef = useRef(0);
   const pendingMsgIdRef = useRef(null);
+  const pendingSearchMsgIdRef = useRef(null);
   const [socketConnected, setSocketConnected] = useState(socket?.connected ?? true);
   const otherUnavailable = matchUser?.suspended || matchUser?.isDeleted;
 
@@ -18132,7 +18686,12 @@ const Chat = ({ match, onBack }) => {
 
     const onNew = (msg) => {
       if (msg?.alignmentId === alignmentId) {
-        queryClient.setQueryData(['messages', alignmentId], (prev = []) => (prev.some((p) => p._id === msg._id) ? prev : [...prev, msg]));
+        if (msg?._id) {
+          queryClient.setQueryData(
+            ['messages', alignmentId],
+            (prev = []) => appendMessageOnce(prev, msg),
+          );
+        }
         socket.emit('read-messages', { alignmentId });
         triggerHaptic('light');
       }
@@ -18219,6 +18778,18 @@ const Chat = ({ match, onBack }) => {
     prevMessagesLengthRef.current = messages.length;
   }, [messages]);
 
+  useLayoutEffect(() => {
+    const msgId = pendingSearchMsgIdRef.current;
+    if (!msgId) return;
+    const el = document.querySelector(`[data-msg-id="${msgId}"]`);
+    if (!el) return;
+
+    pendingSearchMsgIdRef.current = null;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('highlight-pulse');
+    setTimeout(() => { el.classList.remove('highlight-pulse'); }, 2000);
+  }, [messages]);
+
   // Auto-scroll to bottom on new messages
   useEffect(() => {
     if (!showScrollButton) {
@@ -18275,7 +18846,7 @@ const Chat = ({ match, onBack }) => {
         replyTo: replyTo?._id || null,
         clientMsgId: pendingMsgIdRef.current,
       });
-      queryClient.setQueryData(['messages', alignmentId], (prev = []) => [...prev, msg]);
+      queryClient.setQueryData(['messages', alignmentId], (prev = []) => appendMessageOnce(prev, msg));
       setInputText('');
       setReplyTo(null);
       setShowScrollButton(false);
@@ -18296,16 +18867,12 @@ const Chat = ({ match, onBack }) => {
   const onFileSelected = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setPendingFile(file);
-    setShowActionSheet(true);
     triggerHaptic('medium');
+    uploadAndSend(file);
     e.target.value = '';
   };
 
-  const uploadAndSend = async (kind) => {
-    const file = pendingFile;
-    setShowActionSheet(false);
-    if (!file) return;
+  const uploadAndSend = async (file) => {
     setUploading(true);
     try {
       const { url } = await api.upload(file);
@@ -18313,12 +18880,12 @@ const Chat = ({ match, onBack }) => {
         triggerHaptic('heavy');
         if (!pendingMsgIdRef.current) pendingMsgIdRef.current = genId();
         const msg = await api.post(`/messages/${alignmentId}`, {
-          type: kind,
+          type: 'image',
           mediaUrl: url,
           replyTo: replyTo?._id || null,
           clientMsgId: pendingMsgIdRef.current,
         });
-        queryClient.setQueryData(['messages', alignmentId], (prev = []) => [...prev, msg]);
+        queryClient.setQueryData(['messages', alignmentId], (prev = []) => appendMessageOnce(prev, msg));
         pendingMsgIdRef.current = null;
         setReplyTo(null);
         setShowScrollButton(false);
@@ -18328,40 +18895,13 @@ const Chat = ({ match, onBack }) => {
       if (!err?.toasted) {
         toast.error('Couldn\'t upload photo. Check your connection.', {
           label: 'Retry',
-          onClick: () => uploadAndSend(kind)
+          onClick: () => uploadAndSend(file)
         }); 
       }
     } finally { 
       setUploading(false);
-      setPendingFile(null);
     }
   };
-
-  const startRecording = async () => {
-    triggerHaptic('medium');
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/mp4';
-      const rec = new MediaRecorder(stream, { mimeType });
-      chunksRef.current = [];
-      rec.ondataavailable = (e) => chunksRef.current.push(e.data);
-      rec.onstop = async () => {
-        const ext = mimeType.includes('mp4') ? 'm4a' : 'webm';
-        const blob = new Blob(chunksRef.current, { type: mimeType });
-        const file = new File([blob], `voice.${ext}`, { type: mimeType });
-        setPendingFile(file);
-        setShowActionSheet(true);
-        stream.getTracks().forEach((t) => t.stop());
-      };
-      recorderRef.current = rec;
-      rec.start();
-      setRecording(true);
-    } catch { setRecording(false); }
-  };
-
-  const stopRecording = () => { triggerHaptic('heavy'); recorderRef.current?.stop(); setRecording(false); };
 
   const handleLongPress = (message, event) => {
     if (message.deleted) return;
@@ -18419,13 +18959,32 @@ const Chat = ({ match, onBack }) => {
 
   const handleImageClick = (url) => { setPhotoViewerUrl(url); setShowPhotoViewer(true); triggerHaptic('light'); };
 
-  // Optimized Search Jump utilizing CSS class animations to prevent DOM style lag
-  const handleSearchJump = (msgId) => {
+  // Jump to loaded results directly; otherwise load a server page centered on the result.
+  const handleSearchJump = async (message) => {
+    const msgId = message?._id;
+    if (!msgId) return;
     const el = document.querySelector(`[data-msg-id="${msgId}"]`);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       el.classList.add('highlight-pulse');
       setTimeout(() => { el.classList.remove('highlight-pulse'); }, 2000);
+      return;
+    }
+
+    pendingSearchMsgIdRef.current = msgId;
+    setShowScrollButton(true);
+    try {
+      const data = await api.get(`/messages/${alignmentId}?around=${encodeURIComponent(msgId)}&limit=50`);
+      if (!Array.isArray(data?.messages)) {
+        throw new Error('Invalid message history response');
+      }
+      setCursor(data.nextCursor || null);
+      setHasMore(Boolean(data.hasMore));
+      queryClient.setQueryData(['messages', alignmentId], data.messages);
+    } catch (err) {
+      pendingSearchMsgIdRef.current = null;
+      console.error('Search jump failed:', err);
+      if (!err?.toasted) toast.error('Could not load this message. Please try again.');
     }
   };
 
@@ -18705,7 +19264,7 @@ const Chat = ({ match, onBack }) => {
           />
         </div>
 
-        {inputText.trim() ? (
+        {inputText.trim() && (
           <button 
             className="tactile-btn"
             style={styles.sendBtn} 
@@ -18714,20 +19273,6 @@ const Chat = ({ match, onBack }) => {
             aria-label="Send message"
           >
             <Icon path={<><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></>} size={20} color="#fff" />
-          </button>
-        ) : (
-          <button 
-            className="tactile-btn"
-            style={styles.attachBtn} 
-            onClick={recording ? stopRecording : startRecording}
-            title="Voice"
-            aria-label="Record voice message"
-          >
-            <Icon 
-              path={<><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></>} 
-              size={22} 
-              color={recording ? t.red : t.yellow}
-            />
           </button>
         )}
       </div>
@@ -18746,7 +19291,7 @@ const Chat = ({ match, onBack }) => {
         <MessageActionMenu
           anchorRect={menuAnchor}
           isMine={String(selectedMessage.sender || selectedMessage.senderId) === String(myId)}
-          isMedia={selectedMessage.type === 'image' || selectedMessage.type === 'audio'}
+          isMedia={selectedMessage.type === 'image'}
           onClose={handleCloseMenu}
           onReply={handleReply}
           onReact={handleReact}
@@ -18786,32 +19331,6 @@ const Chat = ({ match, onBack }) => {
           }}
         />
       )}
-
-      {/* ACTION SHEET */}
-      <AnimatePresence>
-        {showActionSheet && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={styles.sheetBackdrop} onClick={() => { setShowActionSheet(false); setPendingFile(null); }}>
-            <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 300 }} style={styles.sheet} onClick={(e) => e.stopPropagation()}>
-              <div style={{ padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${t.ink}` }}>
-                <span style={{ fontFamily: t.fontHeavy, fontSize: '18px', fontWeight: '700', color: t.ink }}>Attach Media</span>
-                <button onClick={() => { setShowActionSheet(false); setPendingFile(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-                  <Icon path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} size={20} color={t.ink3} />
-                </button>
-              </div>
-              <div style={{ padding: '16px 24px 24px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <button className="tactile-btn" style={styles.sheetBtn} onClick={() => uploadAndSend('image')}>
-                  <Icon path={<><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></>} size={20} />
-                  Send as Photograph
-                </button>
-                <button className="tactile-btn" style={styles.sheetBtn} onClick={() => uploadAndSend('audio')}>
-                  <Icon path={<><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /></>} size={20} />
-                  Send as Voice Note
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* ARCHIVAL PROFILE SHEET */}
       <AnimatePresence>
@@ -18873,9 +19392,6 @@ const styles = {
   inputWrapper: { flex: 1, backgroundColor: t.card, border: `2px solid ${t.ink}`, borderRadius: '24px', padding: '0 20px', display: 'flex', alignItems: 'center' },
   sendBtn: { width: '44px', height: '44px', borderRadius: t.radius.md, backgroundColor: t.coral, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 },
 
-  sheetBackdrop: { position: 'fixed', inset: 0, backgroundColor: 'rgba(25,25,25,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-end', zIndex: 120 },
-  sheet: { backgroundColor: t.paper, backgroundImage: `url("${t.grain || ''}")`, width: '100%', borderTopLeftRadius: t.radius.lg, borderTopRightRadius: t.radius.lg, boxShadow: `0 -12px 32px ${t.ink}` },
-  sheetBtn: { display: 'flex', alignItems: 'center', gap: '12px', width: '100%', background: t.card, border: `2px solid ${t.ink}`, color: t.ink, fontFamily: t.fontBody, fontWeight: '600', padding: '16px', borderRadius: t.radius.md, fontSize: '14px', cursor: 'pointer' },
 };
 
 export default Chat;
@@ -19020,7 +19536,6 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
   }, [myUser?._id]);
 
   const [showLearnMore, setShowLearnMore] = useState(false);
-  const shadowbanScore = myUser?.shadowbanScore || 0;
   const config = useAppConfig();
 
   const [rebuildOverlay, setRebuildOverlay] = useState(false);
@@ -19239,12 +19754,19 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
 
         if (!alive || !res.ok || !res.moved) return;
 
+        // The location endpoint invalidates the server's ranked session. Wait
+        // for any initial deck request using the old location to finish before
+        // fetching the replacement page.
+        if (deckFetchInFlight.current) await deckFetchInFlight.current;
+        if (!alive) return;
+
         resetDiscoverStore();
         setProfiles([]);
         setCurrentIndex(0);
         setHasMore(true);
         setDeckExhausted(false);
         servedRef.current = 0;
+        await fetchProfiles(false);
       } catch {
         // Location maintenance must not interrupt Discover.
       }
@@ -19253,7 +19775,7 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [fetchProfiles]);
 
   useEffect(() => watchGeolocationPermission((state) => {
     setLocationDenied(state === GEO_PERMISSION.DENIED);
@@ -19389,6 +19911,20 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
     currentIndex, profiles, hasMore, deckExhausted, fetchingMore, fetchProfiles,
   ]);
 
+  const handleUndo = useCallback(async () => {
+    if (currentIndex <= 0) return;
+    const previousProfile = profiles[currentIndex - 1];
+    if (!previousProfile?._id) return;
+
+    try {
+      await api.post(`/discover/undo/${previousProfile._id}`, {});
+      handleNextProfile('down');
+    } catch (err) {
+      console.error('Undo pass failed:', err);
+      if (!err?.toasted) toast.error('Could not undo this pass. Please try again.');
+    }
+  }, [currentIndex, profiles, handleNextProfile]);
+
   const handleAction = useCallback(async (action, payload = {}) => {
     if (actionPendingRef.current) return;
     if (currentIndex >= profiles.length) return;
@@ -19441,6 +19977,7 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
         );
         return;
       }
+      if (err.code === 'DAILY_ALIGN_LIMIT') return;
       console.error('Action failed:', err);
     } finally {
       actionPendingRef.current = false;
@@ -19574,7 +20111,7 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
       <style>{DECK_CSS}</style>
 
       <ShadowbanBanner
-        score={shadowbanScore}
+        isUnderReview={myUser?.isUnderReview}
         onLearnMore={() => setShowLearnMore(true)}
       />
       {showLearnMore && (
@@ -19652,7 +20189,7 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
             onPass={() => handleAction('pass')}
             onAlign={() => handleAction('align', {})}
             canAlign={!!profiles[currentIndex]}
-            onUndo={() => handleNextProfile('down')}
+            onUndo={handleUndo}
             canGoBack={currentIndex > 0}
             undoNonce={undoNonce}
             onRefreshLocation={locationDenied ? undefined : refreshLocation}
@@ -19672,7 +20209,7 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
             title="Previous profile (↓ or B)"
             aria-label="Previous profile"
             disabled={currentIndex <= 0}
-            onClick={() => handleNextProfile('down')}
+            onClick={handleUndo}
             style={{ ...styles.deckBtn, background: t.paper, color: t.ink }}
           >
             <Undo2 size={19} strokeWidth={2.2} />
@@ -20426,18 +20963,6 @@ const Matches = ({ onOpenChat }) => {
     return () => socket.off('new-message', onNew);
   }, [queryClient, myId]);
 
-  // Real-time unmatch: remove the alignment from cache when the other user severs the connection
-  useEffect(() => {
-    const onUnmatch = ({ alignmentId }) => {
-      queryClient.setQueryData(['matches'], (old) => ({
-        ...(old || {}),
-        matches: (old?.matches || []).filter((m) => m._id !== alignmentId),
-      }));
-    };
-    socket.on('unmatch-notification', onUnmatch);
-    return () => socket.off('unmatch-notification', onUnmatch);
-  }, [queryClient]);
-
   const handleUnmatch = useCallback(async (alignmentId) => {
     setOpenMenuId(null);
     if (!window.confirm('Are you sure you want to unmatch? This cannot be undone.')) return;
@@ -20593,7 +21118,7 @@ const Matches = ({ onOpenChat }) => {
               (lastMessage && lastMessage.senderId && lastMessage.senderId !== myId && !lastMessage.readAt);
             const isOpen = openMenuId === match._id;
 
-            const lastIsMedia = lastMessage && (lastMessage.type === 'image' || lastMessage.type === 'audio');
+            const lastIsMedia = lastMessage?.type === 'image';
 
             return (
               <div
@@ -20653,8 +21178,8 @@ const Matches = ({ onOpenChat }) => {
                   <p style={{ fontFamily: t.fontBody, fontSize: 12.5, color: unread ? t.ink : t.ink2, margin: '4px 0 0 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: unread ? 700 : 500 }}>
                     {lastMessage
                       ? lastIsMedia
-                        ? (lastMessage.type === 'image' ? '📷 Sent a photograph' : '🎙 Sent a voice note')
-                        : lastMessage.text
+                        ? '📷 Sent a photograph'
+                        : lastMessage.text || 'Message unavailable'
                       : 'Open chat'}
                   </p>
                 </div>
@@ -23677,8 +24202,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
     onClick: () => { window.location.href = 'mailto:support@matchalize.com'; },
   };
 
-  const contentFrozen = userData?.contentFrozen ?? authUser?.contentFrozen ?? false;
-  const shadowbanScore = userData?.shadowbanScore ?? authUser?.shadowbanScore ?? 0;
+  const contentFrozen = userData?.isUnderReview ?? authUser?.isUnderReview ?? false;
 
   /* True when the draft differs from what's on the server. Drives both the Save
      button's enabled state and the discard-on-close guard.
@@ -24545,7 +25069,7 @@ const Profile = ({ onHeaderHiddenChange, focusStrength = false, onStrengthFocuse
       <input type="file" accept="image/*" ref={fileInputRef} style={{ display: 'none' }} onChange={handlePhotoSelect} />
 
       <div style={{ position: 'relative', zIndex: 45 }}>
-        <ShadowbanBanner score={shadowbanScore} onLearnMore={() => setShowLearnMore(true)} />
+        <ShadowbanBanner isUnderReview={contentFrozen} onLearnMore={() => setShowLearnMore(true)} />
         {showLearnMore && <LearnMoreSheet onClose={() => setShowLearnMore(false)} />}
       </div>
 
@@ -24958,13 +25482,19 @@ export default Profile;
 ### ./client/src/pages/Roulette.jsx
 
 ```
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import neu from '../styles/neu';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Shuffle, Video, ShieldCheck } from 'lucide-react';
+import {
+  Shuffle, Video, ShieldCheck, Mic, MicOff, VideoOff,
+  CameraOff, AlertTriangle, RotateCw, Check, Info, ChevronLeft,
+} from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
 import { toast } from '../utils/toast';
 import { DECK_CONTENT_TOP } from '../utils/deckChrome';
+import {
+  useCameraPreview, diagnoseEnvironment, listDevices,
+} from '../utils/webrtc';
 
 /* The shared neo-brutalist canon (src/styles/neu.js) */
 const t = neu;
@@ -24980,109 +25510,307 @@ const ROULETTE_CSS = `
   .rt-slam:active { transform: translate(5px, 5px); box-shadow: 0 0 0 #191919; }
   .rt-slam:disabled { opacity: .6; cursor: default; transform: none !important; box-shadow: 5px 5px 0 #191919 !important; }
 
-  .rt-slam:focus-visible, .rt-rail:focus-visible {
+  .rt-rail:focus-visible, .rt-slam:focus-visible, .rt-iconbtn:focus-visible, .rt-ghost:focus-visible {
     outline: 3px solid #FFD43D; outline-offset: 2px; }
+
+  /* Self-preview. Mirrored because a camera shows you what others see, and a
+     unmirrored self-view is disorienting enough that people think it is broken. */
+  .rt-video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1);
+    background: #131313; display: block; }
 
   @media (hover: hover) and (pointer: fine) {
     .rt-slam:hover:not(:active):not(:disabled) { transform: translate(-1px, -1px); box-shadow: 6px 6px 0 #191919; }
+    .rt-iconbtn:hover:not(:active) { background: ${t.yellow}; }
   }
   @media (prefers-reduced-motion: reduce) {
     .rt-slam { transition: none; }
   }
 `;
 
+/* Small candy-tile control used for the mic / camera toggles and the back
+ * button, matching the .hd-btn language from Header.jsx. */
+const iconBtn = {
+  width: 46, height: 46, flexShrink: 0,
+  borderRadius: 13, border: `2px solid ${t.ink}`,
+  backgroundColor: t.card, color: t.ink,
+  boxShadow: `4px 4px 0 ${t.ink}`,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  cursor: 'pointer', WebkitTapHighlightColor: 'transparent',
+};
+
+/** A short, honest label. Never says "anonymous" — the camera is on. */
+const ANON_COPY = 'Your face is visible. Your profile is not shown.';
+
 const Roulette = () => {
-  const [starting, setStarting] = useState(false);
+  const cam = useCameraPreview({ audio: true, autoStart: false });
+  const [env, setEnv] = useState(null);
+  const [devices, setDevices] = useState(null);
+  const [showSelfTest, setShowSelfTest] = useState(false);
 
-  const handleStart = () => {
-    triggerHaptic('heavy');
-    setStarting(true);
-    toast.info('Roulette is coming soon.');
-    setTimeout(() => setStarting(false), 400);
-  };
+  const { status, error, audioOn, videoOn, videoRef, start, stop } = cam;
 
+  /* ── Environment + devices ──────────────────────────────────────────────────
+   * Computed once on mount so the preview can say WHY it cannot start, instead
+   * of a generic failure. Device testing happens at the end of the project, so
+   * this is the difference between "it is broken" and "the address is HTTP". */
+  React.useEffect(() => {
+    setEnv(diagnoseEnvironment());
+    listDevices().then((d) => setDevices(d));
+  }, []);
+
+  const handleEnter = useCallback(async () => {
+    triggerHaptic('medium');
+    // `start` returns the stream or null, so the outcome is known immediately.
+    // Reading `error` from state here instead would be a stale closure — the
+    // setState inside start has not flushed yet, so the failure haptic would
+    // never fire on a first attempt.
+    const stream = await start();
+    if (!stream) triggerHaptic('heavy');
+  }, [start]);
+
+  const handleLeave = useCallback(() => {
+    triggerHaptic('light');
+    stop();
+    toast.info('Camera turned off.');
+  }, [stop]);
+
+  const handleRetry = useCallback(() => {
+    triggerHaptic('light');
+    start();
+  }, [start]);
+
+  /* ══ IDLE — nothing requested yet ══════════════════════════════════════ */
+  if (status === 'idle') {
+    return (
+      <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, position: 'relative', paddingTop: DECK_CONTENT_TOP }}>
+        <style>{ROULETTE_CSS}</style>
+
+        <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 20px 48px', gap: 26 }}>
+          <motion.div
+            initial={{ scale: 0.85, opacity: 0, rotate: -6 }}
+            animate={{ scale: 1, opacity: 1, rotate: 0 }}
+            transition={{ type: 'spring', damping: 14, stiffness: 260 }}
+            style={{
+              width: 92, height: 92, borderRadius: 24, backgroundColor: t.yellow,
+              border: `2px solid ${t.ink}`, boxShadow: `5px 5px 0 ${t.ink}`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <Shuffle size={40} strokeWidth={2.6} color={t.ink} />
+          </motion.div>
+
+          <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <h2 style={{ fontFamily: t.fontHeavy, fontSize: 27, fontWeight: 400, color: t.paper, margin: 0, letterSpacing: '-.01em', lineHeight: 1.1, textTransform: 'uppercase' }}>
+              Campus Roulette
+            </h2>
+            <p style={{ fontFamily: t.fontMono, fontSize: 10.5, fontWeight: 700, color: t.ink3, margin: 0, letterSpacing: '.14em', textTransform: 'uppercase' }}>
+              Live serendipity · same campus + all campuses
+            </p>
+          </div>
+
+          <div style={{ width: 'min(420px, 100%)', display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'center' }}>
+            {/* Insecure-origin warning takes priority — it explains every other
+                failure the user would otherwise hit. */}
+            {env && !env.ok && (
+              <div className="rt-rail" style={{ display: 'flex', gap: 12, alignItems: 'flex-start', backgroundColor: t.coral, border: `2px solid ${t.ink}`, borderRadius: 14, boxShadow: `4px 4px 0 ${t.ink}`, padding: '13px 14px' }}>
+                <span style={{ width: 30, height: 30, flexShrink: 0, borderRadius: 9, border: `2px solid ${t.ink}`, backgroundColor: t.yellow, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <AlertTriangle size={15} strokeWidth={2.4} color={t.ink} />
+                </span>
+                <p style={{ fontFamily: t.fontBody, fontSize: 12.5, fontWeight: 600, color: t.ink, margin: 0, lineHeight: 1.55 }}>
+                  <strong style={{ display: 'block', marginBottom: 3 }}>{env.label}</strong>
+                  {env.detail}
+                </p>
+              </div>
+            )}
+
+            <button className="rt-slam" onClick={handleEnter} disabled={Boolean(env && !env.ok)}>
+              <Video size={18} strokeWidth={2.8} />
+              <span>Check my camera</span>
+            </button>
+
+            <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 500, color: t.ink3, margin: 0, textAlign: 'center', lineHeight: 1.6 }}>
+              We check your camera before any session, so nothing goes wrong later.
+            </p>
+          </div>
+
+          <SelfTestRow show={showSelfTest} onToggle={() => setShowSelfTest((s) => !s)} env={env} devices={devices} />
+        </div>
+      </div>
+    );
+  }
+
+  /* ══ REQUESTING ═════════════════════════════════════════════════════════ */
+  if (status === 'requesting') {
+    return (
+      <div style={{ flex: 1, backgroundColor: t.desk, position: 'relative', paddingTop: DECK_CONTENT_TOP, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+        <style>{ROULETTE_CSS}</style>
+        <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
+          <div className="rt-rail" style={{ width: 92, height: 92, borderRadius: 24, backgroundColor: t.yellow, border: `2px solid ${t.ink}`, boxShadow: `5px 5px 0 ${t.ink}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Video size={38} strokeWidth={2.6} color={t.ink} />
+          </div>
+          <p role="status" style={{ fontFamily: t.fontMono, fontSize: 11, fontWeight: 700, color: t.ink3, margin: 0, letterSpacing: '.14em', textTransform: 'uppercase' }}>
+            Waiting for permission…
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  /* ══ ERROR ══════════════════════════════════════════════════════════════ */
+  if (status === 'error' && error) {
+    return (
+      <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, position: 'relative', paddingTop: DECK_CONTENT_TOP }}>
+        <style>{ROULETTE_CSS}</style>
+        <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 20px 48px', gap: 22 }}>
+          <div style={{ width: 92, height: 92, borderRadius: 24, backgroundColor: t.coral, border: `2px solid ${t.ink}`, boxShadow: `5px 5px 0 ${t.ink}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <CameraOff size={40} strokeWidth={2.6} color={t.ink} />
+          </div>
+
+          <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 10, width: 'min(420px, 100%)' }}>
+            <h2 style={{ fontFamily: t.fontHeavy, fontSize: 22, fontWeight: 400, color: t.paper, margin: 0, textTransform: 'uppercase' }}>
+              {error.title}
+            </h2>
+            <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 500, color: t.ink3, margin: 0, lineHeight: 1.6, textAlign: 'center' }}>
+              {error.detail}
+            </p>
+          </div>
+
+          <div style={{ width: 'min(420px, 100%)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <button className="rt-slam" onClick={handleRetry}>
+              <RotateCw size={18} strokeWidth={2.8} />
+              <span>Try again</span>
+            </button>
+            <button className="rt-ghost" onClick={handleLeave} style={{ width: '100%', padding: '13px 16px', border: `2px solid ${t.ink}`, borderRadius: 14, background: 'transparent', color: t.ink3, cursor: 'pointer', fontFamily: t.fontMono, fontSize: 11, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', WebkitTapHighlightColor: 'transparent' }}>
+              Back
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ══ READY — the actual preview ══════════════════════════════════════════ */
   return (
-    <div style={{ flex: 1, overflowY: 'auto', backgroundColor: t.desk, position: 'relative', paddingTop: DECK_CONTENT_TOP }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: t.desk, position: 'relative', paddingTop: DECK_CONTENT_TOP, overflowY: 'auto' }}>
       <style>{ROULETTE_CSS}</style>
 
-      <div style={{ position: 'relative', minHeight: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 20px 48px', gap: 26 }}>
-        {/* Emblem — candy tile, same DNA as the vitals tiles */}
-        <motion.div
-          initial={{ scale: 0.85, opacity: 0, rotate: -6 }}
-          animate={{ scale: 1, opacity: 1, rotate: 0 }}
-          transition={{ type: 'spring', damping: 14, stiffness: 260 }}
-          style={{
-            width: 92, height: 92, borderRadius: 24,
-            backgroundColor: t.yellow,
-            border: `2px solid ${t.ink}`,
-            boxShadow: `5px 5px 0 ${t.ink}`,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}
-        >
-          <Shuffle size={40} strokeWidth={2.6} color={t.ink} />
-        </motion.div>
-
-        <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <h2 style={{ fontFamily: t.fontHeavy, fontSize: 27, fontWeight: 400, color: t.paper, margin: 0, letterSpacing: '-.01em', lineHeight: 1.1, textTransform: 'uppercase' }}>
-            Campus Roulette
-          </h2>
-          <p style={{ fontFamily: t.fontMono, fontSize: 10.5, fontWeight: 700, color: t.ink3, margin: 0, letterSpacing: '.14em', textTransform: 'uppercase' }}>
-            Live serendipity · same campus + all campuses
-          </p>
-        </div>
-
-        {/* Start control */}
-        <div style={{ width: 'min(420px, 100%)', display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'center' }}>
-          <button className="rt-slam" onClick={handleStart} disabled={starting}>
-            <Video size={18} strokeWidth={2.8} />
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.span
-                key={starting ? 'starting' : 'start'}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                transition={{ duration: 0.15 }}
-              >
-                {starting ? 'Preparing…' : 'Start a live session'}
-              </motion.span>
-            </AnimatePresence>
-          </button>
-
-          <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 500, color: t.ink3, margin: 0, textAlign: 'center', lineHeight: 1.6 }}>
-            Step in face-to-face. A mutual yes plants{' '}
-            <span style={{ fontWeight: 700, color: t.paper }}>a seed of interest</span> that flows
-            straight into your Matches.
-          </p>
-        </div>
-
-        {/* Reassurance rails — chunky cream cards with candy icon tiles */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: 'min(420px, 100%)' }}>
-          {[
-            { Icon: ShieldCheck, bg: t.green, text: 'Only verified college students from the Indian college network enter — same campus or any other campus, no strangers outside the ledger.' },
-            { Icon: Shuffle, bg: t.coral, text: 'Each session is anonymous until you choose to reveal yourself.' },
-          ].map(({ Icon, bg, text }, idx) => (
-            <div key={idx} className="rt-rail" style={{
-              display: 'flex', alignItems: 'flex-start', gap: 12,
-              backgroundColor: t.paper, border: `2px solid ${t.ink}`, borderRadius: 14,
-              boxShadow: `4px 4px 0 ${t.ink}`, padding: '13px 14px',
-            }}>
-              <span style={{
-                width: 30, height: 30, flexShrink: 0, borderRadius: 9,
-                border: `2px solid ${t.ink}`, background: bg,
-                display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.ink,
-              }}>
-                <Icon size={15} strokeWidth={2.4} />
-              </span>
-              <p style={{ fontFamily: t.fontBody, fontSize: 12.5, fontWeight: 600, color: t.ink2, margin: 0, lineHeight: 1.55 }}>{text}</p>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 16, padding: '4px 20px 28px', width: 'min(560px, 100%)', margin: '0 auto' }}>
+        {/* Self-preview */}
+        <div style={{ position: 'relative', width: '100%', aspectRatio: '4 / 3', borderRadius: 20, overflow: 'hidden', border: `2px solid ${t.ink}`, boxShadow: `6px 6px 0 ${t.ink}`, backgroundColor: '#131313' }}>
+          <video ref={videoRef} className="rt-video" autoPlay playsInline muted />
+          {!videoOn && (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: t.desk }}>
+              <VideoOff size={34} strokeWidth={2.2} color={t.ink3} />
+              <p style={{ fontFamily: t.fontMono, fontSize: 10.5, fontWeight: 700, color: t.ink3, margin: 0, letterSpacing: '.14em', textTransform: 'uppercase' }}>
+                Camera off
+              </p>
             </div>
-          ))}
+          )}
+          {!audioOn && (
+            <div style={{ position: 'absolute', top: 12, left: 12, width: 34, height: 34, borderRadius: 10, border: `2px solid ${t.ink}`, backgroundColor: t.coral, color: t.ink, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <MicOff size={17} strokeWidth={2.6} color={t.ink} />
+            </div>
+          )}
+        </div>
+
+        {/* Identity line — deliberately short and honest. */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center', textAlign: 'center' }}>
+          <p style={{ fontFamily: t.fontHeavy, fontSize: 19, fontWeight: 400, color: t.paper, margin: 0, textTransform: 'uppercase', letterSpacing: '-.01em' }}>
+            You are ready
+          </p>
+          <p style={{ fontFamily: t.fontBody, fontSize: 13, fontWeight: 500, color: t.ink3, margin: 0, lineHeight: 1.55 }}>
+            {ANON_COPY}
+          </p>
+        </div>
+
+        {/* Toggles */}
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+          <button className="rt-iconbtn" onClick={cam.toggleAudio} style={{ ...iconBtn, backgroundColor: audioOn ? t.card : t.coral }} aria-label={audioOn ? 'Mute microphone' : 'Unmute microphone'} aria-pressed={audioOn}>
+            {audioOn ? <Mic size={19} strokeWidth={2.4} color={t.ink} /> : <MicOff size={19} strokeWidth={2.4} color={t.ink} />}
+          </button>
+          <button className="rt-iconbtn" onClick={cam.toggleVideo} style={{ ...iconBtn, backgroundColor: videoOn ? t.card : t.coral }} aria-label={videoOn ? 'Turn camera off' : 'Turn camera on'} aria-pressed={videoOn}>
+            {videoOn ? <Video size={19} strokeWidth={2.4} color={t.ink} /> : <VideoOff size={19} strokeWidth={2.4} color={t.ink} />}
+          </button>
+        </div>
+
+        {/* Start — disabled on purpose until Stage 3 exists */}
+        <button className="rt-slam" onClick={() => toast.info('Matching arrives in the next build.')} style={{ marginTop: 4 }}>
+          <Shuffle size={18} strokeWidth={2.8} />
+          <span>Start a live session</span>
+        </button>
+
+        <button onClick={handleLeave} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'center', padding: '9px 14px', border: `2px solid ${t.ink}`, borderRadius: 12, background: 'transparent', color: t.ink3, cursor: 'pointer', fontFamily: t.fontMono, fontSize: 10.5, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', WebkitTapHighlightColor: 'transparent' }}>
+          <ChevronLeft size={15} strokeWidth={2.6} color={t.ink3} />
+          Turn camera off
+        </button>
+
+        <div className="rt-rail" style={{ display: 'flex', alignItems: 'flex-start', gap: 12, backgroundColor: t.paper, border: `2px solid ${t.ink}`, borderRadius: 14, boxShadow: `4px 4px 0 ${t.ink}`, padding: '13px 14px' }}>
+          <span style={{ width: 30, height: 30, flexShrink: 0, borderRadius: 9, border: `2px solid ${t.ink}`, backgroundColor: t.green, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <ShieldCheck size={15} strokeWidth={2.4} color={t.ink} />
+          </span>
+          <p style={{ fontFamily: t.fontBody, fontSize: 12.5, fontWeight: 600, color: t.ink2, margin: 0, lineHeight: 1.55 }}>
+            Only verified college students from the Indian college network enter — same campus or any other campus.
+          </p>
         </div>
       </div>
     </div>
   );
 };
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ * SELF TEST
+ *
+ * Exists because device testing happens at the end of the project. One tap
+ * separates "the app is broken" from "the browser blocked it" from "this
+ * address is not allowed to use a camera" — the three causes of a dead preview,
+ * which are otherwise indistinguishable until someone reads the console.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+const SelfTestRow = ({ show, onToggle, env, devices }) => (
+  <div style={{ width: 'min(420px, 100%)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <button onClick={onToggle} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, alignSelf: 'center', padding: '9px 14px', border: `2px solid ${t.ink}`, borderRadius: 12, background: 'transparent', color: t.ink3, cursor: 'pointer', fontFamily: t.fontMono, fontSize: 10, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', WebkitTapHighlightColor: 'transparent' }}>
+      <Info size={14} strokeWidth={2.6} color={t.ink3} />
+      {show ? 'Hide device check' : 'Device check'}
+    </button>
+
+    <AnimatePresence initial={false}>
+      {show && (
+        <motion.div
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: 'auto', opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          style={{ overflow: 'hidden' }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 9, padding: '13px 14px', backgroundColor: t.paper, border: `2px solid ${t.ink}`, borderRadius: 14, boxShadow: `4px 4px 0 ${t.ink}` }}>
+            <Row label="Secure address" ok={env?.ok} value={env?.label} />
+            <Row label="Cameras found" ok={(devices?.cameras?.length || 0) > 0} value={String(devices?.cameras?.length ?? '—')} />
+            <Row label="Microphones found" ok={(devices?.microphones?.length || 0) > 0} value={String(devices?.microphones?.length ?? '—')} />
+            {env && !env.ok && (
+              <p style={{ fontFamily: t.fontBody, fontSize: 12, fontWeight: 600, color: t.ink2, margin: '4px 0 0', lineHeight: 1.55 }}>
+                {env.detail}
+              </p>
+            )}
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  </div>
+);
+
+const Row = ({ label, ok, value }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+    <span style={{ width: 20, height: 20, flexShrink: 0, borderRadius: 6, border: `2px solid ${t.ink}`, backgroundColor: ok === true ? t.green : ok === false ? t.coral : t.yellow, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      {ok === true
+        ? <Check size={12} strokeWidth={3.2} color={t.ink} />
+        : <AlertTriangle size={11} strokeWidth={2.8} color={t.ink} />}
+    </span>
+    <span style={{ fontFamily: t.fontBody, fontSize: 12.5, fontWeight: 600, color: t.ink2, flex: 1 }}>{label}</span>
+    <span style={{ fontFamily: t.fontMono, fontSize: 11, fontWeight: 700, color: t.ink3 }}>{value}</span>
+  </div>
+);
+
 export default Roulette;
+
 ```
 
 ### ./client/src/pages/Settings.jsx
@@ -26452,9 +27180,19 @@ export const ROULETTE_SETTINGS = {
   ENABLED: bool('ROULETTE_ENABLED', false),
 
   /* ── WHO MAY JOIN A QUEUE ──────────────────────────────────────────────────
-   * The allow-list is read fresh on every call rather than cached at module
-   * load, the same way campusGate.js reads ALLOWED_COLLEGES per request: a test
-   * that mutates process.env must not be defeated by a stale snapshot.
+   * ⚠️ CORRECTED 2026-10-17. This comment previously claimed the allow-list was
+   * "read fresh on every call … so a test that mutates process.env must not be
+   * defeated by a stale snapshot". That was not true and never had been:
+   * `accounts()` runs once at module load (see `const TEST_ACCOUNTS` above), so
+   * the list is a startup snapshot and mutating `process.env
+   * .ROULETTE_TEST_ACCOUNTS` at runtime changes nothing.
+   *
+   * Fixing it properly — re-parsing per call — would move an env-var read into
+   * the hot path of every socket event for no benefit: `ENABLED` and
+   * `IS_TEST_MODE` are baked in at load either way, so the list would only be
+   * half-fresh, which is WORSE than honestly snapshot-once. Restarting the
+   * process is the correct and sufficient way to change the allow-list, and it
+   * means turning Roulette on is always a deliberate act.
    *
    * Empty list = nobody. See the note on `accounts()` above. */
   TEST_ACCOUNTS,
@@ -26510,6 +27248,37 @@ export const ROULETTE_SETTINGS = {
    * authenticated client can generate them in a loop. */
   TURN_CREDENTIAL_TTL_SECONDS: num('ROULETTE_TURN_TTL_SEC', 3600),
   ISSUANCE_PER_HOUR: num('ROULETTE_ICE_PER_HOUR', 10),
+
+  /* ── SIGNALING SHAPE LIMITS (Stage 3) ─────────────────────────────────────
+   * Stage 3 is the first point where untrusted clients send us large strings.
+   * Every limiter in `middleware/rateLimiters.js` is `express-rate-limit`, which
+   * needs a `req` — so all six of them are invisible to socket events. These
+   * four numbers are what actually bound signaling traffic.
+   *
+   * Sized against real values, not guesses: one video + one audio offer is
+   * roughly 2-4 KB, and a healthy call gathers well under 40 ICE candidates
+   * across its lifetime. Every ceiling below is therefore generous by an order
+   * of magnitude — they exist to stop the pathological case, not to trim the
+   * normal one. A limit tight enough to threaten a real call would be a bug. */
+
+  /* Ceiling on one SDP offer/answer, in characters (≈3× UTF-8 bytes, so this is
+   * a loose upper bound by design). ~60 KB against a real ~4 KB payload. */
+  MAX_SDP_BYTES: num('ROULETTE_MAX_SDP_BYTES', 60_000),
+
+  /* Total ICE candidates relayed for one call, across its whole lifetime.
+   * A trickle that stays under the per-second rate limit still accumulates, so
+   * the rate limiter alone is not a total bound. */
+  MAX_CANDIDATES_PER_SESSION: num('ROULETTE_MAX_CANDIDATES', 120),
+
+  /* Sustained signaling events/second per user, with a burst allowance.
+   * Keyed by USER, never by IP: an entire college sits behind one NAT address,
+   * so an IP limit would throttle a whole campus mid-conversation. This is the
+   * same reasoning as `verifyOtpLimiter` in `middleware/rateLimiters.js`.
+   *
+   * The burst is generous because ICE legitimately arrives in a dozen-at-once
+   * burst right after `setRemoteDescription`. */
+  SIGNAL_RATE_PER_SECOND: num('ROULETTE_SIGNAL_RATE', 40),
+  SIGNAL_BURST: num('ROULETTE_SIGNAL_BURST', 150),
 };
 
 /**
@@ -26574,21 +27343,7 @@ import mongoose from 'mongoose';
 import cookieParser from 'cookie-parser';
 import { protect } from './middleware/auth.js';
 import rateLimit from 'express-rate-limit';
-// ⚠️ EXPRESS 5 UPGRADE — two landmines in this file:
-//
-// 1. express-mongo-sanitize is Express-4-only. Installed here is ^2.2.0, whose
-//    middleware reaches into connect's app/router internals that Express 5
-//    removed. It will throw at boot, not degrade. Replace it with either
-//    `express-mongo-sanitize` v3+ or a hand-rolled req.query/body scrubber
-//    before bumping the major.
-// 2. app.get('*') below is not a valid path pattern under Express 5 —
-//    path-to-regexp v8 requires a named wildcard, so bare '*' throws
-//    `TypeError: Missing parameter name` at startup. It must become '*splat'
-//    (or '{*splat}' to also match the root path).
-//
-// Nothing here is broken today: installed express is 4.22.x. Both are only
-// landmines for whoever runs `npm i express@5`.
-import mongoSanitize from 'express-mongo-sanitize';
+import sanitizeMongoInput from './middleware/sanitizeMongoInput.js';
 import { APP_CONSTANTS } from './config/appData.js';
 import { describeRouletteStatus } from './config/roulette.js';
 import * as Sentry from '@sentry/node';
@@ -26649,7 +27404,6 @@ if (!VALID_ENVS.includes(NODE_ENV)) {
   console.error('   deployed  → set NODE_ENV=production in the server environment');
   process.exit(1);
 }
-const IS_DEV = NODE_ENV === 'development';
 const IS_PROD = NODE_ENV === 'production';
 
 // Warn about missing optional services
@@ -26770,7 +27524,7 @@ const isPrivateOrigin = (origin) => {
 
 const corsOriginFunction = (origin, callback) => {
   // Allow requests with no origin (mobile apps, curl, or local dev)
-  if (!origin || IS_DEV) return callback(null, true);
+  if (!origin) return callback(null, true);
 
   if (corsOrigins.has(origin)) {
     return callback(null, true);
@@ -26906,6 +27660,17 @@ app.use((req, res, next) => {
   next();
 });
 
+// Apply the global API limit before reading request bodies, so bursts of large
+// payloads are rejected without first parsing and allocating their contents.
+const limiter = rateLimit({
+  windowMs: APP_CONSTANTS.API_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000,
+  max: Number(process.env.API_GENERAL_MAX) || APP_CONSTANTS.API_RATE_LIMIT_MAX,
+  message: { message: 'Too many requests from this IP, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api/', limiter);
+
 // 🛡️ RAW BODY FOR THE CLOUDINARY SIGNATURE CHECK — must be registered BEFORE
 // express.json() below.
 //
@@ -26925,22 +27690,12 @@ app.use((req, res, next) => {
 // for the rest of the API.
 app.use('/api/upload/moderation-status', express.raw({ type: 'application/json', limit: '100kb' }));
 
-// JSON bodies only. Photos/voice notes go through the multipart /api/upload
+// JSON bodies only. Photos go through the multipart /api/upload
 // route, which multer handles with its own fileSize limit — so 1mb is plenty
 // for every text payload here (profiles, messages, prefs, onboarding answers).
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ limit: '1mb', extended: true }));
-app.use(mongoSanitize());
-
-// Rate Limiting — reads APP_CONSTANTS so the settings file and the limiter agree.
-const limiter = rateLimit({
-  windowMs: APP_CONSTANTS.API_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000,
-  max: Number(process.env.API_GENERAL_MAX) || APP_CONSTANTS.API_RATE_LIMIT_MAX,
-  message: { message: 'Too many requests from this IP, please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use('/api/', limiter);
+app.use(sanitizeMongoInput);
 
 // Mount API Routes
 app.use('/api/auth', authRoutes);
@@ -26992,12 +27747,9 @@ app.get('/', (req, res) => {
   res.json({ status: 'active', message: 'Matchalize API Server is running' });
 });
 
-// Serve client app for all non-API routes (SPA fallback)
-// ⚠️ EXPRESS 5: bare '*' is invalid under path-to-regexp v8 and throws
-// `Missing parameter name` at boot. Becomes app.get('*splat', ...) — or
-// '{*splat}' if the root path must match too. See the note at the
-// express-mongo-sanitize import above.
-app.get('*', (req, res, next) => {
+// Serve client app for all non-API routes (SPA fallback). A RegExp route works
+// across Express 4 and 5, avoiding path-to-regexp's incompatible wildcard syntax.
+app.get(/.*/, (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
   res.sendFile(path.join(clientDist, 'index.html'), (err) => {
     if (err) next();
@@ -27400,6 +28152,15 @@ export const messageLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+export const destructiveActionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  keyGenerator: (req) => req.user?._id?.toString() || req.ip,
+  message: { message: 'Too many destructive actions. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Limit discover actions (likes/passes) to 100 per 10 minutes per user
 export const discoverLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
@@ -27445,6 +28206,17 @@ export const otpEmailLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Add a per-source cap before the per-email cap so one client cannot consume
+// arbitrary OTP sends for many addresses. Keep this generous for shared campus
+// networks; the per-email limiter remains as a separate delivery-abuse guard.
+export const otpIpLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: Number(process.env.OTP_IP_LIMIT_MAX) || 20,
+  message: { message: 'Too many verification requests from this device. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 /**
  * 📨 COLLEGE REQUEST limiter — protects the public "add my college" form.
  *
@@ -27480,6 +28252,52 @@ export const reverifyLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+```
+
+### ./server/middleware/sanitizeMongoInput.js
+
+```
+const sanitizeObject = (value) => {
+  if (!value || typeof value !== 'object') return value;
+
+  const pending = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        if (item && typeof item === 'object') pending.push(item);
+      }
+      continue;
+    }
+
+    for (const key of Object.keys(current)) {
+      if (key.startsWith('$') || key.includes('.')) {
+        delete current[key];
+      } else if (current[key] && typeof current[key] === 'object') {
+        pending.push(current[key]);
+      }
+    }
+  }
+
+  return value;
+};
+
+const sanitizeMongoInput = (req, res, next) => {
+  req.body = sanitizeObject(req.body);
+  req.params = sanitizeObject(req.params);
+  req.headers = sanitizeObject(req.headers);
+  Object.defineProperty(req, 'query', {
+    configurable: true,
+    enumerable: true,
+    value: sanitizeObject(req.query),
+    writable: true,
+  });
+  next();
+};
+
+export { sanitizeObject };
+export default sanitizeMongoInput;
 
 ```
 
@@ -27792,25 +28610,8 @@ const analyticsSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Onboarding analytics are write-only — nothing in this codebase reads them
-// back, they're only inspected by hand in Atlas. So exactly one index, matching
-// the one query that actually runs: the deleteMany({ user }) in
-// routes/users.js that fires on every account deletion. Without it that is a
-// full collection scan on each account removal.
-//
-// Deliberately NOT added:
-//   - { event, createdAt } — for funnel reporting that does not exist.
-//   - a TTL on createdAt  — this would permanently delete onboarding history
-//     with no undo and no way to recover it. Retention is a product decision,
-//     not a performance one; make it deliberately, not as a side effect of
-//     adding indexes.
-//
-// Note: this schema carries two timestamps — the explicit `timestamp` field
-// above and the automatic `createdAt`/`updatedAt` from `timestamps: true`. They
-// differ by milliseconds. Left as-is because nothing reads either one today;
-// if funnel reporting ever gets built, pick one before trusting the numbers.
-
-analyticsSchema.index({ user: 1 });
+analyticsSchema.index({ timestamp: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
+analyticsSchema.index({ user: 1, event: 1 });
 
 export default mongoose.model('Analytics', analyticsSchema);
 ```
@@ -28005,6 +28806,40 @@ collegeRequestSchema.index({ status: 1, collegeName: 1 });
 collegeRequestSchema.index({ email: 1 }, { unique: true });
 
 export default mongoose.model('CollegeRequest', collegeRequestSchema);
+```
+
+### ./server/models/DailyAlignQuota.js
+
+```
+import mongoose from 'mongoose';
+
+const dailyAlignQuotaSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+  },
+  dayKey: {
+    type: String,
+    required: true,
+  },
+  count: {
+    type: Number,
+    required: true,
+    min: 0,
+  },
+  expiresAt: {
+    type: Date,
+    required: true,
+  },
+});
+
+dailyAlignQuotaSchema.index({ userId: 1, dayKey: 1 }, { unique: true });
+dailyAlignQuotaSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+const DailyAlignQuota = mongoose.model('DailyAlignQuota', dailyAlignQuotaSchema);
+export default DailyAlignQuota;
+
 ```
 
 ### ./server/models/DeckImpression.js
@@ -28416,6 +29251,8 @@ const messageSchema = new mongoose.Schema(
     },
     type: {
       type: String,
+      // Keep the legacy `audio` value readable for existing records; the message
+      // route rejects new messages of that type.
       enum: ['text', 'image', 'opening_letter', 'audio'],
       default: 'text',
     },
@@ -28443,8 +29280,7 @@ const messageSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
-    // The single source of truth for message media. Photos and voice notes both
-    // live here; the client's type field decides which player to use.
+    // The single source of truth for message media (photos).
     mediaUrl: {
       type: String,
       default: '',
@@ -28494,7 +29330,7 @@ messageSchema.index({ alignmentId: 1, _id: -1 });
 // Speeds up moderation queries and global user cleanup operations
 messageSchema.index({ senderId: 1, createdAt: -1 });
 // 🔒 ONE opening letter per alignment, enforced at the DB level.
-// Partial filter → normal text/image/audio messages are NOT affected
+// Partial filter → normal text/image messages are NOT affected
 // (an alignment can still have thousands of those). This index is what makes
 // the upserts in discover.js + notifications.js truly race-safe.
 messageSchema.index(
@@ -28504,6 +29340,40 @@ messageSchema.index(
 
 const Message = mongoose.model('Message', messageSchema);
 export default Message;
+
+```
+
+### ./server/models/ModerationLedger.js
+
+```
+import mongoose from 'mongoose';
+
+const moderationLedgerSchema = new mongoose.Schema(
+  {
+    // Keyed HMAC only; the deleted user's email is never stored in this ledger.
+    emailFingerprint: {
+      type: String,
+      required: true,
+      unique: true,
+    },
+    shadowbannedAt: {
+      type: Date,
+      required: true,
+    },
+    shadowbanScore: {
+      type: Number,
+      default: 0,
+    },
+    contentFrozen: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  { timestamps: true }
+);
+
+const ModerationLedger = mongoose.model('ModerationLedger', moderationLedgerSchema);
+export default ModerationLedger;
 
 ```
 
@@ -28708,7 +29578,7 @@ const reportSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
 });
 
-reportSchema.index({ reporter: 1, reported: 1 }, { unique: true });
+reportSchema.index({ reporter: 1, reported: 1, createdAt: -1 });
 
 const Report = mongoose.model('Report', reportSchema);
 export default Report;
@@ -28744,6 +29614,7 @@ export default mongoose.model('Setting', settingSchema);
 ```
 import mongoose from 'mongoose';
 import { randomInt } from 'node:crypto';
+import { GENDERS } from '../config/appData.js';
 
 const userSchema = new mongoose.Schema(
   {
@@ -28787,6 +29658,7 @@ const userSchema = new mongoose.Schema(
     gender: {
       type: String,
       default: '',
+      maxlength: 50,
     },
     pronouns: {
       type: String,
@@ -28886,7 +29758,7 @@ const userSchema = new mongoose.Schema(
       default: [],
     },
     intent: {
-      type: [String],
+      type: [{ type: String, maxlength: 50 }],
       default: [],
     },
     // Optional self-described gap year. Still discoverable — no ranking penalty —
@@ -28896,7 +29768,7 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
     interestedIn: {
-      type: [String],
+      type: [{ type: String, enum: [...GENDERS, 'Everyone'], maxlength: 50 }],
       default: [],
     },
     // ageRange was removed here: it was written by PUT /profile but read by
@@ -28906,7 +29778,7 @@ const userSchema = new mongoose.Schema(
     // No migration: existing documents keep the orphan subdocument and no code
     // path reads it.
     interests: {
-      type: [String],
+      type: [{ type: String, maxlength: 50 }],
       default: [],
     },
     onboardingStep: {
@@ -29075,16 +29947,27 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// Legacy columns that predate the current schema and are no longer read or
-// written anywhere in the app, but still sit in the database. Mongoose passes
-// through any DB field it does not know about, so they were being serialised
-// to clients on /me and the login response — including a password hash and
-// salt. Strip them at serialisation time rather than deleting user data.
-const LEGACY_PRIVATE_FIELDS = ['passwordHash', 'passwordSalt', 'emailVerified', 'otp', 'otpExpiry'];
+// Legacy database values and internal user state must never be serialized to
+// clients. Strip them here as a final safeguard without deleting stored data.
+const PRIVATE_FIELDS_TO_OMIT = [
+  'passwordHash',
+  'passwordSalt',
+  'emailVerified',
+  'otp',
+  'otpExpiry',
+  'shadowbanScore',
+  'shadowbannedAt',
+  'contentFrozen',
+  'randomSeed',
+  'pushSubscription',
+  'adminNotes',
+  'suspendedReason',
+  'lastLogoutAt',
+];
 
 userSchema.set('toJSON', {
   transform: (doc, ret) => {
-    for (const field of LEGACY_PRIVATE_FIELDS) {
+    for (const field of PRIVATE_FIELDS_TO_OMIT) {
       delete ret[field];
     }
     return ret;
@@ -31743,6 +32626,21 @@ const onlineUsers = new Map(); // userId -> Set<socketId>
 // How often to re-check suspension/deletion status from the DB per connected socket.
 const SUSPENSION_CHECK_INTERVAL = 60 * 1000;
 
+const registerSafeSocketHandler = (socket, event, handler) => {
+  socket.on(event, (...args) => {
+    try {
+      const result = handler(...args);
+      if (result && typeof result.catch === 'function') {
+        result.catch((error) => {
+          console.error(`Socket ${event} handler error:`, error);
+        });
+      }
+    } catch (error) {
+      console.error(`Socket ${event} handler error:`, error);
+    }
+  });
+};
+
 /**
  * Parse a raw cookie header string into a { name: value } map.
  */
@@ -31775,6 +32673,9 @@ export const socketHandler = (io) => {
       const user = await User.findById(decoded.id);
       if (!user) {
         return next(new Error('Authentication error: User not found'));
+      }
+      if (user.lastLogoutAt && decoded.iat * 1000 < user.lastLogoutAt.getTime()) {
+        return next(new Error('Authentication error: Session expired'));
       }
       socket.user = user;
       next();
@@ -31856,7 +32757,7 @@ export const socketHandler = (io) => {
     User.findByIdAndUpdate(userId, { lastActive: new Date() }).exec()
       .catch(err => console.error('Failed to update lastActive:', err));
 
-    socket.on('join-alignment', async (alignmentId) => {
+    registerSafeSocketHandler(socket, 'join-alignment', async (alignmentId) => {
       if (!alignmentId || typeof alignmentId !== 'string') return;
 
       try {
@@ -31893,7 +32794,7 @@ export const socketHandler = (io) => {
     // it with optional access, so a missing/wrong-shaped field is ignored and
     // logged instead of fatal.
 
-    socket.on('typing', (payload) => {
+    registerSafeSocketHandler(socket, 'typing', (payload) => {
       const alignmentId = payload?.alignmentId;
       if (!alignmentId || typeof alignmentId !== 'string') return;
       // Authorized at join-alignment; room membership replaces the per-keystroke DB query
@@ -31901,14 +32802,14 @@ export const socketHandler = (io) => {
       socket.to(alignmentId).emit('user-typing', { userName: socket.user.name });
     });
 
-    socket.on('stop-typing', (payload) => {
+    registerSafeSocketHandler(socket, 'stop-typing', (payload) => {
       const alignmentId = payload?.alignmentId;
       if (!alignmentId || typeof alignmentId !== 'string') return;
       if (!socket.rooms.has(alignmentId)) return;
       socket.to(alignmentId).emit('user-stop-typing');
     });
 
-    socket.on('check-online', async (payload) => {
+    registerSafeSocketHandler(socket, 'check-online', async (payload) => {
       // Read inside the try: destructuring used to happen in the parameter list,
       // where a missing payload threw before any guard could run.
       const alignmentId = payload?.alignmentId;
@@ -31937,7 +32838,7 @@ export const socketHandler = (io) => {
       }
     });
 
-    socket.on('read-messages', async (payload) => {
+    registerSafeSocketHandler(socket, 'read-messages', async (payload) => {
       const alignmentId = payload?.alignmentId;
       if (!alignmentId || typeof alignmentId !== 'string') return;
 
@@ -31956,7 +32857,7 @@ export const socketHandler = (io) => {
       }
     });
 
-    socket.on('disconnect', () => {
+    registerSafeSocketHandler(socket, 'disconnect', () => {
       console.log(`User disconnected: ${socket.user.name}`);
 
       // Multi-device: remove this socket, keep others
@@ -31996,6 +32897,774 @@ export const socketHandler = (io) => {
     });
   });
 };
+
+```
+
+### ./server/socket/rouletteSignaling.js
+
+```
+/**
+ * 🎰 ROULETTE — the queue and the call signaling.
+ *
+ * ── WHAT THIS IS ─────────────────────────────────────────────────────────────
+ * Chatroulette with the profile switched off. You arrive, you wait, the server
+ * pairs you with whoever else is waiting, you talk face to face, you press Next.
+ * Nobody ever sees a name, a college, or a profile.
+ *
+ * ── WHY THIS FILE HAS NO DATABASE IMPORTS ─────────────────────────────────────
+ * Every check that touches the database — "are these two blocked?", "is this
+ * account suspended?" — arrives through `deps`. That is not architectural
+ * purity, it is testability: CI has no MongoDB (there is no
+ * mongodb-memory-server, and the existing harness in `tests/lib/mongo.mjs`
+ * deliberately talks to a real cluster, which is why the QA job in CI is
+ * commented out as "not wired up yet"). Injecting the checks means the queue,
+ * the pairing races and the crash-safety guarantees are all provable in CI
+ * without a database or a browser.
+ *
+ * `socket/roulette.js` is the thin wrapper that supplies real mongoose-backed
+ * implementations. Nothing here knows mongoose exists.
+ *
+ * ── THE CRASH RULE ───────────────────────────────────────────────────────────
+ * `server/socket/chat.js:151-162` documents an existing production hazard: a
+ * socket event with a missing or wrong-shaped payload throws inside Socket.IO's
+ * `process.nextTick` dispatch, which has no try/catch, becomes an
+ * `uncaughtException`, and `server/index.js:574` responds with `process.exit(1)`.
+ * One malformed packet from one authenticated user takes down the whole app for
+ * everyone.
+ *
+ * Stage 3 is the first feature where strangers send us large attacker-controlled
+ * strings, so this module makes that structurally impossible rather than
+ * careful. Two independent layers:
+ *
+ *   1. `safeHandler` wraps EVERY registered handler in a try/catch. This is the
+ *      layer that actually stops the process dying, and it does so even for
+ *      throws that no shape check anticipated.
+ *   2. Validators reject bad payloads before any state is touched.
+ *
+ * Layer 1 is what makes layer 2 an optimisation rather than the only defence.
+ * `handlers` is exported so a test can assert that nothing is registered
+ * un-wrapped — that assertion is the thing keeping layer 1 true as handlers are
+ * added over time.
+ *
+ * ── WHAT IS DELIBERATELY ABSENT ──────────────────────────────────────────────
+ * No TURN (Stage 4), no skip/recovery/safety UI (Stage 6), no Align request
+ * (Stage 7), no chat (Stage 8), no profile reveal (Stage 9). Pairing here is
+ * first-in-first-out among allow-listed test accounts only.
+ *
+ * Design source: ambitions/roulette.md §11, §13, §15
+ */
+
+import { randomUUID } from 'crypto';
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * EVENTS
+ *
+ * Same names in both directions; Socket.IO separates them by direction. Every
+ * inbound event carries `sessionId` so that a signal belonging to a finished
+ * call can be rejected rather than applied to whatever call is current now.
+ *
+ * `call:terminated` keeps the name the spec already commits to (§13: "Refuses
+ * new pairs, emits `call:terminated`") and is reserved for a SERVER decision —
+ * capacity, the kill switch. `call:ended` is a participant leaving or pressing
+ * Next. Two names for genuinely different causes beats one ambiguous one.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+export const CALL_EVENTS = Object.freeze({
+  /* client → server */
+  JOIN: 'call:join',
+  LEAVE_QUEUE: 'call:leave-queue',
+  OFFER: 'call:offer',
+  ANSWER: 'call:answer',
+  ICE: 'call:ice',
+  MEDIA_STATE: 'call:media-state',
+  NEXT: 'call:next',
+  END: 'call:end',
+  /* server → client */
+  SEARCHING: 'call:searching',
+  MATCHED: 'call:matched',
+  PEER_MEDIA: 'call:peer-media',
+  ENDED: 'call:ended',
+  TERMINATED: 'call:terminated',
+  RATE_LIMITED: 'call:rate-limited',
+});
+
+/** Every inbound event this module listens for. Used by the wrapper test. */
+export const INBOUND_EVENTS = Object.freeze([
+  CALL_EVENTS.JOIN,
+  CALL_EVENTS.LEAVE_QUEUE,
+  CALL_EVENTS.OFFER,
+  CALL_EVENTS.ANSWER,
+  CALL_EVENTS.ICE,
+  CALL_EVENTS.MEDIA_STATE,
+  CALL_EVENTS.NEXT,
+  CALL_EVENTS.END,
+]);
+
+/**
+ * Keys allowed to appear in any server → client payload.
+ *
+ * Roulette's central privacy promise is that the person on the other end is a
+ * face with no identity attached. Every emit in this module is filtered through
+ * `assertNoIdentity`, so a future edit that helpfully adds `peerName` fails a
+ * test instead of shipping. `sessionId` is the only opaque handle — it is a
+ * random UUID that identifies a call, not a person, and both sides already hold
+ * each other's socket to know who is talking to them.
+ */
+const FORBIDDEN_PAYLOAD_KEYS = Object.freeze([
+  'userId', 'peerId', 'name', 'userName', 'username', 'displayName',
+  'firstName', 'lastName', 'email', 'phone', 'college', 'collegeName',
+  'profile', 'avatar', 'photo', 'photos', 'bio', 'prompt', 'gender',
+  'age', 'city', 'intent', 'intention', 'socketId', 'token',
+]);
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * VALIDATION
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
+/** Prototype-pollution keys. Rejected anywhere in an inbound payload. */
+const POLLUTION_KEYS = Object.freeze(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Walk a payload looking for prototype-pollution keys.
+ *
+ * Depth-limited because these payloads are shallow by design; an attacker
+ * nesting 50,000 objects deep is a different threat (parser stack overflow,
+ * handled by the try/catch in safeHandler) and this walk must not become the
+ * thing that burns CPU.
+ */
+const findPollutionKey = (value, depth = 0) => {
+  if (depth > 6 || value === null || typeof value !== 'object') return null;
+  for (const key of Object.keys(value)) {
+    if (POLLUTION_KEYS.includes(key)) return key;
+    const nested = findPollutionKey(value[key], depth + 1);
+    if (nested) return nested;
+  }
+  return null;
+};
+
+/** A bounded, correctly-typed string, or null. */
+export const safeString = (value, { min = 0, max = 256 } = {}) => {
+  if (typeof value !== 'string') return null;
+  if (value.length < min || value.length > max) return null;
+  return value;
+};
+
+export const safeSessionId = (value) => {
+  const s = safeString(value, { min: 8, max: 64 });
+  return s && SESSION_ID_RE.test(s) ? s : null;
+};
+
+/**
+ * An SDP blob.
+ *
+ * The length bound is in JavaScript characters rather than bytes, so it is a
+ * ~3x-overestimate against UTF-8 — deliberately loose in the permissive
+ * direction, because the aim is to stop a 50 MB payload, not to shave kilobytes
+ * off a legitimate offer. A real offer for one video track plus one audio track
+ * is roughly 2-4 KB, so the default ceiling leaves enormous headroom.
+ *
+ * The floor matters as much as the ceiling: an SDP shorter than 20 characters
+ * cannot be a real description and is only ever an attempt to make the peer
+ * throw.
+ */
+export const safeSdp = (value, maxChars) => {
+  const s = safeString(value, { min: 20, max: maxChars });
+  if (s === null) return null;
+  return { type: 'offer', sdp: s };
+};
+
+/**
+ * An ICE candidate.
+ *
+ * Rebuilt field by field rather than forwarded. Forwarding the client's object
+ * would relay whatever extra properties it carried into another user's socket
+ * handler — the classic socket relay bug.
+ */
+export const safeCandidate = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (findPollutionKey(value) !== null) return null;
+
+  const candidate = safeString(value.candidate, { min: 1, max: 2048 });
+  if (candidate === null) return null;
+
+  const out = { candidate };
+
+  if (value.sdpMid !== undefined && value.sdpMid !== null) {
+    const mid = safeString(value.sdpMid, { max: 16 });
+    if (mid === null) return null;
+    out.sdpMid = mid;
+  }
+
+  if (value.sdpMLineIndex !== undefined && value.sdpMLineIndex !== null) {
+    const idx = value.sdpMLineIndex;
+    if (!Number.isInteger(idx) || idx < 0 || idx > 32) return null;
+    out.sdpMLineIndex = idx;
+  }
+
+  return out;
+};
+
+/** Mic/camera state. Two booleans, nothing else — no identity may ride along. */
+export const safeMediaState = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (typeof value.audioOn !== 'boolean' || typeof value.videoOn !== 'boolean') return null;
+  return { audioOn: value.audioOn, videoOn: value.videoOn };
+};
+
+/**
+ * Fail a test, and in production drop the payload, if a server → client emit
+ * ever carries something resembling identity.
+ *
+ * This is the enforcement point behind the `FORBIDDEN_PAYLOAD_KEYS` list.
+ */
+export const assertNoIdentity = (eventName, payload) => {
+  if (!payload || typeof payload !== 'object') return;
+  for (const key of Object.keys(payload)) {
+    if (FORBIDDEN_PAYLOAD_KEYS.includes(key)) {
+      throw new Error(
+        `[roulette] REFUSING to emit "${eventName}": payload carries "${key}". `
+        + 'Roulette partners must never receive identity — see ambitions/roulette.md §1.3.',
+      );
+    }
+  }
+};
+
+/**
+ * Wrap a handler so it cannot take the process down.
+ *
+ * Catches synchronous throws AND rejected promises, because an async handler
+ * that rejects reaches the same `unhandledRejection` path that `index.js:565`
+ * logs but does not exit on — silently swallowing a real bug is worse than
+ * crashing, so it is logged loudly.
+ *
+ * This is the single most important function in the file.
+ */
+const safeHandler = (name, fn, logger) => function wrapped(...args) {
+  try {
+    const result = fn(...args);
+    if (result && typeof result.catch === 'function') {
+      result.catch((err) => {
+        logger(`[roulette] async failure in "${name}"`, err);
+      });
+    }
+    return result;
+  } catch (err) {
+    logger(`[roulette] synchronous throw in "${name}" — contained`, err);
+    return undefined;
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * THE ENGINE
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * @param {object} opts
+ * @param {import('socket.io').Server} opts.io
+ * @param {object} opts.settings            ROULETTE_SETTINGS
+ * @param {(userId: string) => boolean} opts.deps.isAllowed
+ * @param {(a: string, b: string) => Promise<{ok:boolean, reason?:string, blame?:'a'|'b'}>} opts.deps.assertPairable
+ *        Fresh block + suspension check. MUST hit the database rather than any
+ *        socket cache: `chat.js:12` caches suspension state for 60s, which is
+ *        far too stale for "may this person see my camera".
+ * @param {ReturnType<import('../utils/signalingRateLimit.js').createSignalingRateLimiter>} [opts.rateLimiter]
+ * @param {(msg: string, err?: Error) => void} [opts.logger]
+ */
+export const createRouletteSignaling = ({
+  io,
+  settings,
+  deps,
+  rateLimiter = null,
+  logger = (...a) => console.error(...a),
+}) => {
+  /* ── STATE ────────────────────────────────────────────────────────────────
+   * In-memory on purpose. There is no Call model, no Redis adapter, and no
+   * sticky-session requirement, which keeps this stage to one deployable unit.
+   * The cost is real and must be stated rather than discovered: every call and
+   * every queued user is lost on restart or a Render free-tier cold start.
+   * That is acceptable for an allow-listed test mode and is NOT acceptable for
+   * a pilot — it belongs with the capacity work in Stage 10. */
+  const queue = [];
+  const sessions = new Map();     // sessionId → session
+  const socketIndex = new Map();  // socketId  → { entry } | { sessionId }
+  const socketUsers = new Map();  // socketId  → userId (for rate-limit eviction)
+  const waitTimers = new Map();   // socketId  → Timeout
+  const sessionTimers = new Map();// sessionId → Timeout
+
+  /* Pump serialisation.
+   *
+   * Pairing needs an `await` for the block/suspension check, and an `await`
+   * opens the door for a second `join` to interleave between the "is this pair
+   * still claimable" read and the write. Node being single-threaded does not
+   * save us — the interleaving happens across microtask boundaries.
+   *
+   * So pairing claims both entries synchronously (setting `pending`) BEFORE any
+   * await, and `pump` is serialised behind `pumping`/`pumpRequested` so two
+   * concurrent joins cannot run two pair attempts over the same pair. */
+  let pumping = false;
+  let pumpRequested = false;
+
+  const clearTimer = (map, key) => {
+    const t = map.get(key);
+    if (t) {
+      clearTimeout(t);
+      map.delete(key);
+    }
+  };
+
+  /** Emit to exactly one socket. Socket.IO gives every socket a room named
+   * after its own id, so this addresses one socket without a shared room. */
+  const toSocket = (socketId, event, payload) => {
+    assertNoIdentity(event, payload);
+    io.to(socketId).emit(event, payload);
+  };
+
+  const isConnected = (socketId) => {
+    const s = io.sockets?.sockets?.get?.(socketId);
+    return Boolean(s && s.connected);
+  };
+
+  /* ── QUEUE ───────────────────────────────────────────────────────────────── */
+
+  const findInQueue = (socketId) => queue.find((e) => e.socketId === socketId);
+
+  const removeFromQueue = (entry) => {
+    const idx = queue.indexOf(entry);
+    if (idx !== -1) queue.splice(idx, 1);
+    clearTimer(waitTimers, entry.socketId);
+    entry.pending = false;
+    if (socketIndex.get(entry.socketId)?.entry === entry) socketIndex.delete(entry.socketId);
+  };
+
+  /** Tell the user how long they may wait before we stop pretending (§13). */
+  const scheduleWaitTimeout = (entry) => {
+    const ms = settings.MAX_WAIT_SECONDS * 1000;
+    if (!Number.isFinite(ms) || ms <= 0) return;
+    const timer = setTimeout(() => {
+      waitTimers.delete(entry.socketId);
+      if (!findInQueue(entry)) return; // already paired — timer is stale
+      removeFromQueue(entry);
+      toSocket(entry.socketId, CALL_EVENTS.TERMINATED, {
+        reason: 'wait-timeout',
+        message: 'Nobody is available right now. Try again in a little while.',
+      });
+    }, ms);
+    if (typeof timer.unref === 'function') timer.unref();
+    waitTimers.set(entry.socketId, timer);
+  };
+
+  const enqueue = (socket, userId) => {
+    const entry = { socketId: socket.id, userId, queuedAt: Date.now(), pending: false };
+    queue.push(entry);
+    socketIndex.set(socket.id, { entry });
+    scheduleWaitTimeout(entry);
+    toSocket(socket.id, CALL_EVENTS.SEARCHING, {
+      waiting: true,
+      position: queue.length,
+      maxWaitSeconds: settings.MAX_WAIT_SECONDS,
+    });
+  };
+
+  /* ── SESSIONS ────────────────────────────────────────────────────────────── */
+
+  /**
+   * Tear a session down and tell both sides why.
+   *
+   * Order matters: the session is deleted from `sessions` BEFORE the emits, so a
+   * signal that arrives in the gap is rejected as unknown rather than relayed
+   * into a call that no longer exists.
+   */
+  const closeSession = (sessionId, { reason, message, initiator = null, requeue = null }) => {
+    const session = sessions.get(sessionId);
+    if (!session) return;
+
+    sessions.delete(sessionId);
+    clearTimer(sessionTimers, sessionId);
+
+    for (const side of [session.a, session.b]) {
+      if (socketIndex.get(side.socketId)?.sessionId === sessionId) {
+        socketIndex.delete(side.socketId);
+      }
+    }
+
+    for (const side of [session.a, session.b]) {
+      if (side.socketId === initiator) continue; // they know, they did it
+      toSocket(side.socketId, CALL_EVENTS.ENDED, { sessionId, reason, message });
+    }
+
+    // The peer of whoever pressed Next does NOT go back in the queue
+    // automatically — spec §11.4 gives them an explicit "Find next". Only the
+    // person who pressed Next resumes searching.
+    if (requeue) {
+      const socket = io.sockets?.sockets?.get?.(requeue.socketId);
+      if (socket && socket.connected) enqueue(socket, requeue.userId);
+    }
+  };
+
+  const createSession = (first, second) => {
+    const sessionId = randomUUID();
+    const session = {
+      sessionId,
+      a: { socketId: first.socketId, userId: first.userId },
+      b: { socketId: second.socketId, userId: second.userId },
+      createdAt: Date.now(),
+      candidates: 0,
+    };
+    sessions.set(sessionId, session);
+
+    // The longer-waiting user offers. Fixed by position in the queue, which is
+    // what removes glare: exactly one side ever creates an offer, so there is no
+    // simultaneous-offer collision to negotiate.
+    const caller = session.a;
+    const callee = session.b;
+
+    socketIndex.set(caller.socketId, { sessionId });
+    socketIndex.set(callee.socketId, { sessionId });
+
+    toSocket(caller.socketId, CALL_EVENTS.MATCHED, { sessionId, role: 'caller' });
+    toSocket(callee.socketId, CALL_EVENTS.MATCHED, { sessionId, role: 'callee' });
+
+    /* Handshake watchdog.
+     *
+     * If the media path never comes up, both sides are left staring at a
+     * spinner with no way to know whether it is still working. Stage 3 is
+     * STUN-only, so a restrictive network genuinely fails — and it must fail
+     * with words rather than silence. `PAIR_TIMEOUT_MS` is used here rather
+     * than `CONNECT_TIMEOUT_MS` deliberately: the spec requires the pairing
+     * offer to comfortably outlive the connect attempt, otherwise a slow peer
+     * pairs and immediately loses the offer. */
+    const ms = settings.PAIR_TIMEOUT_MS;
+    if (Number.isFinite(ms) && ms > 0) {
+      const timer = setTimeout(() => {
+        sessionTimers.delete(sessionId);
+        if (!sessions.has(sessionId)) return;
+        logger(`[roulette] session ${sessionId} never connected — tearing down`);
+        closeSession(sessionId, {
+          reason: 'connect-failed',
+          message: 'Could not connect. This network may be blocking the call.',
+        });
+      }, ms);
+      if (typeof timer.unref === 'function') timer.unref();
+      sessionTimers.set(sessionId, timer);
+    }
+
+    return session;
+  };
+
+  /** Is this socket a participant of this session? The ONLY relay authority. */
+  const ownsSession = (socket, sessionId) => {
+    const session = sessions.get(sessionId);
+    if (!session) return null;
+    const owns = session.a.socketId === socket.id || session.b.socketId === socket.id;
+    return owns ? session : null;
+  };
+
+  const peerOf = (session, socketId) => (
+    session.a.socketId === socketId ? session.b : session.a
+  );
+
+  /* ── PAIRING PUMP ────────────────────────────────────────────────────────── */
+
+  const pumpOnce = async () => {
+    for (;;) {
+      if (sessions.size >= settings.MAX_CONCURRENT_CALLS) return;
+
+      const i = queue.findIndex((e) => !e.pending);
+      if (i === -1) return;
+      const j = queue.findIndex((e, idx) => idx > i && !e.pending);
+      if (j === -1) return;
+
+      const first = queue[i];
+      const second = queue[j];
+
+      // Claim both synchronously, before any await. Everything below is
+      // guaranteed exclusive access to this pair.
+      first.pending = true;
+      second.pending = true;
+
+      let verdict;
+      try {
+        verdict = await deps.assertPairable(first.userId, second.userId);
+      } catch (err) {
+        logger('[roulette] assertPairable threw — refusing the pair', err);
+        verdict = { ok: false, reason: 'check-failed' };
+      }
+
+      if (!verdict || verdict.ok !== true) {
+        const reason = verdict?.reason || 'not-allowed';
+        const blame = verdict?.blame === 'a' ? first : second;
+
+        removeFromQueue(first);
+        removeFromQueue(second);
+
+        // Only the user responsible is told, and only in general terms. Telling
+        // them "you are blocked" confirms the block exists and who caused it.
+        const message = reason === 'blocked'
+          ? 'You cannot be matched with this person.'
+          : 'Could not start a session. Please try again.';
+
+        toSocket(blame.socketId, CALL_EVENTS.TERMINATED, { reason, message });
+
+        // The innocent party keeps waiting rather than being punished for
+        // someone else's block.
+        const innocent = blame === first ? second : first;
+        const innocentSocket = io.sockets?.sockets?.get?.(innocent.socketId);
+        if (innocentSocket && innocentSocket.connected) enqueue(innocentSocket, innocent.userId);
+
+        continue;
+      }
+
+      // Re-check that nobody's socket died while we awaited the database.
+      if (!isConnected(first.socketId) || !isConnected(second.socketId)) {
+        removeFromQueue(first);
+        removeFromQueue(second);
+        continue;
+      }
+
+      removeFromQueue(first);
+      removeFromQueue(second);
+      createSession(first, second);
+    }
+  };
+
+  const pump = async () => {
+    if (pumping) {
+      pumpRequested = true;
+      return;
+    }
+    pumping = true;
+    try {
+      do {
+        pumpRequested = false;
+        await pumpOnce();
+      } while (pumpRequested);
+    } finally {
+      pumping = false;
+    }
+  };
+
+  /* ── HANDLERS ────────────────────────────────────────────────────────────── */
+
+  const userIdOf = (socket) => String(socket.user?._id ?? '');
+
+  /** Gate every inbound event on the allow-list and a rate budget. */
+  const admit = (socket, cost = 1) => {
+    const userId = userIdOf(socket);
+    if (!userId || !deps.isAllowed(userId)) return null;
+
+    if (rateLimiter) {
+      const { ok, retryAfterMs } = rateLimiter.take(`call:${userId}`, cost);
+      if (!ok) {
+        toSocket(socket.id, CALL_EVENTS.RATE_LIMITED, {
+          reason: 'too-fast',
+          retryAfterMs,
+        });
+        return null;
+      }
+    }
+    return userId;
+  };
+
+  /** Shared preamble: validate sessionId, confirm ownership, fetch the peer. */
+  const withSession = (payload, socket, fn) => {
+    const sessionId = safeSessionId(payload?.sessionId);
+    if (!sessionId) return;
+    const session = ownsSession(socket, sessionId);
+    if (!session) return; // unknown session, or not yours — silently dropped
+    fn(session, peerOf(session, socket.id));
+  };
+
+  /**
+   * Build the handler set for ONE socket.
+   *
+   * Per-socket rather than engine-level because every handler needs the socket
+   * it arrived on. `safeHandler` still wraps each one, which is the guarantee
+   * that matters: it is applied at the single point where a listener is
+   * registered, so there is no way to add an unwrapped handler later.
+   */
+  const buildHandlers = (socket) => {
+    const handlers = new Map();
+    const on = (name, fn) => {
+      const wrapped = safeHandler(name, fn, logger);
+      handlers.set(name, wrapped);
+      return wrapped;
+    };
+
+    on(CALL_EVENTS.JOIN, () => {
+      const userId = admit(socket);
+      if (!userId) return;
+
+      const existing = socketIndex.get(socket.id);
+      if (existing?.sessionId && sessions.has(existing.sessionId)) return; // already in a call
+      if (existing?.entry) return; // already queued
+
+      if (sessions.size >= settings.MAX_CONCURRENT_CALLS) {
+        return toSocket(socket.id, CALL_EVENTS.TERMINATED, {
+          reason: 'at-capacity',
+          message: 'Roulette is full right now. Try again shortly.',
+        });
+      }
+
+      if (queue.length >= settings.MAX_QUEUE_SIZE) {
+        return toSocket(socket.id, CALL_EVENTS.TERMINATED, {
+          reason: 'queue-full',
+          message: 'Roulette is very busy right now. Try again shortly.',
+        });
+      }
+
+      enqueue(socket, userId);
+      return pump();
+    });
+
+    on(CALL_EVENTS.LEAVE_QUEUE, () => {
+      const entry = findInQueue(socket.id);
+      if (!entry) return;
+      removeFromQueue(entry);
+      toSocket(socket.id, CALL_EVENTS.SEARCHING, { waiting: false });
+    });
+
+    on(CALL_EVENTS.OFFER, (payload) => {
+      if (!admit(socket)) return;
+      withSession(payload, socket, (session, peer) => {
+        const sdp = safeSdp(payload?.sdp, settings.MAX_SDP_BYTES);
+        if (!sdp) return; // malformed offer, dropped — never relayed
+        toSocket(peer.socketId, CALL_EVENTS.OFFER, { sessionId: session.sessionId, sdp });
+      });
+    });
+
+    on(CALL_EVENTS.ANSWER, (payload) => {
+      if (!admit(socket)) return;
+      withSession(payload, socket, (session, peer) => {
+        const sdp = safeSdp(payload?.sdp, settings.MAX_SDP_BYTES);
+        if (!sdp) return;
+        toSocket(peer.socketId, CALL_EVENTS.ANSWER, { sessionId: session.sessionId, sdp });
+      });
+    });
+
+    on(CALL_EVENTS.ICE, (payload) => {
+      if (!admit(socket)) return;
+      withSession(payload, socket, (session, peer) => {
+        // Per-session candidate ceiling. The rate limiter bounds the rate; this
+        // bounds the total, because a slow trickle under the rate limit still
+        // accumulates.
+        if (session.candidates >= settings.MAX_CANDIDATES_PER_SESSION) return;
+        session.candidates += 1;
+
+        const candidate = safeCandidate(payload?.candidate);
+        if (!candidate) return;
+        toSocket(peer.socketId, CALL_EVENTS.ICE, { sessionId: session.sessionId, candidate });
+      });
+    });
+
+    on(CALL_EVENTS.MEDIA_STATE, (payload) => {
+      if (!admit(socket)) return;
+      withSession(payload, socket, (session, peer) => {
+        const state = safeMediaState(payload);
+        if (!state) return;
+        toSocket(peer.socketId, CALL_EVENTS.PEER_MEDIA, state);
+      });
+    });
+
+    on(CALL_EVENTS.NEXT, (payload) => {
+      if (!admit(socket)) return;
+      withSession(payload, socket, (session) => {
+        closeSession(session.sessionId, {
+          reason: 'peer-next',
+          message: 'They moved on.',
+          initiator: socket.id,
+          // The presser goes back to the queue with a FRESH wait start, so
+          // pressing Next repeatedly cannot buy infinite waiting time.
+          requeue: { socketId: socket.id, userId: userIdOf(socket) },
+        });
+        // The presser is waiting again, so the pump must run or they will sit
+        // idle until a stranger happens to arrive.
+        return pump();
+      });
+    });
+
+    on(CALL_EVENTS.END, (payload) => {
+      if (!admit(socket)) return;
+      withSession(payload, socket, (session) => {
+        closeSession(session.sessionId, {
+          reason: 'peer-left',
+          message: 'They left.',
+          initiator: socket.id,
+        });
+      });
+    });
+
+    return handlers;
+  };
+
+  /* ── DISCONNECT ──────────────────────────────────────────────────────────── */
+
+  /**
+   * Tear down whatever this socket was doing.
+   *
+   * Safe to call more than once for the same socket, and safe to call for a
+   * socket that was never in Roulette at all.
+   */
+  const handleDisconnect = (socketId) => {
+    const entry = findInQueue(socketId);
+    if (entry) removeFromQueue(entry);
+
+    const indexed = socketIndex.get(socketId);
+    if (indexed?.sessionId) {
+      closeSession(indexed.sessionId, { reason: 'peer-left', message: 'They left.' });
+    }
+
+    clearTimer(waitTimers, socketId);
+    socketIndex.delete(socketId);
+
+    const userId = socketUsers.get(socketId);
+    if (userId && rateLimiter) rateLimiter.forget(`call:${userId}`);
+    socketUsers.delete(socketId);
+  };
+
+  /* ── ATTACH ──────────────────────────────────────────────────────────────── */
+
+  const attachSocket = (socket) => {
+    const userId = userIdOf(socket);
+    if (userId) socketUsers.set(socket.id, userId);
+
+    // Built ONCE per socket and registered explicitly. `safeHandler` is applied
+    // inside `buildHandlers`, at the one place a listener is created, so there
+    // is no path that registers an unwrapped handler.
+    for (const [event, fn] of buildHandlers(socket)) {
+      socket.on(event, fn);
+    }
+
+    socket.on('disconnect', () => {
+      try {
+        handleDisconnect(socket.id);
+      } catch (err) {
+        logger('[roulette] handleDisconnect threw — contained', err);
+      }
+    });
+  };
+
+  return {
+    attachSocket,
+    handleDisconnect,
+    /* Introspection for tests and the boot log. */
+    stats: () => ({
+      queued: queue.length,
+      sessions: sessions.size,
+      waitTimers: waitTimers.size,
+      sessionTimers: sessionTimers.size,
+    }),
+    /** Test-only: build a socket's handlers without registering them. */
+    buildHandlers,
+    /** Test-only: is this user id in the waiting queue? */
+    isQueued: (userId) => queue.some((e) => e.userId === userId),
+    /** Test-only: does this session exist? */
+    hasSession: (sessionId) => sessions.has(sessionId),
+  };
+};
+
+export default createRouletteSignaling;
 
 ```
 
@@ -32422,6 +34091,9 @@ export const sendOTP = async (email, otp) => {
   const apiKey = process.env.RESEND_API_KEY;
 
   if (!apiKey) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('RESEND_API_KEY is required to send OTP emails in production');
+    }
     console.log(`\n----------------------------------------`);
     console.log(`[DEV MODE] OTP for ${email}: ${otp}`);
     console.log(`----------------------------------------\n`);
@@ -32609,6 +34281,42 @@ export const isExternalPlaceholderUrl = (url) => {
  */
 export const isAcceptableMediaUrl = (url, userId) =>
   isOwnedMediaUrl(url, userId) || isExternalPlaceholderUrl(url);
+
+```
+
+### ./server/utils/moderationLedger.js
+
+```
+import crypto from 'crypto';
+import { normalizeEmail } from './otpHash.js';
+import ModerationLedger from '../models/ModerationLedger.js';
+
+export const fingerprintModerationEmail = (email) => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error('JWT_SECRET is required to fingerprint moderation identifiers');
+
+  return crypto
+    .createHmac('sha256', secret)
+    .update(`moderation-ledger:${normalizeEmail(email)}`)
+    .digest('hex');
+};
+
+export const preserveShadowban = async (user) => {
+  if (!user?.email || !user.shadowbannedAt) return null;
+
+  const emailFingerprint = fingerprintModerationEmail(user.email);
+  return ModerationLedger.findOneAndUpdate(
+    { emailFingerprint },
+    {
+      $set: {
+        shadowbannedAt: user.shadowbannedAt,
+        shadowbanScore: Number(user.shadowbanScore) || 0,
+        contentFrozen: Boolean(user.contentFrozen),
+      },
+    },
+    { upsert: true, new: true, runValidators: true }
+  );
+};
 
 ```
 
@@ -33182,6 +34890,111 @@ export const getQueueStats = () => ({
 });
 ```
 
+### ./server/utils/signalingRateLimit.js
+
+```
+/**
+ * 🚦 SIGNALING RATE LIMIT — per-user, in-memory.
+ *
+ * ── WHY THIS EXISTS ──────────────────────────────────────────────────────────
+ * Nothing has ever touched a socket event. Every limiter in
+ * `middleware/rateLimiters.js` is `express-rate-limit`, which needs a `req` —
+ * sockets have none — so all six of those are invisible here.
+ *
+ * Stage 3 is the first feature where strangers send us arbitrary strings. SDP
+ * blobs and ICE candidates are attacker-controlled and arrive at machine speed,
+ * so without a ceiling one authenticated account can flood the process: every
+ * relayed candidate is a socket emit to another user plus a JSON parse.
+ *
+ * ── WHY KEYED BY USER, NOT IP ────────────────────────────────────────────────
+ * An entire college sits behind one NAT address. An IP limit on signaling would
+ * throttle a whole campus during a busy evening. `verifyOtpLimiter` in
+ * `middleware/rateLimiters.js` already documents this reasoning for signups;
+ * the same argument applies harder here, because a call is continuous traffic
+ * rather than a one-off.
+ *
+ * ── WHY A TOKEN BUCKET ───────────────────────────────────────────────────────
+ * ICE candidates legitimately arrive in bursts — a dozen within the first
+ * second after `setRemoteDescription`. A fixed window either breaks real calls
+ * or is loose enough to be useless. A bucket with a burst allowance passes the
+ * burst and still bounds the sustained rate, which is the actual abuse shape:
+ * a loop, not a spike.
+ */
+
+/**
+ * Create a rate limiter.
+ *
+ * @param {object} opts
+ * @param {number} opts.ratePerSecond   sustained events/second allowed
+ * @param {number} opts.burst           bucket depth, i.e. burst allowance
+ * @param {number} opts.maxKeys         hard cap on tracked users (memory bound)
+ * @param {number} [opts.idleTtlMs]     evict a user after this long unused
+ * @param {() => number} [opts.now]     clock, injectable for tests
+ */
+export const createSignalingRateLimiter = ({
+  ratePerSecond,
+  burst,
+  maxKeys = 5_000,
+  idleTtlMs = 10 * 60 * 1000,
+  now = Date.now,
+}) => {
+  const buckets = new Map();
+
+  /**
+   * Try to spend `cost` tokens for `key`.
+   * @returns {{ ok: boolean, retryAfterMs: number }}
+   */
+  const take = (key, cost = 1) => {
+    if (!key) return { ok: false, retryAfterMs: 0 };
+
+    const t = now();
+    let bucket = buckets.get(key);
+
+    if (!bucket) {
+      // Map is insertion-ordered, so the first key is the least recently used.
+      // Dropping it on overflow is an O(1) LRU rather than a full scan.
+      if (buckets.size >= maxKeys) {
+        const oldest = buckets.keys().next().value;
+        buckets.delete(oldest);
+      }
+      bucket = { tokens: burst, updatedAt: t };
+      buckets.set(key, bucket);
+    }
+
+    // Refill for elapsed time, then reject if the bucket is empty.
+    const elapsedMs = Math.max(0, t - bucket.updatedAt);
+    bucket.tokens = Math.min(burst, bucket.tokens + (elapsedMs / 1000) * ratePerSecond);
+    bucket.updatedAt = t;
+
+    if (bucket.tokens < cost) {
+      const deficit = cost - bucket.tokens;
+      return { ok: false, retryAfterMs: Math.ceil((deficit / ratePerSecond) * 1000) };
+    }
+
+    bucket.tokens -= cost;
+    return { ok: true, retryAfterMs: 0 };
+  };
+
+  /** Forget a user's bucket — call on disconnect so idle users don't accumulate. */
+  const forget = (key) => {
+    buckets.delete(key);
+  };
+
+  /** Sweep users idle beyond `idleTtlMs`. Call from a timer, not per event. */
+  const sweep = () => {
+    const cutoff = now() - idleTtlMs;
+    for (const [key, bucket] of buckets) {
+      if (bucket.updatedAt < cutoff) buckets.delete(key);
+    }
+  };
+
+  return { take, forget, sweep, size: () => buckets.size };
+};
+
+export default createSignalingRateLimiter;
+
+```
+
 ### ./server/routes/admin.js
 
 ```
@@ -33194,12 +35007,16 @@ import Message from '../models/Message.js';
 import Setting from '../models/Setting.js';
 import College from '../models/College.js';
 import CollegeRequest from '../models/CollegeRequest.js';
+import ModerationLedger from '../models/ModerationLedger.js';
+import { fingerprintModerationEmail } from '../utils/moderationLedger.js';
 import { normaliseDomain } from '../utils/collegeDomain.js';
 import { sendCollegeLive } from '../utils/email.js';
 import { adminProtect } from '../middleware/admin.js';
 
 const router = express.Router();
 router.use(adminProtect);
+const DEFAULT_REPORT_REVIEW_THRESHOLD = 3;
+const RETIRED_MODERATION_SETTING_KEYS = ['shadowbanThreshold', 'autoShadowban'];
 
 // ─── Helpers ───
 function escapeRegex(str) {
@@ -33210,8 +35027,7 @@ const VALID_REPORT_STATUSES = ['pending', 'reviewed', 'dismissed', 'actioned'];
 const ALLOWED_SETTING_KEYS = new Set([
   'supportEmail',
   'maintenanceMode',
-  'shadowbanThreshold',
-  'autoShadowban',
+  'reportReviewThreshold',
   'appConfig',
 ]);
 
@@ -33500,6 +35316,12 @@ router.put('/users/:id', async (req, res) => {
       .select('name email suspended suspendedReason shadowbannedAt adminNotes');
     if (!user) return res.status(404).json({ message: 'User not found' });
 
+    if (shadowbanned === false && user.email) {
+      await ModerationLedger.deleteOne({
+        emailFingerprint: fingerprintModerationEmail(user.email),
+      });
+    }
+
     if (suspended) {
       const io = req.app.get('io');
       if (io) {
@@ -33532,13 +35354,21 @@ router.post('/users/:id/disconnect', async (req, res) => {
       return res.status(400).json({ message: 'Invalid user id' });
     }
 
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { lastLogoutAt: new Date() },
+      { new: true, select: '_id' }
+    );
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
     const io = req.app.get('io');
     if (io) {
       io.to(req.params.id.toString()).emit('force-disconnect', {
         reason: 'Admin forced disconnect',
       });
+      io.in(req.params.id.toString()).disconnectSockets(true);
     }
-    res.json({ message: 'Disconnect signal sent' });
+    res.json({ message: 'User disconnected' });
   } catch (err) {
     res.status(500).json({ message: 'Failed to disconnect user' });
   }
@@ -33976,9 +35806,12 @@ router.post('/college-requests/:id/notify', async (req, res) => {
 // ─── SETTINGS ───
 router.get('/settings', async (req, res) => {
   try {
-    const settings = await Setting.find().lean();
+    const settings = await Setting.find({
+      key: { $nin: RETIRED_MODERATION_SETTING_KEYS },
+    }).lean();
     const obj = {};
     settings.forEach(s => { obj[s.key] = s.value; });
+    obj.reportReviewThreshold ??= DEFAULT_REPORT_REVIEW_THRESHOLD;
     res.json(obj);
   } catch (err) {
     console.error('Admin settings error:', err);
@@ -34000,9 +35833,9 @@ router.put('/settings', async (req, res) => {
       if (!ALLOWED_SETTING_KEYS.has(key)) {
         return res.status(400).json({ message: `Unknown setting key: ${key}` });
       }
-      if (key === 'shadowbanThreshold') {
-        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1000) {
-          return res.status(400).json({ message: 'shadowbanThreshold must be a finite number between 0 and 1000' });
+      if (key === 'reportReviewThreshold') {
+        if (!Number.isInteger(value) || value < 1 || value > 1000) {
+          return res.status(400).json({ message: 'reportReviewThreshold must be a whole number between 1 and 1000' });
         }
       } else if (typeof value === 'string' && value.trim().length > 50) {
         return res.status(400).json({ message: `${key} must be 50 characters or fewer` });
@@ -34033,8 +35866,6 @@ import Alignment from '../models/Alignment.js';
 import User from '../models/User.js';
 import Interaction from '../models/Interaction.js';
 import Block from '../models/Block.js';
-import { sendPushNotification } from '../utils/push.js';
-import { addToQueue } from '../utils/queue.js';
 import { withFreshAge } from '../utils/age.js';
 import { protect } from '../middleware/auth.js';
 
@@ -34272,16 +36103,14 @@ router.delete('/:id', protect, async (req, res) => {
 
     // Notify the other user
     const io = req.app.get('io');
+    if (io) {
+      const alignmentId = alignment._id.toString();
+      io.in(alignmentId).socketsLeave(alignmentId);
+    }
     if (otherUserId && io) {
       io.to(otherUserId.toString()).emit('unmatch-notification', { alignmentId: alignment._id });
+      io.to(req.user._id.toString()).emit('unmatch-notification', { alignmentId: alignment._id });
     }
-    if (otherUserId) {
-      addToQueue(() => sendPushNotification(otherUserId, {
-        title: 'Unmatched',
-        body: `You were unmatched by ${req.user.name}`,
-      }));
-    }
-
     res.status(200).json({ success: true, message: 'Unmatched successfully' });
   } catch (error) {
     console.error(error);
@@ -34301,6 +36130,8 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import OTP from '../models/OTP.js';
 import User from '../models/User.js';
+import ModerationLedger from '../models/ModerationLedger.js';
+import { fingerprintModerationEmail, preserveShadowban } from '../utils/moderationLedger.js';
 import { validate } from '../middleware/validate.js';
 import { protect, setAuthCookie, clearAuthCookie } from '../middleware/auth.js';
 import { APP_CONSTANTS } from '../config/appData.js';
@@ -34309,7 +36140,7 @@ import { hashOtp, verifyOtp, normalizeEmail } from '../utils/otpHash.js';
 import College from '../models/College.js';
 import { emailMatchesCollege } from '../utils/collegeDomain.js';
 import { isCollegeAllowed, COLLEGE_GATE_MESSAGE } from '../utils/campusGate.js';
-import { verifyOtpLimiter, otpEmailLimiter, reverifyLimiter } from '../middleware/rateLimiters.js';
+import { verifyOtpLimiter, otpEmailLimiter, otpIpLimiter, reverifyLimiter } from '../middleware/rateLimiters.js';
 
 const router = express.Router();
 
@@ -34444,6 +36275,7 @@ const graceDaysLeft = (due, now = new Date()) => {
 // @access  Public
 router.post(
   '/send-otp',
+  otpIpLimiter,
   otpEmailLimiter,
   [
     body('email')
@@ -34570,6 +36402,7 @@ router.post(
       if (user && user.isDeleted) {
         const deletedAt = user.deletedAt ? user.deletedAt.getTime() : 0;
         if (Date.now() - deletedAt >= RETENTION_MS) {
+          await preserveShadowban(user);
           await User.deleteOne({ _id: user._id });
           user = null; // fall through to fresh-account creation
         }
@@ -34588,6 +36421,9 @@ router.post(
       }
 
       if (!user) {
+        const moderationRecord = await ModerationLedger.findOne({
+          emailFingerprint: fingerprintModerationEmail(email),
+        }).lean();
         user = await User.create({
           email,
           college: college.name,
@@ -34597,6 +36433,11 @@ router.post(
           status: 'active',
           lastVerifiedAt: new Date(),
           reverifyDue: nextReverifyDate(),
+          ...(moderationRecord ? {
+            shadowbanScore: moderationRecord.shadowbanScore,
+            shadowbannedAt: moderationRecord.shadowbannedAt,
+            contentFrozen: moderationRecord.contentFrozen,
+          } : {}),
         });
       } else {
         // 🛡️ Block suspended users from logging in
@@ -34657,12 +36498,9 @@ router.post(
           collegeCode: user.collegeCode,
           isOnboarded: user.isOnboarded,
           name: user.name,
+          isUnderReview: Boolean(user.shadowbannedAt || user.contentFrozen),
           suspended: user.suspended,
-          suspendedReason: user.suspendedReason,
           isDeleted: user.isDeleted,
-          shadowbanScore: user.shadowbanScore || 0,
-          shadowbannedAt: user.shadowbannedAt || null,
-          contentFrozen: user.contentFrozen || false,
           status: user.status || 'active',
           reverifyDue: user.reverifyDue || null,
           // Returned so the client can decide whether to show the annual
@@ -34829,17 +36667,30 @@ router.get('/reverify/status', protect, async (req, res) => {
 // @desc    Clear auth cookie
 // @access  Public
 router.post('/logout', async (req, res) => {
+  let userId = null;
   try {
     const token =
       req.cookies?.[APP_CONSTANTS.AUTH_COOKIE_NAME] ||
       (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
     if (token) {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      await User.findByIdAndUpdate(decoded.id, { lastLogoutAt: new Date() });
+      userId = decoded.id;
     }
   } catch {
     // Invalid/expired token — still proceed to clear the cookie
   }
+
+  if (userId) {
+    req.app.get('io')?.in(userId.toString()).disconnectSockets(true);
+    try {
+      await User.findByIdAndUpdate(userId, { lastLogoutAt: new Date() });
+    } catch (error) {
+      console.error('Logout session invalidation error:', error);
+      clearAuthCookie(res);
+      return res.status(500).json({ message: 'Could not fully invalidate the session' });
+    }
+  }
+
   clearAuthCookie(res);
   res.status(200).json({ message: 'Logged out successfully' });
 });
@@ -34852,7 +36703,11 @@ router.get('/me', protect, async (req, res) => {
     // protect attaches a LIGHT user (route-critical fields only) for performance.
     // /me must return the FULL profile (photos, prompts, bio, etc.), so re-fetch it.
     const fullUser = await User.findById(req.user._id);
-    res.status(200).json(fullUser);
+    if (!fullUser) return res.status(404).json({ message: 'User not found' });
+    res.status(200).json({
+      ...fullUser.toJSON(),
+      isUnderReview: Boolean(fullUser.shadowbannedAt || fullUser.contentFrozen),
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -35044,6 +36899,7 @@ import Notification from '../models/Notification.js';
 import Interaction from '../models/Interaction.js';
 import DeckImpression from '../models/DeckImpression.js';
 import DiscoverSession from '../models/DiscoverSession.js';
+import DailyAlignQuota from '../models/DailyAlignQuota.js';
 import { protect } from '../middleware/auth.js';
 import { sendPushNotification } from '../utils/push.js';
 import { addToQueue } from '../utils/queue.js';
@@ -35248,7 +37104,7 @@ const buildDeckPage = async (req, res) => {
     // Build exclusion set from the Interaction ledger
     const acted = await Interaction.find({
       $or: [
-        { actorId: currentUser._id, actionType: { $in: ['letter', 'telegram', 'accept_letter', 'archive'] } },
+        { actorId: currentUser._id, actionType: { $in: ['align', 'letter', 'telegram', 'accept_letter', 'archive'] } },
         { targetId: currentUser._id, actionType: 'archive' },
       ],
     }).select('actorId targetId actionType cooldownExpiresAt').lean();
@@ -35268,6 +37124,15 @@ const buildDeckPage = async (req, res) => {
       } else {
         excludedIds.add(otherId);
       }
+    }
+
+    const activeAlignments = await Alignment.find({
+      users: currentUser._id,
+      isActive: true,
+    }).select('users').lean();
+    for (const alignment of activeAlignments) {
+      const otherId = alignment.users.find((id) => id.toString() !== currentUser._id.toString());
+      if (otherId) excludedIds.add(otherId.toString());
     }
 
     const blockExclusion = await getBlockExclusionQuery(currentUser._id);
@@ -36085,8 +37950,16 @@ const RANK_WINDOW = 500;
     if (!isLive(session)) {
       /* Fresh session. Any previous window is overwritten rather than extended:
          past SESSION_IDLE_MINUTES the user has been away, and carrying the old
-         order forward is the one thing that would make "new cards" not new. */
-      const window = await rankWindow([]);
+         order forward is the one thing that would make "new cards" not new.
+
+         Still skip every id from the previous window: the client can retain
+         prefetched cards while the server session ages out, and a new window
+         must not append those same profiles again. */
+      const previouslyShown = new Set([
+        ...(session?.servedIds || []).map((id) => id.toString()),
+        ...(session?.userIds || []).map((id) => id.toString()),
+      ]);
+      const window = await rankWindow(previouslyShown);
 
       if (session) {
         session.userIds = window.map((u) => u._id);
@@ -36630,20 +38503,7 @@ const handleAlign = async (req, res) => {
      * Align is the deck's only positive action, so this is the quota that now
      * matters. The old split (7 letters + 1 telegram) was two budgets for one
      * gesture, which is why neither number described what a user could do. */
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const istNow = new Date(Date.now() + IST_OFFSET_MS);
-    istNow.setUTCHours(0, 0, 0, 0);
-    const startOfDay = new Date(istNow.getTime() - IST_OFFSET_MS);
-    const dailyCount = await Interaction.countDocuments({
-      actorId: currentUser._id,
-      actionType: 'align',
-      createdAt: { $gte: startOfDay },
-    });
     const DAILY_ALIGN_LIMIT = 10;
-    if (dailyCount >= DAILY_ALIGN_LIMIT) {
-      return res.status(403).json({ message: "Out of aligns. Come back tomorrow." });
-    }
-
     const { note, target } = req.body;
     const safeNote = typeof note === 'string' ? note.trim() : '';
     if (safeNote.length > 140) {
@@ -36653,15 +38513,72 @@ const handleAlign = async (req, res) => {
       });
     }
 
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const istNow = new Date(Date.now() + IST_OFFSET_MS);
+    const dayKey = istNow.toISOString().slice(0, 10);
+    const startOfDay = new Date(`${dayKey}T00:00:00.000Z`);
+    startOfDay.setTime(startOfDay.getTime() - IST_OFFSET_MS);
+    const expiresAt = new Date(startOfDay.getTime() + 46 * DAY_MS);
+
+    let quota = await DailyAlignQuota.findOne({
+      userId: currentUser._id,
+      dayKey,
+    }).select('_id');
+    if (!quota) {
+      // Seed the atomic counter with today's usage from before this counter existed.
+      const priorAligns = await Interaction.countDocuments({
+        actorId: currentUser._id,
+        actionType: 'align',
+        createdAt: { $gte: startOfDay },
+      });
+      try {
+        quota = await DailyAlignQuota.create({
+          userId: currentUser._id,
+          dayKey,
+          count: priorAligns,
+          expiresAt,
+        });
+      } catch (error) {
+        if (error.code !== 11000) throw error;
+        quota = await DailyAlignQuota.findOne({ userId: currentUser._id, dayKey }).select('_id');
+        if (!quota) throw error;
+      }
+    }
+
+    const reservedQuota = await DailyAlignQuota.findOneAndUpdate(
+      { userId: currentUser._id, dayKey, count: { $lt: DAILY_ALIGN_LIMIT } },
+      { $inc: { count: 1 } },
+      { new: true },
+    );
+    if (!reservedQuota) {
+      return res.status(403).json({
+        message: 'Out of aligns. Come back tomorrow.',
+        code: 'DAILY_ALIGN_LIMIT',
+      });
+    }
+
     // 1. THE LEDGER ENTRY
-    const alignInteraction = await Interaction.create({
-      actorId: currentUser._id,
-      targetId,
-      actionType: 'align',
-      targetArtifact: target || null,
-      letterContent: safeNote || null,
-      cooldownExpiresAt: null,
-    });
+    let alignInteraction;
+    try {
+      alignInteraction = await Interaction.create({
+        actorId: currentUser._id,
+        targetId,
+        actionType: 'align',
+        targetArtifact: target || null,
+        letterContent: safeNote || null,
+        cooldownExpiresAt: null,
+      });
+    } catch (error) {
+      try {
+        await DailyAlignQuota.updateOne(
+          { userId: currentUser._id, dayKey, count: { $gt: 0 } },
+          { $inc: { count: -1 } },
+        );
+      } catch (releaseError) {
+        console.error('Failed to release align quota reservation:', releaseError);
+      }
+      throw error;
+    }
 
     // 2. INBOX NOTIFICATION
     const notification = await Notification.create({
@@ -36725,20 +38642,38 @@ const handleAlign = async (req, res) => {
 
       // Atomic upsert: two people can accept at the same instant, and a plain
       // find-then-create is a duplicate-key crash on the loser.
-      const match = await Alignment.findOneAndUpdate(
-        { pairKey },
-        {
-          $setOnInsert: {
-            pairKey,
-            users: [currentUser._id, targetId],
+      let match;
+      try {
+        match = await Alignment.findOneAndUpdate(
+          { pairKey },
+          {
+            $setOnInsert: {
+              pairKey,
+              users: [currentUser._id, targetId],
+            },
+            $set: {
+              isActive: true,
+              unlockedByInteractionId: alignInteraction._id,
+            },
           },
-          $set: {
-            isActive: true,
-            unlockedByInteractionId: alignInteraction._id,
+          { upsert: true, new: true },
+        );
+      } catch (error) {
+        // Concurrent upserts can race on the unique pairKey index. The winner
+        // has created the alignment; update and return that row for the loser.
+        if (error.code !== 11000) throw error;
+        match = await Alignment.findOneAndUpdate(
+          { pairKey },
+          {
+            $set: {
+              isActive: true,
+              unlockedByInteractionId: alignInteraction._id,
+            },
           },
-        },
-        { upsert: true, new: true },
-      );
+          { new: true },
+        );
+        if (!match) throw error;
+      }
 
       /* OPENING MESSAGE — only when there is something to open with.
          A bare align carries no text, and an empty chat bubble reading "" is
@@ -36798,7 +38733,10 @@ const handleAlign = async (req, res) => {
          how a card the user aligned with comes back on the next rebuild. */
       const session = await DiscoverSession.findOne({ viewerId: currentUser._id });
       if (session) {
-        await session.updateOne({ $addToSet: { servedIds: targetId } });
+        await session.updateOne({
+          $addToSet: { servedIds: targetId },
+          $set: { lastSeenAt: new Date() },
+        });
       }
 
       return res.status(200).json({
@@ -36810,7 +38748,10 @@ const handleAlign = async (req, res) => {
 
     const session = await DiscoverSession.findOne({ viewerId: currentUser._id });
     if (session) {
-      await session.updateOne({ $addToSet: { servedIds: targetId } });
+      await session.updateOne({
+        $addToSet: { servedIds: targetId },
+        $set: { lastSeenAt: new Date() },
+      });
     }
 
     return res.status(200).json({ matched: false });
@@ -36827,7 +38768,9 @@ router.post('/pass/:id', protect, discoverLimiter, async (req, res) => {
   const currentUser = req.user;
 
   try {
-    // 🧹 ATOMIC UPSERT: Overwrites existing pass cooldowns instead of stacking duplicate rows
+    // 🧹 ATOMIC UPSERT: Update temporary passes without replacing a permanent
+    // block/unmatch archive. A duplicate-key race means a permanent archive
+    // already occupies this unique actor/target/action row; leave it untouched.
     //
     // `origin: 'pass'` is what finally distinguishes a swipe from a block or an
     // unmatch. The field has been in the Interaction schema's enum since it was
@@ -36836,25 +38779,63 @@ router.post('/pass/:id', protect, discoverLimiter, async (req, res) => {
     // "passed four times, now hide forever". Setting origin here is what lets the
     // escalating cooldown count passes without counting blocks as passes.
     //
-    // NOTE: `$set` would clobber a permanent archive back into a temporary pass.
-    // It is deliberately NOT in the $set — origin only moves null → 'pass', so a
-    // blocked user who somehow gets a pass row cannot un-block themselves.
-    await Interaction.findOneAndUpdate(
-      { actorId: currentUser._id, targetId, actionType: 'archive', origin: { $ne: 'unmatch' } },
-      {
-        $set: { cooldownExpiresAt: new Date(Date.now() + 7 * DAY_MS) },$setOnInsert: { origin: 'pass' },
-      },
-      { upsert: true, new: true }
-    );
+    try {
+      await Interaction.findOneAndUpdate(
+        {
+          actorId: currentUser._id,
+          targetId,
+          actionType: 'archive',
+          cooldownExpiresAt: { $ne: null },
+          origin: { $nin: ['block', 'unmatch'] },
+        },
+        {
+          $set: { cooldownExpiresAt: new Date(Date.now() + 7 * DAY_MS) },
+          $setOnInsert: { origin: 'pass' },
+        },
+        { upsert: true, new: true }
+      );
+    } catch (error) {
+      if (error.code !== 11000) throw error;
+    }
     let session = await DiscoverSession.findOne({ viewerId: currentUser._id });
-if (!session) {
-  session = await DiscoverSession.create({ viewerId: currentUser._id, servedIds: [] });
-}
-await session.updateOne({ $addToSet: { servedIds: targetId } });
-res.status(200).json({ success: true });
+    if (!session) {
+      session = await DiscoverSession.create({ viewerId: currentUser._id, servedIds: [] });
+    }
+    await session.updateOne({
+      $addToSet: { servedIds: targetId },
+      $set: { lastSeenAt: new Date() },
+    });
+    res.status(200).json({ success: true });
   } catch (error) {
     console.error('Pass error:', error);
     res.status(500).json({ message: 'Server error processing pass' });
+  }
+});
+
+router.post('/undo/:id', protect, discoverLimiter, async (req, res) => {
+  const targetId = req.params.id;
+
+  try {
+    const pass = await Interaction.findOneAndDelete({
+      actorId: req.user._id,
+      targetId,
+      actionType: 'archive',
+      cooldownExpiresAt: { $gt: new Date() },
+      $or: [{ origin: 'pass' }, { origin: null }],
+    });
+
+    const session = await DiscoverSession.findOne({ viewerId: req.user._id });
+    if (session) {
+      await session.updateOne({
+        $pull: { servedIds: targetId },
+        $set: { lastSeenAt: new Date() },
+      });
+    }
+
+    res.status(200).json({ success: true, undone: Boolean(pass) });
+  } catch (error) {
+    console.error('Undo pass error:', error);
+    res.status(500).json({ message: 'Server error undoing pass' });
   }
 });
 
@@ -36872,9 +38853,10 @@ import User from '../models/User.js';
 import { protect } from '../middleware/auth.js';
 import { sendPushNotification } from '../utils/push.js';
 import { addToQueue } from '../utils/queue.js';
-import { messageLimiter } from '../middleware/rateLimiters.js';
+import { messageLimiter, destructiveActionLimiter } from '../middleware/rateLimiters.js';
 import { getBlockDirection } from '../middleware/blockFilter.js';
 import { deleteCloudinaryFile } from '../config/cloudinary.js';
+import { isOwnedMediaUrl } from '../utils/media.js';
 
 const router = express.Router();
 
@@ -36897,10 +38879,7 @@ const isValidMediaUrl = (url, userId) => {
     const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
     if (!cloudName || host !== 'res.cloudinary.com') return false;
     if (!parsed.pathname.startsWith(`/${cloudName}/`)) return false;
-    if (!parsed.pathname.includes('/matchalize/photos/') ||
-        !parsed.pathname.includes('/matchalize/audio/')) {
-      return isOwnedMediaUrl(url, userId);
-    }
+    if (!parsed.pathname.includes('/matchalize/photos/')) return false;
     return isOwnedMediaUrl(url, userId);
   } catch {
     return false;
@@ -36943,6 +38922,7 @@ router.get('/:alignmentId', protect, async (req, res) => {
   const { alignmentId } = req.params;
   const limit = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 100);
   const cursor = req.query.cursor;
+  const around = req.query.around;
 
   try {
     const match = await Alignment.findOne({
@@ -36955,30 +38935,65 @@ router.get('/:alignmentId', protect, async (req, res) => {
       return res.status(403).json({ message: 'This conversation is no longer available.', code: 'CONVERSATION_GONE' });
     }
 
-    const query = { alignmentId };
-    
-    // 🚀 COLLISION-PROOF CURSOR: Use ObjectId sequencing instead of timestamps
-    if (cursor && mongoose.Types.ObjectId.isValid(cursor)) {
-      query._id = { $lt: new mongoose.Types.ObjectId(cursor) };
-    } else if (cursor) {
-      // Graceful fallback just in case an older timestamp cursor was passed
-      query.createdAt = { $lt: new Date(cursor) };
+    if (around !== undefined && (typeof around !== 'string' || !mongoose.Types.ObjectId.isValid(around))) {
+      return res.status(400).json({ message: 'Invalid message id' });
     }
 
-    const messages = await Message.find(query)
-      .sort({ _id: -1 })
-      .limit(limit)
-      .populate('replyTo', 'text senderId type mediaUrl deleted');
+    let messages;
+    let nextCursor;
+    if (around) {
+      const targetId = new mongoose.Types.ObjectId(around);
+      const target = await Message.findOne({ _id: targetId, alignmentId })
+        .populate('replyTo', 'text senderId type mediaUrl deleted');
+      if (!target) return res.status(404).json({ message: 'Message not found' });
+
+      const olderLimit = Math.floor((limit - 1) / 2);
+      const newerLimit = limit - olderLimit - 1;
+      const [older, newer] = await Promise.all([
+        olderLimit
+          ? Message.find({ alignmentId, _id: { $lt: targetId } })
+            .sort({ _id: -1 })
+            .limit(olderLimit + 1)
+            .populate('replyTo', 'text senderId type mediaUrl deleted')
+          : [],
+        newerLimit
+          ? Message.find({ alignmentId, _id: { $gt: targetId } })
+            .sort({ _id: 1 })
+            .limit(newerLimit)
+            .populate('replyTo', 'text senderId type mediaUrl deleted')
+          : [],
+      ]);
+
+      const hasOlder = older.length > olderLimit;
+      const olderMessages = older.slice(0, olderLimit).reverse();
+      messages = [...olderMessages, target, ...newer];
+      nextCursor = hasOlder ? olderMessages[0]?._id || null : null;
+    } else {
+      const query = { alignmentId };
+
+      // 🚀 COLLISION-PROOF CURSOR: Use ObjectId sequencing instead of timestamps
+      if (cursor && mongoose.Types.ObjectId.isValid(cursor)) {
+        query._id = { $lt: new mongoose.Types.ObjectId(cursor) };
+      } else if (cursor) {
+        // Graceful fallback just in case an older timestamp cursor was passed
+        query.createdAt = { $lt: new Date(cursor) };
+      }
+
+      const page = await Message.find(query)
+        .sort({ _id: -1 })
+        .limit(limit)
+        .populate('replyTo', 'text senderId type mediaUrl deleted');
+      nextCursor = page.length === limit ? page[page.length - 1]._id : null;
+      messages = page.reverse();
+    }
 
     await Message.updateMany(
       { alignmentId, senderId: { $ne: req.user._id }, readAt: null },
       { $set: { readAt: new Date(), deliveryStatus: 'read' } }
     ).exec();
 
-    const nextCursor = messages.length === limit ? messages[messages.length - 1]._id : null;
-
     res.status(200).json({
-      messages: messages.reverse(), 
+      messages,
       nextCursor,
       hasMore: !!nextCursor,
     });
@@ -36993,12 +39008,16 @@ router.post('/:alignmentId', protect, messageLimiter, async (req, res) => {
   const { alignmentId } = req.params;
   const { text, type, image, replyTo, mediaUrl, caption, clientMsgId } = req.body;
 
-  const hasMedia = (type === 'image' || type === 'audio') && mediaUrl;
+  if (type === 'audio') {
+    return res.status(400).json({ message: 'Voice messages are no longer supported' });
+  }
+
+  const hasMedia = type === 'image' && mediaUrl;
   if (!hasMedia && (!text || text.trim() === '')) {
     return res.status(400).json({ message: 'Message cannot be empty' });
   }
 
-  if (mediaUrl && !isValidMediaUrl(mediaUrl)) {
+  if (mediaUrl && (type !== 'image' || !isValidMediaUrl(mediaUrl, req.user._id))) {
     return res.status(400).json({ message: 'Invalid media URL' });
   }
 
@@ -37038,7 +39057,11 @@ router.post('/:alignmentId', protect, messageLimiter, async (req, res) => {
 
     // IDEMPOTENCY CHECK: Prevent duplicate messages from network retries
     if (clientMsgId) {
-      const existingMsg = await Message.findOne({ clientMsgId });
+      const existingMsg = await Message.findOne({
+        clientMsgId,
+        alignmentId,
+        senderId: req.user._id,
+      });
       if (existingMsg) {
         return res.status(200).json(existingMsg);
       }
@@ -37049,7 +39072,7 @@ router.post('/:alignmentId', protect, messageLimiter, async (req, res) => {
       if (!replyMsg) return res.status(400).json({ message: 'Reply target not found' });
     }
 
-    const ALLOWED_TYPES = ['text', 'image', 'audio'];
+    const ALLOWED_TYPES = ['text', 'image'];
     const safeType = ALLOWED_TYPES.includes(type) ? type : 'text';
 
     const messageData = {
@@ -37075,7 +39098,11 @@ router.post('/:alignmentId', protect, messageLimiter, async (req, res) => {
       message = await Message.create(messageData);
     } catch (err) {
       if (err.code === 11000 && clientMsgId) {
-        const existing = await Message.findOne({ clientMsgId });
+        const existing = await Message.findOne({
+          clientMsgId,
+          alignmentId,
+          senderId: req.user._id,
+        });
         if (existing) return res.status(200).json(existing);
       }
       throw err;
@@ -37102,7 +39129,7 @@ router.post('/:alignmentId', protect, messageLimiter, async (req, res) => {
       const sender = await User.findById(req.user._id).select('name');
       addToQueue(() => sendPushNotification(otherUserId, {
         title: sender?.name || 'New Message',
-        body: type === 'audio' ? '🎙️ Sent a voice memo' : type === 'image' ? '📷 Sent a photograph' : (text || '').slice(0, 100),
+        body: safeType === 'image' ? '📷 Sent a photograph' : (text || '').slice(0, 100),
         data: { type: 'message', alignmentId: alignmentId.toString() },
       }));
     }
@@ -37131,29 +39158,41 @@ router.post('/:alignmentId/reaction', protect, messageLimiter, async (req, res) 
     const match = await Alignment.findOne({ _id: alignmentId, users: req.user._id, isActive: true });
     if (!match) return res.status(403).json({ message: 'Unauthorized' });
 
-    const message = await Message.findOne({ _id: msgId, alignmentId });
-    if (!message) return res.status(404).json({ message: 'Message not found' });
-
-    // A deleted message is a tombstone: body, media and reactions are all
-    // scrubbed, so there is nothing left to react to. This route used to accept
-    // reactions here, which meant anyone could re-populate a removed message's
-    // reactions after the fact — and they'd render under "This artifact was
-    // removed." Reported as 404 to match the not-found case above rather than
-    // leaking that the tombstone exists.
-    if (message.deleted) return res.status(404).json({ message: 'Message not found' });
-
-    const existingIdx = message.reactions.findIndex(
-      (r) => r.user.toString() === req.user._id.toString() && r.emoji === emoji
+    const otherUsersReactions = {
+      $filter: {
+        input: { $ifNull: ['$reactions', []] },
+        as: 'reaction',
+        cond: { $ne: ['$$reaction.user', req.user._id] },
+      },
+    };
+    const sameReaction = {
+      $filter: {
+        input: { $ifNull: ['$reactions', []] },
+        as: 'reaction',
+        cond: {
+          $and: [
+            { $eq: ['$$reaction.user', req.user._id] },
+            { $eq: ['$$reaction.emoji', emoji] },
+          ],
+        },
+      },
+    };
+    const message = await Message.findOneAndUpdate(
+      { _id: msgId, alignmentId, deleted: false },
+      [{
+        $set: {
+          reactions: {
+            $cond: [
+              { $gt: [{ $size: sameReaction }, 0] },
+              otherUsersReactions,
+              { $concatArrays: [otherUsersReactions, [{ emoji, user: req.user._id }]] },
+            ],
+          },
+        },
+      }],
+      { new: true },
     );
-
-    if (existingIdx > -1) {
-      message.reactions.splice(existingIdx, 1);
-    } else {
-      message.reactions = message.reactions.filter((r) => r.user.toString() !== req.user._id.toString());
-      message.reactions.push({ emoji, user: req.user._id });
-    }
-
-    await message.save();
+    if (!message) return res.status(404).json({ message: 'Message not found' });
 
     const io = req.app.get('io');
     if (io) {
@@ -37167,7 +39206,7 @@ router.post('/:alignmentId/reaction', protect, messageLimiter, async (req, res) 
   }
 });
 
-router.delete('/:alignmentId/:msgId', protect, async (req, res) => {
+router.delete('/:alignmentId/:msgId', protect, destructiveActionLimiter, async (req, res) => {
   const { alignmentId, msgId } = req.params;
   try {
     const match = await Alignment.findOne({ _id: alignmentId, users: req.user._id, isActive: true });
@@ -37177,13 +39216,14 @@ router.delete('/:alignmentId/:msgId', protect, async (req, res) => {
     if (!message) return res.status(404).json({ message: 'Message not found' });
     if (message.senderId.toString() !== req.user._id.toString()) return res.status(403).json({ message: 'Can only delete your own messages' });
 
-    // 🧹 CLOUDINARY WIPE: If the message contained a photo or voice note, vaporize it from cloud storage!
+    // 🧹 CLOUDINARY WIPE: Remove the uploaded media asset when its message is deleted.
     if (message.mediaUrl || message.image) {
       deleteCloudinaryFile(message.mediaUrl || message.image, req.user._id);
     }
 
     message.deleted = true;
     message.text = '';
+    message.caption = '';
     message.image = '';
     message.mediaUrl = '';
     // Reactions are scrubbed too. They used to survive deletion, which left
@@ -37557,12 +39597,13 @@ import Block from '../models/Block.js';
 import Alignment from '../models/Alignment.js';
 import User from '../models/User.js';
 import Interaction from '../models/Interaction.js';
+import Setting from '../models/Setting.js';
 import { protect } from '../middleware/auth.js';
 import { REPORT_REASONS } from '../models/Report.js';
-import { sendPushNotification } from '../utils/push.js';
-import { addToQueue } from '../utils/queue.js';
+import { destructiveActionLimiter } from '../middleware/rateLimiters.js';
 
 const router = express.Router();
+const DEFAULT_REPORT_REVIEW_THRESHOLD = 3;
 
 // @route   GET /api/report/reasons
 // @desc    Get available report reasons
@@ -37572,7 +39613,7 @@ router.get('/reasons', protect, (req, res) => {
 });
 
 // @route   POST /api/report/:userId
-// @desc    Report a user (auto-suspend after 3 unique reporters)
+// @desc    Report a user (flag for admin review after distinct-reporter threshold)
 // @access  Private
 router.post('/:userId', protect, async (req, res) => {
   const { reason, details } = req.body;
@@ -37587,59 +39628,40 @@ router.post('/:userId', protect, async (req, res) => {
   }
 
   try {
-    // '+suspendedReason' only lifts that field's default exclusion — the rest
-    // of the document still comes back, so the escalation below does not write
-    // undefined over any other field.
-    const reported = await User.findById(reportedId).select('+suspendedReason');
+    const reported = await User.findById(reportedId);
     if (!reported) return res.status(404).json({ message: 'User not found' });
 
-    // Dismissed-aware report: a dismissed report can be re-opened by the same
-    // reporter; an active one still rejects duplicates (keeps the unique index valid).
-    const existingReport = await Report.findOne({ reporter: req.user._id, reported: reportedId });
-    let report;
-    if (existingReport && existingReport.status === 'dismissed') {
-      existingReport.reason = reason;
-      existingReport.details = details || '';
-      existingReport.status = 'pending';
-      existingReport.createdAt = new Date();
-      report = await existingReport.save();
-    } else if (existingReport) {
-      return res.status(409).json({ message: 'Already reported this user' });
-    } else {
-      report = await Report.create({
-        reporter: req.user._id,
-        reported: reportedId,
-        reason,
-        details: details || '',
-      });
+    const reviewThresholdSetting = await Setting.findOne({ key: 'reportReviewThreshold' }).lean();
+    const reviewThreshold = reviewThresholdSetting?.value ?? DEFAULT_REPORT_REVIEW_THRESHOLD;
+    if (!Number.isInteger(reviewThreshold) || reviewThreshold < 1 || reviewThreshold > 1000) {
+      throw new Error('Invalid reportReviewThreshold setting');
     }
 
-    // Escalation: count only non-dismissed reports so admin dismissals work
-    const activeReportCount = await Report.countDocuments({
+    const report = await Report.create({
+      reporter: req.user._id,
+      reported: reportedId,
+      reason,
+      details: details || '',
+    });
+
+    // Repeated reports are retained as separate moderation evidence, but only
+    // distinct reporters contribute to automatic escalation.
+    const activeReporterIds = await Report.distinct('reporter', {
       reported: reportedId,
       status: { $ne: 'dismissed' },
     });
+    const activeReportCount = activeReporterIds.length;
 
-    // Escalate only. Never auto-clear a restriction an admin applied.
-    if (activeReportCount >= 5) {
-      reported.suspended = true;
-      reported.suspendedAt = reported.suspendedAt || new Date();
-      reported.suspendedReason = reported.suspendedReason || 'Multiple community reports';
+    // Reports can flag an account for review, but suspension requires an admin.
+    if (activeReportCount >= reviewThreshold) {
       reported.shadowbannedAt = reported.shadowbannedAt || new Date();
-      reported.contentFrozen = false;
-      await reported.save();
-    } else if (activeReportCount >= 3) {
-      reported.shadowbannedAt = reported.shadowbannedAt || new Date();
+      reported.shadowbanScore = Math.max(reported.shadowbanScore || 0, 5);
       reported.contentFrozen = true;
       await reported.save();
     }
-    // activeReportCount < 3 → leave the account as an admin last set it.
 
     res.status(201).json({ message: 'Report submitted', reportId: report._id });
   } catch (error) {
-    if (error.code === 11000) {
-      return res.status(409).json({ message: 'Already reported this user' });
-    }
     console.error(error);
     res.status(500).json({ message: 'Server error submitting report' });
   }
@@ -37648,7 +39670,7 @@ router.post('/:userId', protect, async (req, res) => {
 // @route   POST /api/block/:userId
 // @desc    Block a user
 // @access  Private
-router.post('/block/:userId', protect, async (req, res) => {
+router.post('/block/:userId', protect, destructiveActionLimiter, async (req, res) => {
   const blockedId = req.params.userId;
 
   if (blockedId === req.user._id.toString()) {
@@ -37668,34 +39690,40 @@ router.post('/block/:userId', protect, async (req, res) => {
     // Deactivate any existing alignment
     const match = await Alignment.findOne({
       users: { $all: [req.user._id, blockedId] },
-      isActive: true,
     });
     if (match) {
-      match.isActive = false;
-      await match.save();
+      if (match.isActive) {
+        match.isActive = false;
+        await match.save();
+      }
     }
 
-    // Create permanent exclusion so they never appear in each other's Discover deck
-    await Interaction.create([
-      { actorId: req.user._id, targetId: blockedId, actionType: 'archive', cooldownExpiresAt: null, origin: 'block' },
-      { actorId: blockedId, targetId: req.user._id, actionType: 'archive', cooldownExpiresAt: null, origin: 'block' },
+    // Upsert both exclusions. Preserve an existing unmatch/pass archive's origin
+    // so unblocking cannot accidentally remove its permanent Discover exclusion.
+    await Promise.all([
+      Interaction.updateOne(
+        { actorId: req.user._id, targetId: blockedId, actionType: 'archive' },
+        { $setOnInsert: { cooldownExpiresAt: null, origin: 'block' } },
+        { upsert: true }
+      ),
+      Interaction.updateOne(
+        { actorId: blockedId, targetId: req.user._id, actionType: 'archive' },
+        { $setOnInsert: { cooldownExpiresAt: null, origin: 'block' } },
+        { upsert: true }
+      ),
     ]);
 
     const io = req.app.get('io');
     if (io) {
-      io.to(blockedId).emit('unmatch-notification', { alignmentId: match?._id });
+      if (match) {
+        const alignmentId = match._id.toString();
+        io.in(alignmentId).socketsLeave(alignmentId);
+        io.to(req.user._id.toString()).emit('unmatch-notification', { alignmentId });
+        io.to(blockedId).emit('unmatch-notification', { alignmentId });
+      } else {
+        io.to(blockedId).emit('unmatch-notification', { alignmentId: null });
+      }
     }
-
-    // In-app (socket 'unmatch-notification') + push already notify the blocked user.
-    // No Notification DB row is created — the model is purpose-built for letter interactions.
-    // Deliberately does NOT name who blocked them. A named notification confirms
-    // both that a block happened and that the blocker is still active on the
-    // platform. A generic message keeps the block indistinguishable from an
-    // ordinary unmatch.
-    addToQueue(() => sendPushNotification(blockedId, {
-      title: 'Matchalize',
-      body: 'This conversation is no longer available.',
-    }));
 
     res.status(200).json({ message: 'User blocked' });
   } catch (error) {
@@ -37784,17 +39812,26 @@ import { protect } from '../middleware/auth.js';
 import { deleteCloudinaryFile } from '../config/cloudinary.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const getLocalUploadBaseUrl = () => {
+  const configuredUrl = process.env.API_URL ||
+    (process.env.RENDER_EXTERNAL_HOSTNAME && `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`) ||
+    (process.env.NODE_ENV !== 'production' && `http://localhost:${process.env.PORT || 5005}`);
+  if (!configuredUrl) {
+    throw new Error('API_URL must be configured to return local upload URLs in production');
+  }
+  return configuredUrl.replace(/\/+$/, '');
+};
 const isCloudinaryConfigured = process.env.CLOUDINARY_CLOUD_NAME &&
   process.env.CLOUDINARY_API_KEY &&
   process.env.CLOUDINARY_API_SECRET;
 
-const ALLOWED_MIME = /^image\/(jpeg|png|webp)$|^audio\/(mpeg|mp4|webm|ogg|x-m4a)$/;
-const ALLOWED_EXT = /\.(jpe?g|png|webp|mp3|m4a|mp4|webm|ogg)$/i;
+const ALLOWED_MIME = /^image\/(jpeg|png|webp)$/;
+const ALLOWED_EXT = /\.(jpe?g|png|webp)$/i;
 const fileFilter = (req, file, cb) => {
   if (ALLOWED_EXT.test(file.originalname) && ALLOWED_MIME.test(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error('Unsupported file type. Only jpg/png/webp images and mp3/m4a/webm/ogg audio are allowed.'), false);
+    cb(new Error('Unsupported file type. Only jpg/png/webp images are allowed.'), false);
   }
 };
 
@@ -37812,21 +39849,14 @@ if (isCloudinaryConfigured) {
 
   const storage = new CloudinaryStorage({
     cloudinary,
-    params: async (req, file) => {
-      const isAudio = file.mimetype.startsWith('audio/');
+    params: async (req) => {
       // Per-user folder: the URL is the only durable proof of who owns a file
       // (one Cloudinary account holds everyone's media), so the uploader's id
       // must be part of the path. See utils/media.js.
       return {
-        folder: isAudio
-          ? `matchalize/audio/${req.user._id}`
-          : `matchalize/photos/${req.user._id}`,
-        allowed_formats: isAudio
-          ? ['mp3', 'mp4', 'm4a', 'webm', 'ogg']
-          : ['jpg', 'jpeg', 'png', 'webp'],
-        ...(isAudio ? {} : {
-          transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }],
-        }),
+        folder: `matchalize/photos/${req.user._id}`,
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+        transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }],
       };
     },
   });
@@ -37854,7 +39884,7 @@ router.post('/', protect, upload.single('photo'), async (req, res) => {
 
     const url = isCloudinaryConfigured
       ? req.file.path
-      : `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+      : `${getLocalUploadBaseUrl()}/uploads/${req.file.filename}`;
     res.json({ url });
   } catch (error) {
     console.error('Upload error:', error);
@@ -37954,6 +39984,7 @@ export default router;
 import express from 'express';
 import { body } from '../middleware/validate.js';
 import User from '../models/User.js';
+import { preserveShadowban } from '../utils/moderationLedger.js';
 import DiscoverSession from '../models/DiscoverSession.js';
 import Alignment from '../models/Alignment.js';
 import Block from '../models/Block.js';
@@ -38057,6 +40088,7 @@ const normaliseIntent = (raw) => {
  */
 const FIELD_LIMITS = {
   name: 60,
+  gender: 50,
   pronouns: 30,
   year: 40,
   bio: 160,
@@ -38065,6 +40097,7 @@ const FIELD_LIMITS = {
 /** Human-readable field labels for the error message. */
 const FIELD_LABELS = {
   name: 'Name',
+  gender: 'Gender',
   pronouns: 'Pronouns',
   year: 'Year',
   bio: 'Bio',
@@ -38324,13 +40357,18 @@ await user.save();
       // 🧹 VAPORIZE ORPHANED PHOTOS: Delete any old photo that isn't in the new profile
       const newPhotos = collectUserPhotos(user);
       oldPhotos.forEach(url => {
-        if (!newPhotos.has(url)) deleteCloudinaryFile(url, req.user._id);
+        if (!newPhotos.has(url) && isOwnedMediaUrl(url, req.user._id)) {
+          deleteCloudinaryFile(url, req.user._id);
+        }
       });
 
       // ANALYTICS: Track completion
       await Analytics.create({ user: req.user._id, event: 'ONBOARDING_COMPLETE', step: 8 });
 
-      res.status(200).json(user);
+      res.status(200).json({
+        ...user.toJSON(),
+        isUnderReview: Boolean(user.shadowbannedAt || user.contentFrozen),
+      });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: 'Server error during onboarding setup' });
@@ -38375,7 +40413,10 @@ router.get('/profile', protect, async (req, res) => {
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
-    res.status(200).json(user);
+    res.status(200).json({
+      ...user.toJSON(),
+      isUnderReview: Boolean(user.shadowbannedAt || user.contentFrozen),
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -38500,7 +40541,9 @@ router.put('/profile', protect, async (req, res) => {
     // 🧹 VAPORIZE ORPHANED PHOTOS: Clean up removed/replaced images
     const newPhotos = collectUserPhotos(user);
     oldPhotos.forEach(url => {
-      if (!newPhotos.has(url)) deleteCloudinaryFile(url, req.user._id);
+      if (!newPhotos.has(url) && isOwnedMediaUrl(url, req.user._id)) {
+        deleteCloudinaryFile(url, req.user._id);
+      }
     });
 
     res.status(200).json(user);
@@ -38847,12 +40890,16 @@ router.delete('/account', protect, async (req, res) => {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
+    await preserveShadowban(user);
+
     // 🧹 IMMEDIATE WIPE: Public profile media from Cloudinary
     // (Profile photos, bio photo, prompt attachments — serve no purpose after deletion)
-    collectUserPhotos(user).forEach(url => deleteCloudinaryFile(url, req.user._id));
+    collectUserPhotos(user).forEach((url) => {
+      if (isOwnedMediaUrl(url, userId)) deleteCloudinaryFile(url, userId);
+    });
 
     // ⚠️ SAFETY RETENTION: Chat media is NOT wiped here.
-    // Messages (including photos/voice notes) are retained for 30-day safety window
+    // Messages (including photos) are retained for 30-day safety window
     // to allow Trust & Safety investigations if the user is reported after deletion.
     // A background cleanup job handles final Cloudinary purge after retention expires.
 
@@ -40685,6 +42732,95 @@ export async function seedSociety() {
 }
 ```
 
+### ./server/tests/unit/email.test.js
+
+```
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { sendOTP } from '../../utils/email.js';
+
+test('OTP delivery fails explicitly in production without Resend configuration', async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousApiKey = process.env.RESEND_API_KEY;
+  process.env.NODE_ENV = 'production';
+  delete process.env.RESEND_API_KEY;
+
+  try {
+    await assert.rejects(
+      sendOTP('student@example.edu', '123456'),
+      /RESEND_API_KEY is required/
+    );
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousApiKey === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = previousApiKey;
+  }
+});
+
+test('OTP delivery keeps the local testing path when Resend is not configured', async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousApiKey = process.env.RESEND_API_KEY;
+  const previousLog = console.log;
+  const logged = [];
+  process.env.NODE_ENV = 'test';
+  delete process.env.RESEND_API_KEY;
+  console.log = (...args) => logged.push(args.join(' '));
+
+  try {
+    assert.equal(await sendOTP('student@example.edu', '123456'), true);
+    assert.ok(logged.some((line) => line.includes('123456')));
+  } finally {
+    console.log = previousLog;
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousApiKey === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = previousApiKey;
+  }
+});
+
+```
+
+### ./server/tests/unit/moderationLedger.test.js
+
+```
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { fingerprintModerationEmail } from '../../utils/moderationLedger.js';
+
+test('moderation email fingerprints normalize email and never contain the email', () => {
+  const previousSecret = process.env.JWT_SECRET;
+  process.env.JWT_SECRET = 'unit-test-secret';
+
+  try {
+    const first = fingerprintModerationEmail(' Student@Example.edu ');
+    const normalized = fingerprintModerationEmail('student@example.edu');
+
+    assert.equal(first, normalized);
+    assert.match(first, /^[a-f0-9]{64}$/);
+    assert.equal(first.includes('student'), false);
+  } finally {
+    if (previousSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = previousSecret;
+  }
+});
+
+test('moderation email fingerprinting fails explicitly without the server secret', () => {
+  const previousSecret = process.env.JWT_SECRET;
+  delete process.env.JWT_SECRET;
+
+  try {
+    assert.throws(
+      () => fingerprintModerationEmail('student@example.edu'),
+      /JWT_SECRET is required/
+    );
+  } finally {
+    if (previousSecret !== undefined) process.env.JWT_SECRET = previousSecret;
+  }
+});
+
+```
+
 ### ./server/tests/unit/partnerView.test.js
 
 ```
@@ -40957,6 +43093,131 @@ test('source alone never authorises anything', () => {
       `source:'${source}' with no grants must not grant access`,
     );
   }
+});
+
+```
+
+### ./server/tests/unit/profileStringLimits.test.js
+
+```
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import User from '../../models/User.js';
+
+test('profile string fields reject values longer than 50 characters', () => {
+  const user = new User({
+    email: 'limits@example.edu',
+    gender: 'x'.repeat(51),
+    intent: ['x'.repeat(51)],
+    interestedIn: ['Female'],
+    interests: ['x'.repeat(51)],
+  });
+
+  const error = user.validateSync();
+  assert.ok(error);
+  for (const field of ['gender', 'intent.0', 'interests.0']) {
+    assert.ok(error.errors[field], `expected ${field} to enforce its max length`);
+  }
+});
+
+test('profile string fields allow values at the 50-character limit', () => {
+  const user = new User({
+    email: 'limits@example.edu',
+    gender: 'x'.repeat(50),
+    intent: ['x'.repeat(50)],
+    interestedIn: ['Female'],
+    interests: ['x'.repeat(50)],
+  });
+
+  assert.equal(user.validateSync(), undefined);
+});
+
+test('interestedIn only accepts supported gender preferences', () => {
+  const invalidUser = new User({
+    email: 'invalid-preference@example.edu',
+    interestedIn: ['Everyone', 'Unlisted value'],
+  });
+
+  assert.ok(invalidUser.validateSync()?.errors['interestedIn.1']);
+
+  const validUser = new User({
+    email: 'valid-preference@example.edu',
+    interestedIn: ['Female', 'Non-binary', 'Everyone'],
+  });
+
+  assert.equal(validUser.validateSync(), undefined);
+});
+
+```
+
+### ./server/tests/unit/reportAnalyticsIndexes.test.js
+
+```
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import Report from '../../models/Report.js';
+import Analytics from '../../models/Analytics.js';
+
+test('reporter/reported index allows multiple reports from the same pair', () => {
+  const pairIndex = Report.schema.indexes().find(([keys]) =>
+    keys.reporter === 1 && keys.reported === 1
+  );
+
+  assert.ok(pairIndex);
+  assert.notEqual(pairIndex[1]?.unique, true);
+});
+
+test('analytics expires after 90 days and indexes user/event queries', () => {
+  const indexes = Analytics.schema.indexes();
+  const ttlIndex = indexes.find(([keys]) => keys.timestamp === 1);
+  const userEventIndex = indexes.find(([keys]) => keys.user === 1 && keys.event === 1);
+
+  assert.equal(ttlIndex?.[1]?.expireAfterSeconds, 90 * 24 * 60 * 60);
+  assert.ok(userEventIndex);
+});
+
+```
+
+### ./server/tests/unit/sanitizeMongoInput.test.js
+
+```
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import sanitizeMongoInput, { sanitizeObject } from '../../middleware/sanitizeMongoInput.js';
+
+test('sanitizeObject removes Mongo operator and dotted keys recursively', () => {
+  const input = {
+    safe: 'value',
+    '$where': 'malicious',
+    nested: {
+      'profile.name': 'malicious',
+      keep: [{ '$gt': 1, score: 5 }],
+    },
+  };
+
+  assert.deepEqual(sanitizeObject(input), {
+    safe: 'value',
+    nested: {
+      keep: [{ score: 5 }],
+    },
+  });
+});
+
+test('middleware replaces query with a sanitized own property for Express 5', () => {
+  const req = {
+    body: { '$ne': null, name: 'safe' },
+    query: { 'filter.$gt': 0, search: 'safe' },
+  };
+  let continued = false;
+
+  sanitizeMongoInput(req, {}, () => {
+    continued = true;
+  });
+
+  assert.deepEqual(req.body, { name: 'safe' });
+  assert.deepEqual(req.query, { search: 'safe' });
+  assert.equal(Object.hasOwn(req, 'query'), true);
+  assert.equal(continued, true);
 });
 
 ```
@@ -42654,7 +44915,7 @@ Tier 1 — high
 - 22. Service worker caches /uploads and 13.5MB of media forever, cache-first, no quota (sw.js:60).
 - 23. Queue is unbounded with no timeout, no retry, no drain (queue.js) — 20 stuck push calls silently stop all processing forever.
 Tier 2 — worth fixing, lower urgency
-Reaction read-modify-write loses reactions (messages.js:243); negative page → 500 (notifications.js:85, alignments.js:18); total/hasMore computed before a post-pagination filter (alignments.js:21); /pass/:id overwrites permanent unmatch archives (discover.js:355); unblock doesn't restore discoverability (report.js:161); Accept resurrects blocked alignments (notifications.js:107); contentFrozen = false at ≥5 reports reduces restrictions (report.js:67); admin shadowbanThreshold setting is stored but never read; schema maxlength violations return 500 (users.js:122); interestedIn unvalidated against GENDERS → permanently empty deck; notification pagination caps at 20 with no load-more; Profile.jsx:783 bricks on a failed fetch; stale-closure lost update on profile chips; MessageBubble long-press fires on plain tap; SearchOverlay regex crash on (; socket.off('online-status') with no handler wipes all listeners; ArchivalToast cancels its own dismiss timer; pendingMsgIdRef/discoverStore staleness; QA harness spreads all prod secrets and drops collections with no test-DB assertion; migrate-alignment.mjs has no dry-run.
+Reaction read-modify-write loses reactions (messages.js:243); negative page → 500 (notifications.js:85, alignments.js:18); total/hasMore computed before a post-pagination filter (alignments.js:21); /pass/:id overwrites permanent unmatch archives (discover.js:355); unblock doesn't restore discoverability (report.js:161); Accept resurrects blocked alignments (notifications.js:107); contentFrozen = false at ≥5 reports reduces restrictions (report.js:67); reportReviewThreshold now controls distinct-reporter review flags while suspensions remain admin-confirmed; schema maxlength violations return 500 (users.js:122); interestedIn unvalidated against GENDERS → permanently empty deck; notification pagination caps at 20 with no load-more; Profile.jsx:783 bricks on a failed fetch; stale-closure lost update on profile chips; MessageBubble long-press fires on plain tap; SearchOverlay regex crash on (; socket.off('online-status') with no handler wipes all listeners; ArchivalToast cancels its own dismiss timer; pendingMsgIdRef/discoverStore staleness; QA harness spreads all prod secrets and drops collections with no test-DB assertion; migrate-alignment.mjs has no dry-run.
 What I'd fix first
 Tier 0 in this order — items 1, 5, and 2 are each a one-to-few-line change that unblocks a large blast radius. Item 1 first, since it also determines whether the upload and push pipelines work at all.
 Two questions before I proceed: do you want me to start applying fixes, and if so, in Tier 0 →1 → 2 batches for review between each? Also worth confirming whether server/.env on this machine is the production config, since that changes whether items 12 and 15 are live exposures or latent ones.
@@ -42805,32 +45066,6 @@ AuthContext's `logout()` (clear + disconnect + **login-side `socket.connect()` r
 Two words (`async`, and one event target) stand between this build and everything working. 🚀
 ````
 
-### ./solved.md
-
-```
-Here's the full picture 📋
-
-## ✅ SOLVED — 5 fixes, all verified with proof
-
-| # | Fix | Proof it works |
-|---|-----|----------------|
-| 1 | **Settings loading** — app read its config file too late before anything ran | Real Cloudinary URLs now come back from uploads |
-| 2 | **Photo upload blocker** — removed the paid-plan feature (`aws_rek`) that was rejecting every upload | Test upload → `res.cloudinary.com/...` ✅ |
-| 3 | **Freeze attack** — one crafted request could lock up the whole server forever | multer upgraded 1.4.5 → 2.4.0, audit warnings down |
-| 4 | **Block lookup speed** — "who blocked me" used to read the entire blocks table | New index confirmed **live in the database** |
-| 5 | **Login code scrambling** — 6-digit codes sat readable in the DB | DB row now shows only a fingerprint; mixed-case login test passed |
-
-## 🔄 IN FLIGHT — patches written, not yet applied
-
-| # | Fix | Waiting on |
-|---|-----|-----------|
-| **#5** | **Admin notes leak** — private staff notes sent to every user's browser | Your AI's lone-`+` projection test (report.js) |
-| **#6** | **Environment posture** — server refuses to boot without a valid `NODE_ENV` | Apply + the 3 side steps (`.env`, `.env.test`, Render) |
-| **#7** | **Rate-limit drift** — honest limit (500/5min), body size 10MB → 1MB | Apply + the 2 quick verify tests |
-
-
-```
-
 ### ./regenerate_dumps.py
 
 ```
@@ -42916,7 +45151,7 @@ SKIP_DIRS = {
 }
 # Paths (relative fragments) excluded from the walk.
 SKIP_PATH_FRAGMENTS = ("tests/qa/videos", "tests/qa/media", "tests/qa/report")
-SKIP_NAMES = {".DS_Store", "package-lock.json", ".env", ".env.local"}
+SKIP_NAMES = {".DS_Store", "package-lock.json", ".env", ".env.local", ".env.test"}
 
 # Text types worth inlining verbatim.
 SOURCE_EXTS = {

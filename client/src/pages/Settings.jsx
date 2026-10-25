@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
+import DesktopPanelBackButton from '../components/DesktopPanelBackButton';
 import { api } from '../utils/api';
 import { useAuth } from '../utils/AuthContext';
 import { useAppConfig } from '../utils/AppConfigContext';
@@ -9,6 +10,7 @@ import { toast } from '../utils/toast';
 import { getThemePreference, setThemePreference, getDarkMood, setDarkMood } from '../utils/theme';
 import { readLocationOnce, LOCATION_UNAVAILABLE } from '../utils/geolocation';
 import { resetDiscoverStore } from '../utils/discoverStore';
+import { LOCATION_PREFERENCE_UPDATED_EVENT } from '../utils/locationSync';
 import neu from '../styles/neu';
 
 const FALLBACK_IMG = 'https://placehold.co/600x800/fff3dc/191919?text=%C2%B7';
@@ -72,7 +74,13 @@ const SectionHead = ({ mark = C.yellow, children }) => (
   </div>
 );
 
-const Settings = ({ onSignOut, onClose }) => {
+const Settings = ({
+  onSignOut,
+  onClose,
+  desktopPanel = false,
+  panelWidth = '40vw',
+  panelClassName,
+}) => {
   const [themeMode, setThemeMode] = useState(() => getThemePreference() || 'light');
   const [blockedOpen, setBlockedOpen] = useState(false);
 
@@ -124,7 +132,7 @@ const Settings = ({ onSignOut, onClose }) => {
      move the preference, or the control would claim something that did not
      happen. */
   const chooseNearMe = async () => {
-    if (locBusy || distancePref === 'near') return;
+    if (locBusy) return;
     setLocBusy(true);
     const res = await readLocationOnce();
     if (!res.ok) {
@@ -142,6 +150,9 @@ const Settings = ({ onSignOut, onClose }) => {
       if (saved?.moved) resetDiscoverStore();
       setDistancePref('near');
       setLocDaysAgo(0);
+      window.dispatchEvent(new CustomEvent(LOCATION_PREFERENCE_UPDATED_EVENT, {
+        detail: { moved: !!saved?.moved },
+      }));
       toast.success('Updating your feed for your location.');
     } catch (err) {
       if (!err?.toasted) toast.error('Could not save your location. Try again.');
@@ -168,6 +179,9 @@ const Settings = ({ onSignOut, onClose }) => {
       if (saved?.moved) resetDiscoverStore();
       setDistancePref('campus');
       setLocDaysAgo(null);
+      window.dispatchEvent(new CustomEvent(LOCATION_PREFERENCE_UPDATED_EVENT, {
+        detail: { moved: !!saved?.moved },
+      }));
       toast.success('Updating your feed for your campus.');
     } catch (err) {
       if (!err?.toasted) toast.error('Could not update your location preference. Try again.');
@@ -284,28 +298,51 @@ const Settings = ({ onSignOut, onClose }) => {
   };
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 600,
+    <motion.div
+      initial={desktopPanel ? { x: '-100%' } : false}
+      animate={{ x: 0 }}
+      exit={desktopPanel ? { x: '-100%' } : undefined}
+      transition={desktopPanel ? { type: 'spring', damping: 30, stiffness: 280 } : undefined}
+      style={{
+      position: 'fixed',
+      ...(desktopPanel
+        ? { top: 0, bottom: 0, left: 72, width: panelWidth, maxWidth: 'calc(100vw - 72px)', boxSizing: 'border-box', zIndex: 400, borderRight: `2px solid ${C.ink}`, boxShadow: '10px 0 28px rgba(0,0,0,.2)' }
+        : { inset: 0, zIndex: 600 }),
       backgroundColor: C.paper,
       display: 'flex', flexDirection: 'column',
-    }}>
+    }}
+    className={panelClassName}
+    aria-label={desktopPanel ? 'Settings' : undefined}
+    >
       <style>{SETTINGS_CSS}</style>
 
       {/* Own header row. zIndex 600 covers the floating app header (z 500), so
           nothing shows through behind it. */}
       <div style={{
         flexShrink: 0,
-        paddingTop: 'max(14px, env(safe-area-inset-top, 0px))',
-        paddingLeft: 20, paddingRight: 20, paddingBottom: 14,
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        paddingTop: desktopPanel ? 0 : 'max(14px, env(safe-area-inset-top, 0px))',
+        paddingLeft: 20, paddingRight: 20, paddingBottom: desktopPanel ? 0 : 14,
+        minHeight: desktopPanel ? 64 : undefined,
+        boxSizing: 'border-box',
+        position: 'relative',
+        display: 'flex', alignItems: 'center', justifyContent: desktopPanel ? 'center' : 'space-between',
         gap: 12,
         borderBottom: `2px solid ${C.ink}`,
         backgroundColor: C.paper,
       }}>
-        <h2 style={{ fontFamily: F.heavy, fontSize: 22, fontWeight: 400, margin: 0, color: C.ink, letterSpacing: '-.01em', textTransform: 'uppercase' }}>Settings</h2>
-        <button onClick={onClose} aria-label="Close settings" className="st-close">
-          <X size={18} strokeWidth={3} />
-        </button>
+        <h2 style={{
+          position: desktopPanel ? 'absolute' : undefined,
+          left: desktopPanel ? '50%' : undefined,
+          transform: desktopPanel ? 'translateX(-50%)' : undefined,
+          fontFamily: F.heavy, fontSize: 22, fontWeight: 400, margin: 0, color: C.ink, letterSpacing: '-.01em', textTransform: 'uppercase',
+        }}>Settings</h2>
+        {desktopPanel ? (
+          <DesktopPanelBackButton panelTitle="Settings" onClick={onClose} />
+        ) : (
+          <button onClick={onClose} aria-label="Close settings" className="st-close">
+            <X size={18} strokeWidth={3} />
+          </button>
+        )}
       </div>
 
       <div style={{
@@ -379,7 +416,9 @@ const Settings = ({ onSignOut, onClose }) => {
                 : distancePref === 'near'
                   ? locFresh
                     ? 'People closest to you first, based on where you actually are.'
-                    : `Your location is ${locDaysAgo} days old, so it isn't being used — tap again to refresh it.`
+                    : locDaysAgo !== null
+                      ? `Your saved location is ${locDaysAgo} days old and isn't being used. Refresh it here.`
+                      : "Your current location isn't available. Share it again here to refresh it."
                   : 'Using your college location, so your feed is ranked around your campus rather than around you.'}
             </p>
 
@@ -389,7 +428,7 @@ const Settings = ({ onSignOut, onClose }) => {
                   had no way to tell that one option reveals where they live and
                   the other does not. Now it is a privacy choice on its face. */}
               {[
-                { key: 'near', label: 'Use my precise location' },
+                { key: 'near', label: distancePref === 'near' ? 'Refresh current location' : 'Use my precise location' },
                 { key: 'campus', label: 'Use my college location instead' },
               ].map((opt) => {
                 const on = distancePref === opt.key;
@@ -398,7 +437,11 @@ const Settings = ({ onSignOut, onClose }) => {
                     key={opt.key}
                     type="button"
                     aria-pressed={on}
-                    onClick={() => { triggerHaptic('light'); opt.key === 'near' ? chooseNearMe() : chooseCampus(); }}
+                    onClick={() => {
+                      triggerHaptic('light');
+                      if (opt.key === 'near') void chooseNearMe();
+                      else void chooseCampus();
+                    }}
                     style={{
                       padding: '12px 16px', minHeight: 46, borderRadius: 12,
                       border: `2px solid ${C.ink}`, cursor: locBusy ? 'wait' : 'pointer',
@@ -628,7 +671,7 @@ const Settings = ({ onSignOut, onClose }) => {
           />
         )}
       </AnimatePresence>
-    </div>
+    </motion.div>
   );
 };
 

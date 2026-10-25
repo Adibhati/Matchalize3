@@ -1,7 +1,7 @@
 # Chunk 18 — Server Core
 
-> Matchalize · `server-core` · files 18 of 27 chunks · 19 file(s) · 96 KB · ~28,140 tokens
-> Generated 2026-10-17 21:10.
+> Matchalize · `server-core` · files 18 of 28 chunks · 20 file(s) · 96 KB · ~28,101 tokens
+> Generated 2026-10-18 20:29.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -14,16 +14,17 @@
 > - `./server/middleware/auth.js`
 > - `./server/middleware/blockFilter.js`
 > - `./server/middleware/rateLimiters.js`
+> - `./server/middleware/sanitizeMongoInput.js`
 > - `./server/middleware/validate.js`
 > - `./server/models/Alignment.js`
 > - `./server/models/Analytics.js`
 > - `./server/models/Block.js`
 > - `./server/models/College.js`
 > - `./server/models/CollegeRequest.js`
+> - `./server/models/DailyAlignQuota.js`
 > - `./server/models/DeckImpression.js`
 > - `./server/models/DiscoverSession.js`
 > - `./server/models/Interaction.js`
-> - `./server/models/Message.js`
 
 ---
 ### ./server/config/appData.js
@@ -543,9 +544,19 @@ export const ROULETTE_SETTINGS = {
   ENABLED: bool('ROULETTE_ENABLED', false),
 
   /* ── WHO MAY JOIN A QUEUE ──────────────────────────────────────────────────
-   * The allow-list is read fresh on every call rather than cached at module
-   * load, the same way campusGate.js reads ALLOWED_COLLEGES per request: a test
-   * that mutates process.env must not be defeated by a stale snapshot.
+   * ⚠️ CORRECTED 2026-10-17. This comment previously claimed the allow-list was
+   * "read fresh on every call … so a test that mutates process.env must not be
+   * defeated by a stale snapshot". That was not true and never had been:
+   * `accounts()` runs once at module load (see `const TEST_ACCOUNTS` above), so
+   * the list is a startup snapshot and mutating `process.env
+   * .ROULETTE_TEST_ACCOUNTS` at runtime changes nothing.
+   *
+   * Fixing it properly — re-parsing per call — would move an env-var read into
+   * the hot path of every socket event for no benefit: `ENABLED` and
+   * `IS_TEST_MODE` are baked in at load either way, so the list would only be
+   * half-fresh, which is WORSE than honestly snapshot-once. Restarting the
+   * process is the correct and sufficient way to change the allow-list, and it
+   * means turning Roulette on is always a deliberate act.
    *
    * Empty list = nobody. See the note on `accounts()` above. */
   TEST_ACCOUNTS,
@@ -601,6 +612,37 @@ export const ROULETTE_SETTINGS = {
    * authenticated client can generate them in a loop. */
   TURN_CREDENTIAL_TTL_SECONDS: num('ROULETTE_TURN_TTL_SEC', 3600),
   ISSUANCE_PER_HOUR: num('ROULETTE_ICE_PER_HOUR', 10),
+
+  /* ── SIGNALING SHAPE LIMITS (Stage 3) ─────────────────────────────────────
+   * Stage 3 is the first point where untrusted clients send us large strings.
+   * Every limiter in `middleware/rateLimiters.js` is `express-rate-limit`, which
+   * needs a `req` — so all six of them are invisible to socket events. These
+   * four numbers are what actually bound signaling traffic.
+   *
+   * Sized against real values, not guesses: one video + one audio offer is
+   * roughly 2-4 KB, and a healthy call gathers well under 40 ICE candidates
+   * across its lifetime. Every ceiling below is therefore generous by an order
+   * of magnitude — they exist to stop the pathological case, not to trim the
+   * normal one. A limit tight enough to threaten a real call would be a bug. */
+
+  /* Ceiling on one SDP offer/answer, in characters (≈3× UTF-8 bytes, so this is
+   * a loose upper bound by design). ~60 KB against a real ~4 KB payload. */
+  MAX_SDP_BYTES: num('ROULETTE_MAX_SDP_BYTES', 60_000),
+
+  /* Total ICE candidates relayed for one call, across its whole lifetime.
+   * A trickle that stays under the per-second rate limit still accumulates, so
+   * the rate limiter alone is not a total bound. */
+  MAX_CANDIDATES_PER_SESSION: num('ROULETTE_MAX_CANDIDATES', 120),
+
+  /* Sustained signaling events/second per user, with a burst allowance.
+   * Keyed by USER, never by IP: an entire college sits behind one NAT address,
+   * so an IP limit would throttle a whole campus mid-conversation. This is the
+   * same reasoning as `verifyOtpLimiter` in `middleware/rateLimiters.js`.
+   *
+   * The burst is generous because ICE legitimately arrives in a dozen-at-once
+   * burst right after `setRemoteDescription`. */
+  SIGNAL_RATE_PER_SECOND: num('ROULETTE_SIGNAL_RATE', 40),
+  SIGNAL_BURST: num('ROULETTE_SIGNAL_BURST', 150),
 };
 
 /**
@@ -665,21 +707,7 @@ import mongoose from 'mongoose';
 import cookieParser from 'cookie-parser';
 import { protect } from './middleware/auth.js';
 import rateLimit from 'express-rate-limit';
-// ⚠️ EXPRESS 5 UPGRADE — two landmines in this file:
-//
-// 1. express-mongo-sanitize is Express-4-only. Installed here is ^2.2.0, whose
-//    middleware reaches into connect's app/router internals that Express 5
-//    removed. It will throw at boot, not degrade. Replace it with either
-//    `express-mongo-sanitize` v3+ or a hand-rolled req.query/body scrubber
-//    before bumping the major.
-// 2. app.get('*') below is not a valid path pattern under Express 5 —
-//    path-to-regexp v8 requires a named wildcard, so bare '*' throws
-//    `TypeError: Missing parameter name` at startup. It must become '*splat'
-//    (or '{*splat}' to also match the root path).
-//
-// Nothing here is broken today: installed express is 4.22.x. Both are only
-// landmines for whoever runs `npm i express@5`.
-import mongoSanitize from 'express-mongo-sanitize';
+import sanitizeMongoInput from './middleware/sanitizeMongoInput.js';
 import { APP_CONSTANTS } from './config/appData.js';
 import { describeRouletteStatus } from './config/roulette.js';
 import * as Sentry from '@sentry/node';
@@ -740,7 +768,6 @@ if (!VALID_ENVS.includes(NODE_ENV)) {
   console.error('   deployed  → set NODE_ENV=production in the server environment');
   process.exit(1);
 }
-const IS_DEV = NODE_ENV === 'development';
 const IS_PROD = NODE_ENV === 'production';
 
 // Warn about missing optional services
@@ -861,7 +888,7 @@ const isPrivateOrigin = (origin) => {
 
 const corsOriginFunction = (origin, callback) => {
   // Allow requests with no origin (mobile apps, curl, or local dev)
-  if (!origin || IS_DEV) return callback(null, true);
+  if (!origin) return callback(null, true);
 
   if (corsOrigins.has(origin)) {
     return callback(null, true);
@@ -997,6 +1024,17 @@ app.use((req, res, next) => {
   next();
 });
 
+// Apply the global API limit before reading request bodies, so bursts of large
+// payloads are rejected without first parsing and allocating their contents.
+const limiter = rateLimit({
+  windowMs: APP_CONSTANTS.API_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000,
+  max: Number(process.env.API_GENERAL_MAX) || APP_CONSTANTS.API_RATE_LIMIT_MAX,
+  message: { message: 'Too many requests from this IP, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api/', limiter);
+
 // 🛡️ RAW BODY FOR THE CLOUDINARY SIGNATURE CHECK — must be registered BEFORE
 // express.json() below.
 //
@@ -1016,22 +1054,12 @@ app.use((req, res, next) => {
 // for the rest of the API.
 app.use('/api/upload/moderation-status', express.raw({ type: 'application/json', limit: '100kb' }));
 
-// JSON bodies only. Photos/voice notes go through the multipart /api/upload
+// JSON bodies only. Photos go through the multipart /api/upload
 // route, which multer handles with its own fileSize limit — so 1mb is plenty
 // for every text payload here (profiles, messages, prefs, onboarding answers).
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ limit: '1mb', extended: true }));
-app.use(mongoSanitize());
-
-// Rate Limiting — reads APP_CONSTANTS so the settings file and the limiter agree.
-const limiter = rateLimit({
-  windowMs: APP_CONSTANTS.API_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000,
-  max: Number(process.env.API_GENERAL_MAX) || APP_CONSTANTS.API_RATE_LIMIT_MAX,
-  message: { message: 'Too many requests from this IP, please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use('/api/', limiter);
+app.use(sanitizeMongoInput);
 
 // Mount API Routes
 app.use('/api/auth', authRoutes);
@@ -1083,12 +1111,9 @@ app.get('/', (req, res) => {
   res.json({ status: 'active', message: 'Matchalize API Server is running' });
 });
 
-// Serve client app for all non-API routes (SPA fallback)
-// ⚠️ EXPRESS 5: bare '*' is invalid under path-to-regexp v8 and throws
-// `Missing parameter name` at boot. Becomes app.get('*splat', ...) — or
-// '{*splat}' if the root path must match too. See the note at the
-// express-mongo-sanitize import above.
-app.get('*', (req, res, next) => {
+// Serve client app for all non-API routes (SPA fallback). A RegExp route works
+// across Express 4 and 5, avoiding path-to-regexp's incompatible wildcard syntax.
+app.get(/.*/, (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
   res.sendFile(path.join(clientDist, 'index.html'), (err) => {
     if (err) next();
@@ -1491,6 +1516,15 @@ export const messageLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+export const destructiveActionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  keyGenerator: (req) => req.user?._id?.toString() || req.ip,
+  message: { message: 'Too many destructive actions. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Limit discover actions (likes/passes) to 100 per 10 minutes per user
 export const discoverLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
@@ -1536,6 +1570,17 @@ export const otpEmailLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Add a per-source cap before the per-email cap so one client cannot consume
+// arbitrary OTP sends for many addresses. Keep this generous for shared campus
+// networks; the per-email limiter remains as a separate delivery-abuse guard.
+export const otpIpLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: Number(process.env.OTP_IP_LIMIT_MAX) || 20,
+  message: { message: 'Too many verification requests from this device. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 /**
  * 📨 COLLEGE REQUEST limiter — protects the public "add my college" form.
  *
@@ -1571,6 +1616,52 @@ export const reverifyLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+```
+
+### ./server/middleware/sanitizeMongoInput.js
+
+```
+const sanitizeObject = (value) => {
+  if (!value || typeof value !== 'object') return value;
+
+  const pending = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        if (item && typeof item === 'object') pending.push(item);
+      }
+      continue;
+    }
+
+    for (const key of Object.keys(current)) {
+      if (key.startsWith('$') || key.includes('.')) {
+        delete current[key];
+      } else if (current[key] && typeof current[key] === 'object') {
+        pending.push(current[key]);
+      }
+    }
+  }
+
+  return value;
+};
+
+const sanitizeMongoInput = (req, res, next) => {
+  req.body = sanitizeObject(req.body);
+  req.params = sanitizeObject(req.params);
+  req.headers = sanitizeObject(req.headers);
+  Object.defineProperty(req, 'query', {
+    configurable: true,
+    enumerable: true,
+    value: sanitizeObject(req.query),
+    writable: true,
+  });
+  next();
+};
+
+export { sanitizeObject };
+export default sanitizeMongoInput;
 
 ```
 
@@ -1883,25 +1974,8 @@ const analyticsSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Onboarding analytics are write-only — nothing in this codebase reads them
-// back, they're only inspected by hand in Atlas. So exactly one index, matching
-// the one query that actually runs: the deleteMany({ user }) in
-// routes/users.js that fires on every account deletion. Without it that is a
-// full collection scan on each account removal.
-//
-// Deliberately NOT added:
-//   - { event, createdAt } — for funnel reporting that does not exist.
-//   - a TTL on createdAt  — this would permanently delete onboarding history
-//     with no undo and no way to recover it. Retention is a product decision,
-//     not a performance one; make it deliberately, not as a side effect of
-//     adding indexes.
-//
-// Note: this schema carries two timestamps — the explicit `timestamp` field
-// above and the automatic `createdAt`/`updatedAt` from `timestamps: true`. They
-// differ by milliseconds. Left as-is because nothing reads either one today;
-// if funnel reporting ever gets built, pick one before trusting the numbers.
-
-analyticsSchema.index({ user: 1 });
+analyticsSchema.index({ timestamp: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
+analyticsSchema.index({ user: 1, event: 1 });
 
 export default mongoose.model('Analytics', analyticsSchema);
 ```
@@ -2096,6 +2170,40 @@ collegeRequestSchema.index({ status: 1, collegeName: 1 });
 collegeRequestSchema.index({ email: 1 }, { unique: true });
 
 export default mongoose.model('CollegeRequest', collegeRequestSchema);
+```
+
+### ./server/models/DailyAlignQuota.js
+
+```
+import mongoose from 'mongoose';
+
+const dailyAlignQuotaSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+  },
+  dayKey: {
+    type: String,
+    required: true,
+  },
+  count: {
+    type: Number,
+    required: true,
+    min: 0,
+  },
+  expiresAt: {
+    type: Date,
+    required: true,
+  },
+});
+
+dailyAlignQuotaSchema.index({ userId: 1, dayKey: 1 }, { unique: true });
+dailyAlignQuotaSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+const DailyAlignQuota = mongoose.model('DailyAlignQuota', dailyAlignQuotaSchema);
+export default DailyAlignQuota;
+
 ```
 
 ### ./server/models/DeckImpression.js
@@ -2485,116 +2593,6 @@ interactionSchema.index({ targetId: 1, actionType: 1 });
 
 const Interaction = mongoose.model('Interaction', interactionSchema);
 export default Interaction;
-
-```
-
-### ./server/models/Message.js
-
-```
-import mongoose from 'mongoose';
-
-const messageSchema = new mongoose.Schema(
-  {
-    alignmentId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Alignment',
-      required: true,
-    },
-    senderId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-    },
-    type: {
-      type: String,
-      enum: ['text', 'image', 'opening_letter', 'audio'],
-      default: 'text',
-    },
-    text: {
-      type: String,
-      trim: true,
-      default: '',
-    },
-    clientMsgId: {
-      type: String,
-      unique: true,
-      sparse: true,
-    },
-    // ⚠️ DEPRECATED — `image` is a legacy duplicate of `mediaUrl`. Every writer used
-    // to set both to the identical value, so ~half of each message's media bytes
-// were stored twice and nothing read the copy. Writers no longer set it
-    // (routes/messages.js, routes/discover.js, routes/notifications.js).
-    //
-    // It is KEPT in the schema on purpose: existing documents still carry a value
-    // here, and the delete route reads `message.mediaUrl || message.image` so
-    // old messages still get their Cloudinary asset destroyed. Dropping the
-    // field is a separate change, to be done only after confirming no legacy
-    // document has an empty mediaUrl.
-    image: {
-      type: String,
-      default: '',
-    },
-    // The single source of truth for message media. Photos and voice notes both
-    // live here; the client's type field decides which player to use.
-    mediaUrl: {
-      type: String,
-      default: '',
-    },
-    // ⚠️ DEPRECATED — `caption` is a dead field. No route ever wrote a value here
-    // and the client never read it; the caption under a photo is always rendered
-    // from `text`. Retained so existing documents still load. The search route's
-    // `caption` branch was removed too, since it could never match.
-    caption: {
-      type: String,
-      default: '',
-    },
-    deliveryStatus: {
-      type: String,
-      enum: ['pending', 'sent', 'read'],
-      default: 'sent',
-    },
-    replyTo: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Message',
-      default: null,
-    },
-    reactions: [
-      {
-        emoji: { type: String, required: true },
-        user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-      },
-    ],
-    deleted: {
-      type: Boolean,
-      default: false,
-    },
-    readAt: {
-      type: Date,
-      default: null,
-    },
-  },
-  {
-    timestamps: true,
-  }
-);
-
-messageSchema.index({ alignmentId: 1, createdAt: 1 });
-// 🚀 COLLISION-PROOF PAGINATION: Instant ObjectId-based cursor queries
-messageSchema.index({ alignmentId: 1, _id: -1 });
-
-// Speeds up moderation queries and global user cleanup operations
-messageSchema.index({ senderId: 1, createdAt: -1 });
-// 🔒 ONE opening letter per alignment, enforced at the DB level.
-// Partial filter → normal text/image/audio messages are NOT affected
-// (an alignment can still have thousands of those). This index is what makes
-// the upserts in discover.js + notifications.js truly race-safe.
-messageSchema.index(
-  { alignmentId: 1, type: 1 },
-  { unique: true, partialFilterExpression: { type: 'opening_letter' } }
-);
-
-const Message = mongoose.model('Message', messageSchema);
-export default Message;
 
 ```
 

@@ -1,5 +1,6 @@
 
 import React, { useEffect, useRef } from 'react';
+import { motion } from 'framer-motion';
 import { useChromeColor } from '../utils/chrome';
 
 const C = {
@@ -1832,23 +1833,27 @@ export default function Splash({ onEnter }) {
       >
         <header className="huh-top">
           <div className="huh-wrap huh-top-inner">
-            <a
+            <motion.a
               className="huh-logo"
               href="#huh-home"
               aria-label="huh? home"
+              layoutId="splash-auth-brand"
+              transition={{ layout: { duration: 0.5, ease: [0.22, 1, 0.36, 1] } }}
             >
               huh<b>?</b>
-            </a>
+            </motion.a>
 
             <span className="huh-spacer" />
 
-            <button
+            <motion.button
               className="huh-login"
               type="button"
               onClick={enter}
+              layoutId="splash-auth-search"
+              transition={{ layout: { duration: 0.55, ease: [0.22, 1, 0.36, 1] } }}
             >
               Log in <span aria-hidden="true">↗</span>
-            </button>
+            </motion.button>
           </div>
         </header>
 

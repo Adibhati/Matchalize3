@@ -1,7 +1,7 @@
 # Chunk 14 — Client Pages
 
-> Matchalize · `client-pages` · files 14 of 27 chunks · 2 file(s) · 54 KB · ~15,683 tokens
-> Generated 2026-10-17 21:10.
+> Matchalize · `client-pages` · files 14 of 28 chunks · 2 file(s) · 54 KB · ~15,759 tokens
+> Generated 2026-10-18 20:29.
 > Paste-safe: within the 100 KB / ~29,257 token target.
 >
 > Contains:
@@ -148,7 +148,6 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
   }, [myUser?._id]);
 
   const [showLearnMore, setShowLearnMore] = useState(false);
-  const shadowbanScore = myUser?.shadowbanScore || 0;
   const config = useAppConfig();
 
   const [rebuildOverlay, setRebuildOverlay] = useState(false);
@@ -367,12 +366,19 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
 
         if (!alive || !res.ok || !res.moved) return;
 
+        // The location endpoint invalidates the server's ranked session. Wait
+        // for any initial deck request using the old location to finish before
+        // fetching the replacement page.
+        if (deckFetchInFlight.current) await deckFetchInFlight.current;
+        if (!alive) return;
+
         resetDiscoverStore();
         setProfiles([]);
         setCurrentIndex(0);
         setHasMore(true);
         setDeckExhausted(false);
         servedRef.current = 0;
+        await fetchProfiles(false);
       } catch {
         // Location maintenance must not interrupt Discover.
       }
@@ -381,7 +387,7 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [fetchProfiles]);
 
   useEffect(() => watchGeolocationPermission((state) => {
     setLocationDenied(state === GEO_PERMISSION.DENIED);
@@ -517,6 +523,20 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
     currentIndex, profiles, hasMore, deckExhausted, fetchingMore, fetchProfiles,
   ]);
 
+  const handleUndo = useCallback(async () => {
+    if (currentIndex <= 0) return;
+    const previousProfile = profiles[currentIndex - 1];
+    if (!previousProfile?._id) return;
+
+    try {
+      await api.post(`/discover/undo/${previousProfile._id}`, {});
+      handleNextProfile('down');
+    } catch (err) {
+      console.error('Undo pass failed:', err);
+      if (!err?.toasted) toast.error('Could not undo this pass. Please try again.');
+    }
+  }, [currentIndex, profiles, handleNextProfile]);
+
   const handleAction = useCallback(async (action, payload = {}) => {
     if (actionPendingRef.current) return;
     if (currentIndex >= profiles.length) return;
@@ -569,6 +589,7 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
         );
         return;
       }
+      if (err.code === 'DAILY_ALIGN_LIMIT') return;
       console.error('Action failed:', err);
     } finally {
       actionPendingRef.current = false;
@@ -702,7 +723,7 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
       <style>{DECK_CSS}</style>
 
       <ShadowbanBanner
-        score={shadowbanScore}
+        isUnderReview={myUser?.isUnderReview}
         onLearnMore={() => setShowLearnMore(true)}
       />
       {showLearnMore && (
@@ -780,7 +801,7 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
             onPass={() => handleAction('pass')}
             onAlign={() => handleAction('align', {})}
             canAlign={!!profiles[currentIndex]}
-            onUndo={() => handleNextProfile('down')}
+            onUndo={handleUndo}
             canGoBack={currentIndex > 0}
             undoNonce={undoNonce}
             onRefreshLocation={locationDenied ? undefined : refreshLocation}
@@ -800,7 +821,7 @@ const Discover = ({ onOpenChat, onSheetNearHeader, onGoToProfile }) => {
             title="Previous profile (↓ or B)"
             aria-label="Previous profile"
             disabled={currentIndex <= 0}
-            onClick={() => handleNextProfile('down')}
+            onClick={handleUndo}
             style={{ ...styles.deckBtn, background: t.paper, color: t.ink }}
           >
             <Undo2 size={19} strokeWidth={2.2} />
@@ -1554,18 +1575,6 @@ const Matches = ({ onOpenChat }) => {
     return () => socket.off('new-message', onNew);
   }, [queryClient, myId]);
 
-  // Real-time unmatch: remove the alignment from cache when the other user severs the connection
-  useEffect(() => {
-    const onUnmatch = ({ alignmentId }) => {
-      queryClient.setQueryData(['matches'], (old) => ({
-        ...(old || {}),
-        matches: (old?.matches || []).filter((m) => m._id !== alignmentId),
-      }));
-    };
-    socket.on('unmatch-notification', onUnmatch);
-    return () => socket.off('unmatch-notification', onUnmatch);
-  }, [queryClient]);
-
   const handleUnmatch = useCallback(async (alignmentId) => {
     setOpenMenuId(null);
     if (!window.confirm('Are you sure you want to unmatch? This cannot be undone.')) return;
@@ -1721,7 +1730,7 @@ const Matches = ({ onOpenChat }) => {
               (lastMessage && lastMessage.senderId && lastMessage.senderId !== myId && !lastMessage.readAt);
             const isOpen = openMenuId === match._id;
 
-            const lastIsMedia = lastMessage && (lastMessage.type === 'image' || lastMessage.type === 'audio');
+            const lastIsMedia = lastMessage?.type === 'image';
 
             return (
               <div
@@ -1781,8 +1790,8 @@ const Matches = ({ onOpenChat }) => {
                   <p style={{ fontFamily: t.fontBody, fontSize: 12.5, color: unread ? t.ink : t.ink2, margin: '4px 0 0 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: unread ? 700 : 500 }}>
                     {lastMessage
                       ? lastIsMedia
-                        ? (lastMessage.type === 'image' ? '📷 Sent a photograph' : '🎙 Sent a voice note')
-                        : lastMessage.text
+                        ? '📷 Sent a photograph'
+                        : lastMessage.text || 'Message unavailable'
                       : 'Open chat'}
                   </p>
                 </div>

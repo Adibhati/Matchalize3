@@ -6,6 +6,7 @@ import Notification from '../models/Notification.js';
 import Interaction from '../models/Interaction.js';
 import DeckImpression from '../models/DeckImpression.js';
 import DiscoverSession from '../models/DiscoverSession.js';
+import DailyAlignQuota from '../models/DailyAlignQuota.js';
 import { protect } from '../middleware/auth.js';
 import { sendPushNotification } from '../utils/push.js';
 import { addToQueue } from '../utils/queue.js';
@@ -210,7 +211,7 @@ const buildDeckPage = async (req, res) => {
     // Build exclusion set from the Interaction ledger
     const acted = await Interaction.find({
       $or: [
-        { actorId: currentUser._id, actionType: { $in: ['letter', 'telegram', 'accept_letter', 'archive'] } },
+        { actorId: currentUser._id, actionType: { $in: ['align', 'letter', 'telegram', 'accept_letter', 'archive'] } },
         { targetId: currentUser._id, actionType: 'archive' },
       ],
     }).select('actorId targetId actionType cooldownExpiresAt').lean();
@@ -230,6 +231,15 @@ const buildDeckPage = async (req, res) => {
       } else {
         excludedIds.add(otherId);
       }
+    }
+
+    const activeAlignments = await Alignment.find({
+      users: currentUser._id,
+      isActive: true,
+    }).select('users').lean();
+    for (const alignment of activeAlignments) {
+      const otherId = alignment.users.find((id) => id.toString() !== currentUser._id.toString());
+      if (otherId) excludedIds.add(otherId.toString());
     }
 
     const blockExclusion = await getBlockExclusionQuery(currentUser._id);
@@ -1047,8 +1057,16 @@ const RANK_WINDOW = 500;
     if (!isLive(session)) {
       /* Fresh session. Any previous window is overwritten rather than extended:
          past SESSION_IDLE_MINUTES the user has been away, and carrying the old
-         order forward is the one thing that would make "new cards" not new. */
-      const window = await rankWindow([]);
+         order forward is the one thing that would make "new cards" not new.
+
+         Still skip every id from the previous window: the client can retain
+         prefetched cards while the server session ages out, and a new window
+         must not append those same profiles again. */
+      const previouslyShown = new Set([
+        ...(session?.servedIds || []).map((id) => id.toString()),
+        ...(session?.userIds || []).map((id) => id.toString()),
+      ]);
+      const window = await rankWindow(previouslyShown);
 
       if (session) {
         session.userIds = window.map((u) => u._id);
@@ -1592,20 +1610,7 @@ const handleAlign = async (req, res) => {
      * Align is the deck's only positive action, so this is the quota that now
      * matters. The old split (7 letters + 1 telegram) was two budgets for one
      * gesture, which is why neither number described what a user could do. */
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const istNow = new Date(Date.now() + IST_OFFSET_MS);
-    istNow.setUTCHours(0, 0, 0, 0);
-    const startOfDay = new Date(istNow.getTime() - IST_OFFSET_MS);
-    const dailyCount = await Interaction.countDocuments({
-      actorId: currentUser._id,
-      actionType: 'align',
-      createdAt: { $gte: startOfDay },
-    });
     const DAILY_ALIGN_LIMIT = 10;
-    if (dailyCount >= DAILY_ALIGN_LIMIT) {
-      return res.status(403).json({ message: "Out of aligns. Come back tomorrow." });
-    }
-
     const { note, target } = req.body;
     const safeNote = typeof note === 'string' ? note.trim() : '';
     if (safeNote.length > 140) {
@@ -1615,15 +1620,72 @@ const handleAlign = async (req, res) => {
       });
     }
 
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const istNow = new Date(Date.now() + IST_OFFSET_MS);
+    const dayKey = istNow.toISOString().slice(0, 10);
+    const startOfDay = new Date(`${dayKey}T00:00:00.000Z`);
+    startOfDay.setTime(startOfDay.getTime() - IST_OFFSET_MS);
+    const expiresAt = new Date(startOfDay.getTime() + 46 * DAY_MS);
+
+    let quota = await DailyAlignQuota.findOne({
+      userId: currentUser._id,
+      dayKey,
+    }).select('_id');
+    if (!quota) {
+      // Seed the atomic counter with today's usage from before this counter existed.
+      const priorAligns = await Interaction.countDocuments({
+        actorId: currentUser._id,
+        actionType: 'align',
+        createdAt: { $gte: startOfDay },
+      });
+      try {
+        quota = await DailyAlignQuota.create({
+          userId: currentUser._id,
+          dayKey,
+          count: priorAligns,
+          expiresAt,
+        });
+      } catch (error) {
+        if (error.code !== 11000) throw error;
+        quota = await DailyAlignQuota.findOne({ userId: currentUser._id, dayKey }).select('_id');
+        if (!quota) throw error;
+      }
+    }
+
+    const reservedQuota = await DailyAlignQuota.findOneAndUpdate(
+      { userId: currentUser._id, dayKey, count: { $lt: DAILY_ALIGN_LIMIT } },
+      { $inc: { count: 1 } },
+      { new: true },
+    );
+    if (!reservedQuota) {
+      return res.status(403).json({
+        message: 'Out of aligns. Come back tomorrow.',
+        code: 'DAILY_ALIGN_LIMIT',
+      });
+    }
+
     // 1. THE LEDGER ENTRY
-    const alignInteraction = await Interaction.create({
-      actorId: currentUser._id,
-      targetId,
-      actionType: 'align',
-      targetArtifact: target || null,
-      letterContent: safeNote || null,
-      cooldownExpiresAt: null,
-    });
+    let alignInteraction;
+    try {
+      alignInteraction = await Interaction.create({
+        actorId: currentUser._id,
+        targetId,
+        actionType: 'align',
+        targetArtifact: target || null,
+        letterContent: safeNote || null,
+        cooldownExpiresAt: null,
+      });
+    } catch (error) {
+      try {
+        await DailyAlignQuota.updateOne(
+          { userId: currentUser._id, dayKey, count: { $gt: 0 } },
+          { $inc: { count: -1 } },
+        );
+      } catch (releaseError) {
+        console.error('Failed to release align quota reservation:', releaseError);
+      }
+      throw error;
+    }
 
     // 2. INBOX NOTIFICATION
     const notification = await Notification.create({
@@ -1687,20 +1749,38 @@ const handleAlign = async (req, res) => {
 
       // Atomic upsert: two people can accept at the same instant, and a plain
       // find-then-create is a duplicate-key crash on the loser.
-      const match = await Alignment.findOneAndUpdate(
-        { pairKey },
-        {
-          $setOnInsert: {
-            pairKey,
-            users: [currentUser._id, targetId],
+      let match;
+      try {
+        match = await Alignment.findOneAndUpdate(
+          { pairKey },
+          {
+            $setOnInsert: {
+              pairKey,
+              users: [currentUser._id, targetId],
+            },
+            $set: {
+              isActive: true,
+              unlockedByInteractionId: alignInteraction._id,
+            },
           },
-          $set: {
-            isActive: true,
-            unlockedByInteractionId: alignInteraction._id,
+          { upsert: true, new: true },
+        );
+      } catch (error) {
+        // Concurrent upserts can race on the unique pairKey index. The winner
+        // has created the alignment; update and return that row for the loser.
+        if (error.code !== 11000) throw error;
+        match = await Alignment.findOneAndUpdate(
+          { pairKey },
+          {
+            $set: {
+              isActive: true,
+              unlockedByInteractionId: alignInteraction._id,
+            },
           },
-        },
-        { upsert: true, new: true },
-      );
+          { new: true },
+        );
+        if (!match) throw error;
+      }
 
       /* OPENING MESSAGE — only when there is something to open with.
          A bare align carries no text, and an empty chat bubble reading "" is
@@ -1760,7 +1840,10 @@ const handleAlign = async (req, res) => {
          how a card the user aligned with comes back on the next rebuild. */
       const session = await DiscoverSession.findOne({ viewerId: currentUser._id });
       if (session) {
-        await session.updateOne({ $addToSet: { servedIds: targetId } });
+        await session.updateOne({
+          $addToSet: { servedIds: targetId },
+          $set: { lastSeenAt: new Date() },
+        });
       }
 
       return res.status(200).json({
@@ -1772,7 +1855,10 @@ const handleAlign = async (req, res) => {
 
     const session = await DiscoverSession.findOne({ viewerId: currentUser._id });
     if (session) {
-      await session.updateOne({ $addToSet: { servedIds: targetId } });
+      await session.updateOne({
+        $addToSet: { servedIds: targetId },
+        $set: { lastSeenAt: new Date() },
+      });
     }
 
     return res.status(200).json({ matched: false });
@@ -1789,7 +1875,9 @@ router.post('/pass/:id', protect, discoverLimiter, async (req, res) => {
   const currentUser = req.user;
 
   try {
-    // 🧹 ATOMIC UPSERT: Overwrites existing pass cooldowns instead of stacking duplicate rows
+    // 🧹 ATOMIC UPSERT: Update temporary passes without replacing a permanent
+    // block/unmatch archive. A duplicate-key race means a permanent archive
+    // already occupies this unique actor/target/action row; leave it untouched.
     //
     // `origin: 'pass'` is what finally distinguishes a swipe from a block or an
     // unmatch. The field has been in the Interaction schema's enum since it was
@@ -1798,25 +1886,63 @@ router.post('/pass/:id', protect, discoverLimiter, async (req, res) => {
     // "passed four times, now hide forever". Setting origin here is what lets the
     // escalating cooldown count passes without counting blocks as passes.
     //
-    // NOTE: `$set` would clobber a permanent archive back into a temporary pass.
-    // It is deliberately NOT in the $set — origin only moves null → 'pass', so a
-    // blocked user who somehow gets a pass row cannot un-block themselves.
-    await Interaction.findOneAndUpdate(
-      { actorId: currentUser._id, targetId, actionType: 'archive', origin: { $ne: 'unmatch' } },
-      {
-        $set: { cooldownExpiresAt: new Date(Date.now() + 7 * DAY_MS) },$setOnInsert: { origin: 'pass' },
-      },
-      { upsert: true, new: true }
-    );
+    try {
+      await Interaction.findOneAndUpdate(
+        {
+          actorId: currentUser._id,
+          targetId,
+          actionType: 'archive',
+          cooldownExpiresAt: { $ne: null },
+          origin: { $nin: ['block', 'unmatch'] },
+        },
+        {
+          $set: { cooldownExpiresAt: new Date(Date.now() + 7 * DAY_MS) },
+          $setOnInsert: { origin: 'pass' },
+        },
+        { upsert: true, new: true }
+      );
+    } catch (error) {
+      if (error.code !== 11000) throw error;
+    }
     let session = await DiscoverSession.findOne({ viewerId: currentUser._id });
-if (!session) {
-  session = await DiscoverSession.create({ viewerId: currentUser._id, servedIds: [] });
-}
-await session.updateOne({ $addToSet: { servedIds: targetId } });
-res.status(200).json({ success: true });
+    if (!session) {
+      session = await DiscoverSession.create({ viewerId: currentUser._id, servedIds: [] });
+    }
+    await session.updateOne({
+      $addToSet: { servedIds: targetId },
+      $set: { lastSeenAt: new Date() },
+    });
+    res.status(200).json({ success: true });
   } catch (error) {
     console.error('Pass error:', error);
     res.status(500).json({ message: 'Server error processing pass' });
+  }
+});
+
+router.post('/undo/:id', protect, discoverLimiter, async (req, res) => {
+  const targetId = req.params.id;
+
+  try {
+    const pass = await Interaction.findOneAndDelete({
+      actorId: req.user._id,
+      targetId,
+      actionType: 'archive',
+      cooldownExpiresAt: { $gt: new Date() },
+      $or: [{ origin: 'pass' }, { origin: null }],
+    });
+
+    const session = await DiscoverSession.findOne({ viewerId: req.user._id });
+    if (session) {
+      await session.updateOne({
+        $pull: { servedIds: targetId },
+        $set: { lastSeenAt: new Date() },
+      });
+    }
+
+    res.status(200).json({ success: true, undone: Boolean(pass) });
+  } catch (error) {
+    console.error('Undo pass error:', error);
+    res.status(500).json({ message: 'Server error undoing pass' });
   }
 });
 

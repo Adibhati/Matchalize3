@@ -11,21 +11,7 @@ import mongoose from 'mongoose';
 import cookieParser from 'cookie-parser';
 import { protect } from './middleware/auth.js';
 import rateLimit from 'express-rate-limit';
-// ⚠️ EXPRESS 5 UPGRADE — two landmines in this file:
-//
-// 1. express-mongo-sanitize is Express-4-only. Installed here is ^2.2.0, whose
-//    middleware reaches into connect's app/router internals that Express 5
-//    removed. It will throw at boot, not degrade. Replace it with either
-//    `express-mongo-sanitize` v3+ or a hand-rolled req.query/body scrubber
-//    before bumping the major.
-// 2. app.get('*') below is not a valid path pattern under Express 5 —
-//    path-to-regexp v8 requires a named wildcard, so bare '*' throws
-//    `TypeError: Missing parameter name` at startup. It must become '*splat'
-//    (or '{*splat}' to also match the root path).
-//
-// Nothing here is broken today: installed express is 4.22.x. Both are only
-// landmines for whoever runs `npm i express@5`.
-import mongoSanitize from 'express-mongo-sanitize';
+import sanitizeMongoInput from './middleware/sanitizeMongoInput.js';
 import { APP_CONSTANTS } from './config/appData.js';
 import { describeRouletteStatus } from './config/roulette.js';
 import * as Sentry from '@sentry/node';
@@ -86,7 +72,6 @@ if (!VALID_ENVS.includes(NODE_ENV)) {
   console.error('   deployed  → set NODE_ENV=production in the server environment');
   process.exit(1);
 }
-const IS_DEV = NODE_ENV === 'development';
 const IS_PROD = NODE_ENV === 'production';
 
 // Warn about missing optional services
@@ -207,7 +192,7 @@ const isPrivateOrigin = (origin) => {
 
 const corsOriginFunction = (origin, callback) => {
   // Allow requests with no origin (mobile apps, curl, or local dev)
-  if (!origin || IS_DEV) return callback(null, true);
+  if (!origin) return callback(null, true);
 
   if (corsOrigins.has(origin)) {
     return callback(null, true);
@@ -343,6 +328,17 @@ app.use((req, res, next) => {
   next();
 });
 
+// Apply the global API limit before reading request bodies, so bursts of large
+// payloads are rejected without first parsing and allocating their contents.
+const limiter = rateLimit({
+  windowMs: APP_CONSTANTS.API_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000,
+  max: Number(process.env.API_GENERAL_MAX) || APP_CONSTANTS.API_RATE_LIMIT_MAX,
+  message: { message: 'Too many requests from this IP, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api/', limiter);
+
 // 🛡️ RAW BODY FOR THE CLOUDINARY SIGNATURE CHECK — must be registered BEFORE
 // express.json() below.
 //
@@ -362,22 +358,12 @@ app.use((req, res, next) => {
 // for the rest of the API.
 app.use('/api/upload/moderation-status', express.raw({ type: 'application/json', limit: '100kb' }));
 
-// JSON bodies only. Photos/voice notes go through the multipart /api/upload
+// JSON bodies only. Photos go through the multipart /api/upload
 // route, which multer handles with its own fileSize limit — so 1mb is plenty
 // for every text payload here (profiles, messages, prefs, onboarding answers).
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ limit: '1mb', extended: true }));
-app.use(mongoSanitize());
-
-// Rate Limiting — reads APP_CONSTANTS so the settings file and the limiter agree.
-const limiter = rateLimit({
-  windowMs: APP_CONSTANTS.API_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000,
-  max: Number(process.env.API_GENERAL_MAX) || APP_CONSTANTS.API_RATE_LIMIT_MAX,
-  message: { message: 'Too many requests from this IP, please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use('/api/', limiter);
+app.use(sanitizeMongoInput);
 
 // Mount API Routes
 app.use('/api/auth', authRoutes);
@@ -429,12 +415,9 @@ app.get('/', (req, res) => {
   res.json({ status: 'active', message: 'Matchalize API Server is running' });
 });
 
-// Serve client app for all non-API routes (SPA fallback)
-// ⚠️ EXPRESS 5: bare '*' is invalid under path-to-regexp v8 and throws
-// `Missing parameter name` at boot. Becomes app.get('*splat', ...) — or
-// '{*splat}' if the root path must match too. See the note at the
-// express-mongo-sanitize import above.
-app.get('*', (req, res, next) => {
+// Serve client app for all non-API routes (SPA fallback). A RegExp route works
+// across Express 4 and 5, avoiding path-to-regexp's incompatible wildcard syntax.
+app.get(/.*/, (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
   res.sendFile(path.join(clientDist, 'index.html'), (err) => {
     if (err) next();

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import { api, API_BASE } from './api';
 import socket from './socket';
 
@@ -44,7 +44,38 @@ export const AuthProvider = ({ children }) => {
     const normalised = { reverifyRequired: false, ...user };
     localStorage.setItem(USER_KEY, JSON.stringify(normalised));
     setState({ user: normalised });
+    if (socket?.disconnected) socket.connect();
   }, []);
+
+  useEffect(() => {
+    const handleStorage = (event) => {
+      if (event.key !== USER_KEY) return;
+
+      let nextUser = null;
+      if (event.newValue) {
+        try {
+          nextUser = { reverifyRequired: false, ...JSON.parse(event.newValue) };
+        } catch {
+          nextUser = null;
+        }
+      }
+
+      if (String(state.user?._id || '') === String(nextUser?._id || '')) {
+        if (nextUser) setState({ user: nextUser });
+        if (nextUser && socket?.disconnected) socket.connect();
+        return;
+      }
+
+      queryClientRef.current?.clear();
+      socket?.disconnect();
+      localStorage.removeItem('matchalize_suspended');
+      setState({ user: nextUser });
+      if (nextUser && socket?.disconnected) socket.connect();
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [state.user]);
 
   /**
    * 🔒 LOGOUT MUST ERASE EVERYTHING, NOT JUST THE ID CARD.
