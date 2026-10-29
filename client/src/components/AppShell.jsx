@@ -11,6 +11,7 @@ import PushPrompt from './PushPrompt';
 import { useIsDesktop } from '../utils/useIsDesktop';
 import { setToastPresenceHandler } from '../utils/toast';
 import Settings from '../pages/Settings.jsx';
+import Upgrade from '../pages/Upgrade.jsx';
 import socket from '../utils/socket';
 import neu from '../styles/neu';
 import { useChromeColor } from '../utils/chrome';
@@ -90,6 +91,7 @@ const AppShell = ({ onSignOut }) => {
     return () => setToastPresenceHandler(null);
   }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
 
   useEffect(() => {
     if (isDesktop || isTabletLayout) return undefined;
@@ -341,12 +343,17 @@ const AppShell = ({ onSignOut }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchData, queryClient]);
 
+  const openUpgrade = useCallback(() => {
+    setDesktopLettersOpen(false); // closes the side panel if it was open
+    setUpgradeOpen(true);
+  }, []);
+
   const renderPage = () => {
     switch (activeTab) {
       case 'discover':
         return <Discover key="discover" onOpenChat={handleOpenChat} onSheetNearHeader={(near) => setHeaderWanted(!near)} onGoToProfile={handleGoToProfile} onPhoneReplyKeyboardChange={setPhoneReplyKeyboardOpen} isTabletLayout={isTabletLayout} />;
       case 'matches':
-        return <Matches key="matches" onOpenChat={handleOpenChat} />;
+          return <Matches key="matches" onOpenChat={handleOpenChat} onOpenUpgrade={openUpgrade} />;
       case 'profile':
         return <Profile key="profile" onHeaderHiddenChange={(hidden) => setHeaderWanted(!hidden)} focusStrength={focusProfileStrength} onStrengthFocused={() => setFocusProfileStrength(false)} />;
       case 'roulette':
@@ -434,7 +441,7 @@ const AppShell = ({ onSignOut }) => {
                 />
               </div>
               <Suspense fallback={null}>
-                <Matches compact onOpenChat={handleOpenChat} />
+                <Matches compact onOpenChat={handleOpenChat} onOpenUpgrade={openUpgrade} />
               </Suspense>
             </motion.aside>
           )}
@@ -474,6 +481,12 @@ const AppShell = ({ onSignOut }) => {
               onClose={() => setSettingsOpen(false)}
               desktopPanel={isDesktop}
             />
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {upgradeOpen && (
+            <Upgrade onClose={() => setUpgradeOpen(false)} />
           )}
         </AnimatePresence>
       </div>
@@ -559,7 +572,7 @@ const AppShell = ({ onSignOut }) => {
                 />
               </div>
               <Suspense fallback={null}>
-                <Matches compact onOpenChat={handleOpenChat} />
+                <Matches compact onOpenChat={handleOpenChat} onOpenUpgrade={openUpgrade} />
               </Suspense>
             </motion.aside>
           )}
@@ -590,6 +603,12 @@ const AppShell = ({ onSignOut }) => {
             panelClassName="tablet-side-panel"
           />
         )}
+
+        <AnimatePresence>
+          {upgradeOpen && (
+            <Upgrade onClose={() => setUpgradeOpen(false)} />
+          )}
+        </AnimatePresence>
       </div>
     );
   }
@@ -646,6 +665,12 @@ const AppShell = ({ onSignOut }) => {
       </AnimatePresence>
 
       {settingsOpen && <Settings onSignOut={onSignOut} onClose={() => setSettingsOpen(false)} />}
+
+        <AnimatePresence>
+          {upgradeOpen && (
+            <Upgrade onClose={() => setUpgradeOpen(false)} />
+          )}
+        </AnimatePresence>
     </div>
   );
 };

@@ -7,11 +7,13 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../utils/AuthContext';
 import socket from '../utils/socket';
 import { Heart, MoreVertical, Search, X } from 'lucide-react';
+import UpgradeButton from '../components/UpgradeButton';
 import { triggerHaptic } from '../utils/haptics';
 import { DECK_CONTENT_TOP } from '../utils/deckChrome';
 
 /* The shared neo-brutalist canon (src/styles/neu.js) */
 const t = neu;
+const UPGRADE_LABEL = 'Upgrade to Non-Chalant'; // change the plan name here
 
 const MATCHES_CSS = `
   .match-card { will-change: transform;
@@ -43,7 +45,7 @@ const MATCHES_CSS = `
   }
 `;
 
-const Matches = ({ onOpenChat, compact = false }) => {
+const Matches = ({ onOpenChat, onOpenUpgrade, compact = false }) => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [openMenuId, setOpenMenuId] = useState(null);
@@ -142,6 +144,7 @@ const Matches = ({ onOpenChat, compact = false }) => {
         flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
         flexDirection: 'column', gap: 16, padding: 32, backgroundColor: t.desk,
       }}>
+      <style>{MATCHES_CSS}</style>
         <div style={{
           width: 56, height: 56, borderRadius: 16, backgroundColor: t.coral,
           border: `2px solid ${t.ink}`, boxShadow: `4px 4px 0 ${t.ink}`,
@@ -155,6 +158,11 @@ const Matches = ({ onOpenChat, compact = false }) => {
         <p style={{ fontFamily: t.fontBody, fontSize: 13.5, fontWeight: 500, color: t.ink3, textAlign: 'center', maxWidth: 280, margin: 0, lineHeight: 1.6 }}>
           Start exploring and leave a flower to begin your story.
         </p>
+          {onOpenUpgrade && (
+            <div style={{ marginTop: 8 }}>
+              <UpgradeButton onClick={onOpenUpgrade} label={UPGRADE_LABEL} />
+            </div>
+          )}
       </div>
     );
   }
@@ -164,6 +172,12 @@ const Matches = ({ onOpenChat, compact = false }) => {
       <style>{MATCHES_CSS}</style>
 
       <div style={{ position: 'relative' }}>
+        {onOpenUpgrade && (
+          <div style={{ marginBottom: 12 }}>
+            <UpgradeButton full onClick={onOpenUpgrade} label={UPGRADE_LABEL} />
+          </div>
+        )}
+
         {/* Search — chunky box, ink border, shadow on focus. The tab heading now
             comes from the floating Header row, so no in-page title here. */}
         <div
